@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>MOVER.IA</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <style>
   :root{
     --asphalt-900:#14181d; --asphalt-800:#1b2027; --asphalt-700:#242b33;
@@ -625,7 +627,7 @@ const tipoLabelGlobal = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
 
 async function loadDocumentosMotorista(){
   const { data: docs, error } = await sb.from('documento')
-    .select('id, tipo, numero, validade, status, arquivo_url')
+    .select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo')
     .eq('referente_a', 'motorista')
     .eq('referente_id', session.user.id)
     .order('tipo');
@@ -647,7 +649,8 @@ async function loadDocumentosMotorista(){
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
   document.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, docs)));
-  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0], loadDocumentosMotorista)));
+  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentosMotorista)));
+  document.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentosMotorista)));
 }
 
 async function loadDocumentosConjunto(){
@@ -657,7 +660,7 @@ async function loadDocumentosConjunto(){
   if(conjunto) conjunto.conjunto_item.forEach(ci => { placaPorVeiculo[ci.veiculo_id] = ci.veiculo.placa; });
 
   const { data: docs, error } = veiculoIds.length
-    ? await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'veiculo').in('referente_id', veiculoIds).order('tipo')
+    ? await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'veiculo').in('referente_id', veiculoIds).order('tipo')
     : { data: [], error: null };
 
   app.innerHTML = `
@@ -677,7 +680,8 @@ async function loadDocumentosConjunto(){
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
   document.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, docs)));
-  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0], loadDocumentosConjunto)));
+  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentosConjunto)));
+  document.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentosConjunto)));
 }
 
 async function loadShellMotorista(){
@@ -949,19 +953,92 @@ function cardDocumento(d, subtitulo){
     <div class="card">
       <div class="l1">${d.tipo}<span class="pill ${d.status}">${statusLabel[d.status]||d.status}</span></div>
       <div class="l2">${subtitulo ? subtitulo+' · ' : ''}${d.numero || ''}${d.validade ? ' · válido até '+formatarData(d.validade) : ''}</div>
+      ${d.qr_conteudo ? `<div class="l2">QR Code lido: ${d.qr_conteudo.length > 70 ? d.qr_conteudo.slice(0,70)+'…' : d.qr_conteudo}</div>` : ''}
       <div class="row">
         ${d.arquivo_url
           ? `<button class="btn-small" data-ver="${d.id}">Ver arquivo</button>`
           : `<span class="l2">Nenhum arquivo anexado</span>`}
         <label class="file-label">${d.arquivo_url ? 'Substituir' : 'Anexar arquivo'}<input type="file" data-anexar="${d.id}"></label>
       </div>
+      <div class="row">
+        <button class="btn-small" data-qr="${d.id}">📷 Escanear QR Code</button>
+      </div>
     </div>`;
 }
 
+let qrStreamAtivo = null;
+
+async function abrirScannerQR(docId, onSalvo){
+  const modalHtml = `
+    <div id="qrModal" style="position:fixed; inset:0; background:#000; z-index:50; display:flex; flex-direction:column;">
+      <video id="qrVideo" autoplay playsinline muted style="flex:1; object-fit:cover; width:100%; min-height:0;"></video>
+      <div style="padding:16px; background:var(--asphalt-900);">
+        <div id="qrStatus" class="l2" style="text-align:center; margin-bottom:10px;">Aponte a câmera para o QR Code do documento</div>
+        <button id="btnFecharQR" style="width:100%;">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  const video = document.getElementById('qrVideo');
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  let ativo = true;
+
+  function fecharScanner(){
+    ativo = false;
+    if(qrStreamAtivo){ qrStreamAtivo.getTracks().forEach(t => t.stop()); qrStreamAtivo = null; }
+    const modal = document.getElementById('qrModal');
+    if(modal) modal.remove();
+  }
+  document.getElementById('btnFecharQR').addEventListener('click', fecharScanner);
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    alert('Este navegador não permite usar a câmera aqui. Tente pelo celular, em um site https.');
+    fecharScanner();
+    return;
+  }
+
+  try{
+    qrStreamAtivo = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  } catch(e){
+    alert('Não consegui acessar a câmera: ' + e.message);
+    fecharScanner();
+    return;
+  }
+  video.srcObject = qrStreamAtivo;
+
+  function tick(){
+    if(!ativo) return;
+    if(video.readyState === video.HAVE_ENOUGH_DATA){
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const codigo = jsQR(imageData.data, imageData.width, imageData.height);
+      if(codigo && codigo.data){
+        document.getElementById('qrStatus').textContent = 'QR Code lido!';
+        fecharScanner();
+        processarQrLido(docId, codigo.data, onSalvo);
+        return;
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+async function processarQrLido(docId, conteudo, onSalvo){
+  const confirmar = confirm(`QR Code lido:\n\n${conteudo}\n\nSalvar essa informação neste documento?`);
+  if(!confirmar) return;
+  const { error } = await sb.from('documento').update({ qr_conteudo: conteudo }).eq('id', docId);
+  if(error){ alert('Erro ao salvar QR Code: ' + error.message); return; }
+  (onSalvo || (()=>{}))();
+}
+
 async function loadDocumentos(){
-  const { data: docsEmpresa, error } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url').eq('referente_a', 'empresa').order('tipo');
-  const { data: docsMotorista } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'motorista').order('tipo');
-  const { data: docsVeiculo } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'veiculo').order('tipo');
+  const { data: docsEmpresa, error } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo').eq('referente_a', 'empresa').order('tipo');
+  const { data: docsMotorista } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'motorista').order('tipo');
+  const { data: docsVeiculo } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'veiculo').order('tipo');
   const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
   const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
 
@@ -1018,7 +1095,8 @@ async function loadDocumentos(){
   `;
 
   el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
-  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
+  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
+  el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
   const formMot = document.getElementById('formNovoDocMotorista');
   if(formMot) formMot.addEventListener('submit', criarDocumentoMotorista);
   const formVei = document.getElementById('formNovoDocVeiculo');
@@ -1090,6 +1168,72 @@ async function anexarArquivo(docId, file, onDone){
   const { error: updErr } = await sb.from('documento').update({ arquivo_url: path }).eq('id', docId);
   if(updErr){ alert('Arquivo enviado, mas não consegui atualizar o registro: ' + updErr.message); return; }
   (onDone || loadDocumentos)();
+}
+
+async function extrairTextoPdf(file){
+  if(typeof pdfjsLib === 'undefined') return '';
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  }
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  let texto = '';
+  for(let i = 1; i <= Math.min(pdf.numPages, 3); i++){
+    const pagina = await pdf.getPage(i);
+    const conteudo = await pagina.getTextContent();
+    texto += conteudo.items.map(it => it.str).join(' ') + '\n';
+  }
+  return texto;
+}
+
+function extrairDatasPossiveis(texto){
+  const encontradas = texto.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
+  return [...new Set(encontradas)];
+}
+
+function mostrarSelecaoDeData(docId, datas){
+  return new Promise((resolve) => {
+    const modalHtml = `
+      <div id="dataModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:flex-end;">
+        <div style="background:var(--asphalt-900); width:100%; border-radius:16px 16px 0 0; padding:20px; max-height:80vh; overflow:auto;">
+          <h3 style="margin-top:0;">Encontrei estas datas no PDF</h3>
+          <div class="l2" style="margin-bottom:12px;">Toque na que for a validade deste documento (ou pule, se nenhuma for)</div>
+          <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
+            ${datas.map(d => `<button class="ans-btn" data-data="${d}" style="flex:none; padding:10px 14px;">${d}</button>`).join('')}
+          </div>
+          <button class="btn-small" id="btnPularData" style="width:100%;">Pular, escolher validade manualmente depois</button>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    function fechar(dataEscolhida){
+      const modal = document.getElementById('dataModal');
+      if(modal) modal.remove();
+      resolve(dataEscolhida);
+    }
+    document.getElementById('btnPularData').addEventListener('click', () => fechar(null));
+    document.querySelectorAll('#dataModal [data-data]').forEach(btn => btn.addEventListener('click', async () => {
+      const [dd, mm, yyyy] = btn.dataset.data.split('/');
+      const isoDate = `${yyyy}-${mm}-${dd}`;
+      const { error } = await sb.from('documento').update({ validade: isoDate }).eq('id', docId);
+      if(error) alert('Não consegui salvar a validade automaticamente: ' + error.message);
+      fechar(btn.dataset.data);
+    }));
+  });
+}
+
+async function anexarArquivoComLeitura(docId, file, onDone){
+  if(!file) return;
+  if(file.type === 'application/pdf'){
+    try{
+      const texto = await extrairTextoPdf(file);
+      const datas = extrairDatasPossiveis(texto);
+      if(datas.length) await mostrarSelecaoDeData(docId, datas);
+    } catch(e){
+      // se não conseguir ler o texto do PDF, segue o upload normalmente
+    }
+  }
+  await anexarArquivo(docId, file, onDone);
 }
 
 async function verArquivo(docId, docs){
