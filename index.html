@@ -22,8 +22,8 @@
   .logo span{color:var(--line-yellow-dim);}
   .tag{color:var(--text-secondary); font-size:13px; margin-bottom:28px; text-align:center;}
   form{width:100%; display:flex; flex-direction:column; gap:12px;}
-  input{background:var(--asphalt-800); border:1px solid var(--border); color:var(--text-primary); border-radius:10px; padding:13px 14px; font-size:15px; width:100%;}
-  input:focus{outline:none; border-color:var(--line-yellow);}
+  input,select{background:var(--asphalt-800); border:1px solid var(--border); color:var(--text-primary); border-radius:10px; padding:13px 14px; font-size:15px; width:100%;}
+  input:focus,select:focus{outline:none; border-color:var(--line-yellow);}
   button{background:var(--line-yellow); color:#241c04; border:none; border-radius:10px; padding:13px 14px; font-size:15px; font-weight:700; cursor:pointer;}
   button:disabled{opacity:.6; cursor:default;}
   .err{color:var(--danger); font-size:13.5px; min-height:18px;}
@@ -190,7 +190,7 @@ async function carregarMeuConjunto(){
   if(meuConjunto !== null) return meuConjunto;
   const { data: conjuntos } = await sb
     .from('conjunto')
-    .select('id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo))')
+    .select('id, conjunto_item(ordem, veiculo_id, veiculo:veiculo_id(placa, tipo))')
     .eq('motorista_id', session.user.id);
   meuConjunto = (conjuntos && conjuntos[0]) || false;
   return meuConjunto;
@@ -258,6 +258,107 @@ async function encerrarJornada(jornadaId){
   loadShellMotorista();
 }
 
+async function carregarViagemAtual(){
+  const { data } = await sb.from('viagem')
+    .select('id, origem, destino, cte_numero, mdfe_numero, status')
+    .eq('motorista_id', session.user.id)
+    .eq('status', 'em_andamento')
+    .order('criado_em', { ascending: false })
+    .limit(1);
+  return (data && data[0]) || null;
+}
+
+async function finalizarViagem(viagemId){
+  const { error } = await sb.from('viagem').update({ status: 'concluida' }).eq('id', viagemId);
+  if(error){ alert('Erro ao finalizar viagem: ' + error.message); return; }
+  loadShellMotorista();
+}
+
+async function loadAbastecimentoMotorista(){
+  const conjunto = await carregarMeuConjunto();
+  const cavalo = conjunto ? [...conjunto.conjunto_item].find(ci => ci.ordem === 1) : null;
+
+  const { data: historico } = await sb.from('abastecimento')
+    .select('id, data, km, litros, media_calculada')
+    .eq('motorista_id', session.user.id)
+    .order('data', { ascending: false })
+    .limit(10);
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">Abastecimento</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        <h3>Registrar abastecimento</h3>
+        <div class="card">
+          ${cavalo ? `
+            <form id="formAbastecimento">
+              <input type="number" step="0.1" inputmode="decimal" id="abKm" placeholder="Km do veículo" required>
+              <input type="number" step="0.01" inputmode="decimal" id="abLitros" placeholder="Litros abastecidos" required>
+              <input type="number" step="0.1" inputmode="decimal" id="abOdometro" placeholder="Odômetro da bomba (opcional)">
+              <button type="submit">Salvar abastecimento</button>
+            </form>
+          ` : '<div class="status">Você precisa estar vinculado a um conjunto para registrar abastecimento</div>'}
+        </div>
+
+        <h3>Últimos abastecimentos</h3>
+        ${(historico||[]).map(a => `
+          <div class="card">
+            <div class="l1">${new Date(a.data).toLocaleDateString('pt-BR')}${a.media_calculada ? `<span class="pill ok">${Number(a.media_calculada).toFixed(2)} km/l</span>` : ''}</div>
+            <div class="l2">${a.km} km · ${a.litros} L</div>
+          </div>
+        `).join('') || '<div class="status">Nenhum abastecimento registrado ainda</div>'}
+      </div>
+    </div>`;
+
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
+  const form = document.getElementById('formAbastecimento');
+  if(form) form.addEventListener('submit', (e) => salvarAbastecimento(e, cavalo.veiculo_id));
+}
+
+async function salvarAbastecimento(e, veiculoId){
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  btn.disabled = true; btn.textContent = 'Salvando...';
+
+  const km = parseFloat(document.getElementById('abKm').value);
+  const litros = parseFloat(document.getElementById('abLitros').value);
+  const odometroVal = document.getElementById('abOdometro').value;
+  const odometro = odometroVal ? parseFloat(odometroVal) : null;
+
+  const { data: anterior } = await sb.from('abastecimento')
+    .select('km')
+    .eq('veiculo_id', veiculoId)
+    .order('data', { ascending: false })
+    .limit(1);
+
+  let media = null;
+  if(anterior && anterior[0] && km > anterior[0].km && litros > 0){
+    media = (km - anterior[0].km) / litros;
+  }
+
+  const { error } = await sb.from('abastecimento').insert({
+    transportadora_id: usuarioAtual.transportadora_id,
+    motorista_id: session.user.id,
+    veiculo_id: veiculoId,
+    km,
+    litros,
+    odometro_bomba: odometro,
+    media_calculada: media
+  });
+
+  if(error){ alert('Erro ao salvar abastecimento: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar abastecimento'; return; }
+
+  alert(media ? `Abastecimento salvo! Consumo médio: ${media.toFixed(2)} km/l` : 'Abastecimento salvo!');
+  loadShellMotorista();
+}
+
 function formatarDuracao(inicioIso, fimIso){
   const ms = new Date(fimIso) - new Date(inicioIso);
   const totalMin = Math.max(0, Math.round(ms / 60000));
@@ -300,9 +401,11 @@ async function loadHistoricoJornadas(){
 async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ loadChecklistMotorista(); return; }
   if(motoristaScreen === 'historicoJornada'){ loadHistoricoJornadas(); return; }
+  if(motoristaScreen === 'abastecimento'){ loadAbastecimentoMotorista(); return; }
 
   const conjunto = await carregarMeuConjunto();
   const jornada = await carregarJornadaAtiva();
+  const viagem = await carregarViagemAtual();
   const { data: itens } = await sb.from('checklist_item_padrao').select('id').eq('ativo', true);
   const veiculosOrdenados = conjunto ? [...conjunto.conjunto_item].sort((a,b)=>a.ordem-b.ordem) : [];
   const tipoLabel = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
@@ -328,6 +431,15 @@ async function loadShellMotorista(){
           <div class="l2">Toque para ver jornadas anteriores</div>
         </div>
 
+        <h3>Viagem atual</h3>
+        <div class="card">
+          ${viagem ? `
+            <div class="l1">${viagem.origem || '—'} → ${viagem.destino || '—'}</div>
+            <div class="l2">${[viagem.cte_numero ? 'CT-e '+viagem.cte_numero : '', viagem.mdfe_numero ? 'MDF-e '+viagem.mdfe_numero : ''].filter(Boolean).join(' · ') || 'Sem número de CT-e/MDF-e informado'}</div>
+            <button id="btnFinalizarViagem" style="margin-top:10px; width:100%;">Finalizar viagem</button>
+          ` : '<div class="l2">Nenhuma viagem em andamento — aguarde o escritório abrir uma nova viagem para você</div>'}
+        </div>
+
         <h3>Meu conjunto</h3>
         ${veiculosOrdenados.length
           ? `<div class="card"><div class="l1">${veiculosOrdenados.map(v=>`${v.veiculo.placa} (${tipoLabel[v.veiculo.tipo]||v.veiculo.tipo})`).join(' → ')}</div></div>`
@@ -338,11 +450,20 @@ async function loadShellMotorista(){
           <div class="l1">${(itens||[]).length} itens no padrão da ${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : 'empresa'}</div>
           <div class="l2">Toque para preencher</div>
         </div>
+
+        <h3>Abastecimento</h3>
+        <div class="card clickable" id="btnAbastecimento">
+          <div class="l1">Registrar abastecimento</div>
+          <div class="l2">Toque para lançar km e litros e ver o consumo médio</div>
+        </div>
       </div>
     </div>`;
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnAbrirChecklist').addEventListener('click', () => { motoristaScreen = 'checklist'; loadShellMotorista(); });
   document.getElementById('btnHistoricoJornada').addEventListener('click', () => { motoristaScreen = 'historicoJornada'; loadShellMotorista(); });
+  document.getElementById('btnAbastecimento').addEventListener('click', () => { motoristaScreen = 'abastecimento'; loadShellMotorista(); });
+  const btnFinalizarViagem = document.getElementById('btnFinalizarViagem');
+  if(btnFinalizarViagem) btnFinalizarViagem.addEventListener('click', () => finalizarViagem(viagem.id));
   attachJornadaHandlers(jornada);
 }
 
@@ -419,6 +540,15 @@ async function loadPainel(){
     .select('id, criado_em, respostas, motorista:motorista_id(nome)')
     .order('criado_em', { ascending: false })
     .limit(5);
+  const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
+  const { data: viagens } = await sb.from('viagem')
+    .select('id, origem, destino, cte_numero, mdfe_numero, motorista:motorista_id(nome)')
+    .eq('status', 'em_andamento')
+    .order('criado_em', { ascending: false });
+  const { data: abastecimentos } = await sb.from('abastecimento')
+    .select('id, data, km, litros, media_calculada, motorista:motorista_id(nome), veiculo:veiculo_id(placa)')
+    .order('data', { ascending: false })
+    .limit(5);
   const cavalos = (veiculos||[]).filter(v=>v.tipo==='cavalo');
 
   document.getElementById('screenContent').innerHTML = `
@@ -430,7 +560,77 @@ async function loadPainel(){
       const naoAtende = (c.respostas||[]).filter(r => r.resposta === 'bad').length;
       return `<div class="card"><div class="l1">${c.motorista ? c.motorista.nome : '—'}${naoAtende ? `<span class="pill vencido">${naoAtende} irregularidade${naoAtende>1?'s':''}</span>` : `<span class="pill ok">OK</span>`}</div><div class="l2">${new Date(c.criado_em).toLocaleString('pt-BR')}</div></div>`;
     }).join('') || '<div class="status">Nenhum checklist recebido ainda</div>'}
+
+    <h3>Viagens em andamento (${(viagens||[]).length})</h3>
+    ${(viagens||[]).map(v => `
+      <div class="card">
+        <div class="l1">${v.motorista ? v.motorista.nome : '—'}</div>
+        <div class="l2">${v.origem||'?'} → ${v.destino||'?'}${v.cte_numero?' · CT-e '+v.cte_numero:''}${v.mdfe_numero?' · MDF-e '+v.mdfe_numero:''}</div>
+      </div>
+    `).join('') || '<div class="status">Nenhuma viagem em andamento</div>'}
+
+    <h3>Nova viagem</h3>
+    <div class="card">
+      <form id="formNovaViagem">
+        <select id="novaViagemMotorista" required>
+          <option value="">Selecione o motorista</option>
+          ${(motoristas||[]).map(m=>`<option value="${m.id}">${m.nome}</option>`).join('')}
+        </select>
+        <input type="text" id="novaViagemOrigem" placeholder="Origem">
+        <input type="text" id="novaViagemDestino" placeholder="Destino">
+        <input type="text" id="novaViagemCte" placeholder="Número do CT-e (opcional)">
+        <input type="text" id="novaViagemMdfe" placeholder="Número do MDF-e (opcional)">
+        <button type="submit">Criar viagem</button>
+      </form>
+    </div>
+
+    <h3>Últimos abastecimentos (${(abastecimentos||[]).length})</h3>
+    ${(abastecimentos||[]).map(a => `
+      <div class="card">
+        <div class="l1">${a.motorista ? a.motorista.nome : '—'}${a.media_calculada ? `<span class="pill ok">${Number(a.media_calculada).toFixed(2)} km/l</span>` : ''}</div>
+        <div class="l2">${a.veiculo ? a.veiculo.placa : ''} · ${a.km} km · ${a.litros} L · ${new Date(a.data).toLocaleDateString('pt-BR')}</div>
+      </div>
+    `).join('') || '<div class="status">Nenhum abastecimento registrado ainda</div>'}
   `;
+
+  const formNovaViagem = document.getElementById('formNovaViagem');
+  if(formNovaViagem) formNovaViagem.addEventListener('submit', criarViagem);
+}
+
+async function criarViagem(e){
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  const motoristaId = document.getElementById('novaViagemMotorista').value;
+  const origem = document.getElementById('novaViagemOrigem').value.trim();
+  const destino = document.getElementById('novaViagemDestino').value.trim();
+  const cte = document.getElementById('novaViagemCte').value.trim();
+  const mdfe = document.getElementById('novaViagemMdfe').value.trim();
+
+  if(!motoristaId){ alert('Selecione o motorista.'); return; }
+  btn.disabled = true; btn.textContent = 'Criando...';
+
+  const { data: conjunto } = await sb.from('conjunto')
+    .select('conjunto_item(ordem, veiculo_id)')
+    .eq('motorista_id', motoristaId)
+    .limit(1)
+    .maybeSingle();
+  const cavaloItem = conjunto && conjunto.conjunto_item ? conjunto.conjunto_item.find(ci => ci.ordem === 1) : null;
+
+  const { error } = await sb.from('viagem').insert({
+    transportadora_id: usuarioAtual.transportadora_id,
+    motorista_id: motoristaId,
+    veiculo_id: cavaloItem ? cavaloItem.veiculo_id : null,
+    origem: origem || null,
+    destino: destino || null,
+    cte_numero: cte || null,
+    mdfe_numero: mdfe || null,
+    status: 'em_andamento'
+  });
+
+  if(error){ alert('Erro ao criar viagem: ' + error.message); btn.disabled = false; btn.textContent = 'Criar viagem'; return; }
+
+  alert('Viagem criada!');
+  loadPainel();
 }
 
 async function loadDocumentos(){
