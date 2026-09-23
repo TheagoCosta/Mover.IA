@@ -1,3 +1,8 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>MOVER.IA</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -53,6 +58,8 @@
   .ans-btn.active.na{background:#b9a9e8; border-color:#b9a9e8; color:#2c2440;}
   .progress{position:sticky; top:0; background:var(--asphalt-900); padding:12px 0; margin-top:-4px; z-index:2; border-bottom:1px solid var(--border); margin-bottom:12px;}
 </style>
+</head>
+<body>
 
 <div id="app"></div>
 
@@ -120,6 +127,11 @@ async function doLogin(e){
 async function doLogout(){
   await sb.auth.signOut();
   session = null;
+  usuarioAtual = null;
+  meuConjunto = null;
+  motoristaScreen = 'home';
+  chkAnswers = {};
+  screen = 'painel';
   render();
 }
 
@@ -367,3 +379,5 @@ async function verArquivo(docId, docs){
 
 init();
 </script>
+</body>
+</html>
