@@ -1050,12 +1050,18 @@ async function loadDocumentos(){
   const todosDocs = [...(docsEmpresa||[]), ...(docsMotorista||[]), ...(docsVeiculo||[])];
 
   el.innerHTML = `
+    <div class="card clickable" id="btnAdicionarDocumentoAuto" style="border-color:var(--line-yellow-dim);">
+      <div class="l1">📎 Adicionar documento</div>
+      <div class="l2">Envie o PDF (CNH, CRLV etc.) — o app tenta descobrir sozinho de quem é e onde encaixar</div>
+    </div>
+
     <h3>Documentos da empresa (${(docsEmpresa||[]).length})</h3>
     ${(docsEmpresa||[]).map(d => cardDocumento(d)).join('') || '<div class="status">Nenhum documento cadastrado</div>'}
 
     <h3>Documentos de motoristas (${(docsMotorista||[]).length})</h3>
     ${(docsMotorista||[]).map(d => cardDocumento(d, motoristaNome[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
     <div class="card">
+      <div class="l2" style="margin-bottom:8px;">Ou cadastre manualmente:</div>
       <form id="formNovoDocMotorista">
         <select id="docMotoristaSelect" required>
           <option value="">Selecione o motorista</option>
@@ -1076,6 +1082,7 @@ async function loadDocumentos(){
     <h3>Documentos de veículos (${(docsVeiculo||[]).length})</h3>
     ${(docsVeiculo||[]).map(d => cardDocumento(d, veiculoPlaca[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
     <div class="card">
+      <div class="l2" style="margin-bottom:8px;">Ou cadastre manualmente:</div>
       <form id="formNovoDocVeiculo">
         <select id="docVeiculoSelect" required>
           <option value="">Selecione o veículo</option>
@@ -1094,6 +1101,7 @@ async function loadDocumentos(){
     </div>
   `;
 
+  document.getElementById('btnAdicionarDocumentoAuto').addEventListener('click', abrirUploadAutomatico);
   el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
   el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
   el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
@@ -1234,6 +1242,157 @@ async function anexarArquivoComLeitura(docId, file, onDone){
     }
   }
   await anexarArquivo(docId, file, onDone);
+}
+
+function normalizarTexto(t){
+  return (t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+}
+
+function detectarTipoDocumento(texto){
+  const t = normalizarTexto(texto);
+  if(t.includes('CARTEIRA NACIONAL DE HABILITACAO') || t.includes('DRIVER LICENSE')) return { referenteA: 'motorista', tipo: 'CNH' };
+  if(t.includes('CERTIFICADO DE REGISTRO E LICENCIAMENTO DE VEICULO') || t.includes('CRLV')) return { referenteA: 'veiculo', tipo: 'CRLV' };
+  return { referenteA: null, tipo: '' };
+}
+
+function encontrarMotoristaPorNome(texto, motoristas){
+  const t = normalizarTexto(texto);
+  const encontrados = (motoristas || []).filter(m => t.includes(normalizarTexto(m.nome)));
+  return encontrados.length === 1 ? encontrados[0] : null;
+}
+
+function encontrarVeiculoPorPlaca(texto, veiculos){
+  const t = normalizarTexto(texto).replace(/[^A-Z0-9]/g, '');
+  const encontrados = (veiculos || []).filter(v => t.includes(v.placa.replace(/[^A-Z0-9]/g, '')));
+  return encontrados.length === 1 ? encontrados[0] : null;
+}
+
+async function abrirUploadAutomatico(){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/pdf,image/*';
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if(file) await processarUploadAutomatico(file);
+  });
+  input.click();
+}
+
+async function processarUploadAutomatico(file){
+  let texto = '';
+  if(file.type === 'application/pdf'){
+    try{ texto = await extrairTextoPdf(file); } catch(e){ texto = ''; }
+  }
+  const deteccao = detectarTipoDocumento(texto);
+  const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
+  const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
+  const datas = texto ? extrairDatasPossiveis(texto) : [];
+
+  const motoristaSugerido = deteccao.referenteA === 'motorista' ? encontrarMotoristaPorNome(texto, motoristas) : null;
+  const veiculoSugerido = deteccao.referenteA === 'veiculo' ? encontrarVeiculoPorPlaca(texto, veiculos) : null;
+
+  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas });
+}
+
+function mostrarRevisaoDocumento(ctx){
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas } = ctx;
+  let referenteA = deteccao.referenteA || 'empresa';
+
+  const modalHtml = `
+    <div id="uploadModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:flex-end;">
+      <div style="background:var(--asphalt-900); width:100%; border-radius:16px 16px 0 0; padding:20px; max-height:85vh; overflow:auto;">
+        <h3 style="margin-top:0;">Confirme o documento</h3>
+        ${deteccao.tipo
+          ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${deteccao.tipo}</b>${motoristaSugerido ? ' de ' + motoristaSugerido.nome : ''}${veiculoSugerido ? ' do veículo ' + veiculoSugerido.placa : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}</div>`
+          : `<div class="l2" style="margin-bottom:14px;">Não consegui identificar automaticamente este arquivo — preencha abaixo.</div>`}
+
+        <select id="revisaoReferenteA">
+          <option value="empresa" ${referenteA==='empresa'?'selected':''}>Documento da empresa</option>
+          <option value="motorista" ${referenteA==='motorista'?'selected':''}>Documento de motorista</option>
+          <option value="veiculo" ${referenteA==='veiculo'?'selected':''}>Documento de veículo</option>
+        </select>
+
+        <div id="revisaoReferenteIdWrap" style="margin-top:10px;"></div>
+
+        <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${deteccao.tipo || ''}" style="margin-top:10px;">
+        <input type="text" id="revisaoNumero" placeholder="Número (opcional)" style="margin-top:10px;">
+
+        ${datas.length ? `
+          <div class="l2" style="margin-top:14px;">Datas encontradas no arquivo — toque na que for a validade:</div>
+          <div id="revisaoDatas" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+            ${datas.map(d => `<button class="ans-btn" data-data="${d}" style="flex:none; padding:8px 12px;" type="button">${d}</button>`).join('')}
+          </div>
+        ` : ''}
+        <input type="date" id="revisaoValidade" style="margin-top:10px;">
+
+        <button id="btnSalvarUploadAutomatico" style="margin-top:16px; width:100%;">Salvar documento</button>
+        <button class="btn-small" id="btnCancelarUploadAutomatico" style="margin-top:8px; width:100%;">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  function renderReferenteIdSelect(){
+    const wrap = document.getElementById('revisaoReferenteIdWrap');
+    if(referenteA === 'motorista'){
+      wrap.innerHTML = `<select id="revisaoReferenteId">
+        <option value="">Selecione o motorista</option>
+        ${(motoristas||[]).map(m => `<option value="${m.id}" ${motoristaSugerido && motoristaSugerido.id===m.id ? 'selected':''}>${m.nome}</option>`).join('')}
+      </select>`;
+    } else if(referenteA === 'veiculo'){
+      wrap.innerHTML = `<select id="revisaoReferenteId">
+        <option value="">Selecione o veículo</option>
+        ${(veiculos||[]).map(v => `<option value="${v.id}" ${veiculoSugerido && veiculoSugerido.id===v.id ? 'selected':''}>${v.placa}</option>`).join('')}
+      </select>`;
+    } else {
+      wrap.innerHTML = '';
+    }
+  }
+  renderReferenteIdSelect();
+
+  document.getElementById('revisaoReferenteA').addEventListener('change', (e) => { referenteA = e.target.value; renderReferenteIdSelect(); });
+  document.querySelectorAll('#revisaoDatas [data-data]').forEach(btn => btn.addEventListener('click', () => {
+    const [dd, mm, yyyy] = btn.dataset.data.split('/');
+    document.getElementById('revisaoValidade').value = `${yyyy}-${mm}-${dd}`;
+    document.querySelectorAll('#revisaoDatas [data-data]').forEach(b => b.classList.remove('active', 'ok'));
+    btn.classList.add('active', 'ok');
+  }));
+
+  function fechar(){ const m = document.getElementById('uploadModal'); if(m) m.remove(); }
+  document.getElementById('btnCancelarUploadAutomatico').addEventListener('click', fechar);
+
+  document.getElementById('btnSalvarUploadAutomatico').addEventListener('click', async () => {
+    const btn = document.getElementById('btnSalvarUploadAutomatico');
+    const referenteIdEl = document.getElementById('revisaoReferenteId');
+    const referenteId = referenteA === 'empresa' ? usuarioAtual.transportadora_id : (referenteIdEl ? referenteIdEl.value : null);
+    const tipo = document.getElementById('revisaoTipo').value.trim();
+    const numero = document.getElementById('revisaoNumero').value.trim();
+    const validade = document.getElementById('revisaoValidade').value;
+
+    if(!tipo){ alert('Informe o tipo do documento.'); return; }
+    if(referenteA !== 'empresa' && !referenteId){ alert('Selecione a quem este documento pertence.'); return; }
+
+    btn.disabled = true; btn.textContent = 'Salvando...';
+
+    const { data: novoDoc, error } = await sb.from('documento').insert({
+      transportadora_id: usuarioAtual.transportadora_id,
+      referente_a: referenteA,
+      referente_id: referenteId,
+      tipo,
+      numero: numero || null,
+      validade: validade || null,
+      status: 'ok'
+    }).select('id').single();
+
+    if(error){ alert('Erro ao criar o documento: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar documento'; return; }
+
+    const path = `${usuarioAtual.transportadora_id}/${novoDoc.id}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
+    const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
+    if(upErr){ alert('Documento criado, mas não consegui enviar o arquivo: ' + upErr.message); fechar(); loadDocumentos(); return; }
+    await sb.from('documento').update({ arquivo_url: path }).eq('id', novoDoc.id);
+
+    fechar();
+    loadDocumentos();
+  });
 }
 
 async function verArquivo(docId, docs){
