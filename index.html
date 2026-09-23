@@ -258,8 +258,48 @@ async function encerrarJornada(jornadaId){
   loadShellMotorista();
 }
 
+function formatarDuracao(inicioIso, fimIso){
+  const ms = new Date(fimIso) - new Date(inicioIso);
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}h${String(m).padStart(2,'0')}`;
+}
+
+async function loadHistoricoJornadas(){
+  const { data: jornadas, error } = await sb.from('jornada')
+    .select('id, inicio, fim')
+    .eq('motorista_id', session.user.id)
+    .eq('status', 'encerrada')
+    .order('inicio', { ascending: false })
+    .limit(20);
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">Histórico de jornadas</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        ${error ? `<div class="status">Erro ao carregar histórico: ${error.message}</div>` : ''}
+        ${(jornadas||[]).map(j => `
+          <div class="card">
+            <div class="l1">${new Date(j.inicio).toLocaleDateString('pt-BR')}${j.fim ? `<span class="pill ok">${formatarDuracao(j.inicio, j.fim)}</span>` : ''}</div>
+            <div class="l2">${new Date(j.inicio).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} até ${j.fim ? new Date(j.fim).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '—'}</div>
+          </div>
+        `).join('') || '<div class="status">Nenhuma jornada encerrada ainda</div>'}
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
+}
+
 async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ loadChecklistMotorista(); return; }
+  if(motoristaScreen === 'historicoJornada'){ loadHistoricoJornadas(); return; }
 
   const conjunto = await carregarMeuConjunto();
   const jornada = await carregarJornadaAtiva();
@@ -283,6 +323,10 @@ async function loadShellMotorista(){
           ${jornada ? `<div class="l2">Iniciada às ${new Date(jornada.inicio).toLocaleString('pt-BR')}</div>` : ''}
           ${jornadaBotoes(jornada)}
         </div>
+        <div class="card clickable" id="btnHistoricoJornada">
+          <div class="l1">Histórico de jornadas</div>
+          <div class="l2">Toque para ver jornadas anteriores</div>
+        </div>
 
         <h3>Meu conjunto</h3>
         ${veiculosOrdenados.length
@@ -298,6 +342,7 @@ async function loadShellMotorista(){
     </div>`;
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnAbrirChecklist').addEventListener('click', () => { motoristaScreen = 'checklist'; loadShellMotorista(); });
+  document.getElementById('btnHistoricoJornada').addEventListener('click', () => { motoristaScreen = 'historicoJornada'; loadShellMotorista(); });
   attachJornadaHandlers(jornada);
 }
 
