@@ -1,0 +1,147 @@
+<title>MOVER.IA</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --asphalt-900:#14181d; --asphalt-800:#1b2027; --asphalt-700:#242b33;
+    --line-yellow:#ffc53d; --line-yellow-dim:#8a6a1f;
+    --text-primary:#edeef0; --text-secondary:#8b929c;
+    --border:#2c333c; --danger:#e35a5e;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0; background:var(--asphalt-900); color:var(--text-primary); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; padding-inline:0;}
+  .wrap{max-width:480px; margin:0 auto; min-height:100%; display:flex; flex-direction:column;}
+  .center{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px 20px;}
+  .logo{font-weight:800; font-size:26px; letter-spacing:.02em; margin-bottom:4px;}
+  .logo span{color:var(--line-yellow-dim);}
+  .tag{color:var(--text-secondary); font-size:13px; margin-bottom:28px; text-align:center;}
+  form{width:100%; display:flex; flex-direction:column; gap:12px;}
+  input{background:var(--asphalt-800); border:1px solid var(--border); color:var(--text-primary); border-radius:10px; padding:13px 14px; font-size:15px; width:100%;}
+  input:focus{outline:none; border-color:var(--line-yellow);}
+  button{background:var(--line-yellow); color:#241c04; border:none; border-radius:10px; padding:13px 14px; font-size:15px; font-weight:700; cursor:pointer;}
+  button:disabled{opacity:.6; cursor:default;}
+  .err{color:var(--danger); font-size:13.5px; min-height:18px;}
+  .top{display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border); padding-top:calc(16px + env(safe-area-inset-top, 0px));}
+  .top .co{font-size:15px; font-weight:700;}
+  .top .role{color:var(--text-secondary); font-size:12.5px; margin-top:2px;}
+  .sair{background:transparent; color:var(--text-secondary); border:1px solid var(--border); padding:8px 12px; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer;}
+  .content{padding:18px 20px calc(24px + env(safe-area-inset-bottom, 0px)); flex:1;}
+  h3{font-size:12.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--line-yellow); margin:22px 0 10px; font-weight:700;}
+  h3:first-child{margin-top:0;}
+  .card{background:var(--asphalt-800); border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:8px;}
+  .card .l1{font-weight:700; font-size:14.5px; display:flex; align-items:center;}
+  .card .l2{color:var(--text-secondary); font-size:13px; margin-top:2px;}
+  .pill{display:inline-block; font-size:11px; padding:2px 8px; border-radius:100px; background:var(--asphalt-700); color:var(--text-secondary); margin-left:8px; font-weight:600;}
+  .status{color:var(--text-secondary); font-size:14px; text-align:center; padding:40px 20px;}
+</style>
+
+<div id="app"></div>
+
+<script>
+const SUPABASE_URL = 'https://otllslhjbyjtktxyvezy.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_eFeBsxW2lThWWBAHquuv5g_NWe9lgvf';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let session = null;
+let loginError = '';
+
+const app = document.getElementById('app');
+
+async function init(){
+  app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`;
+  const { data } = await sb.auth.getSession();
+  session = data.session;
+  render();
+}
+
+function render(){
+  if(!session){ app.innerHTML = loginScreen(); attachLoginHandlers(); }
+  else { app.innerHTML = `<div class="wrap"><div class="status">Carregando painel...</div></div>`; loadDashboard(); }
+}
+
+function loginScreen(){
+  return `
+  <div class="wrap">
+    <div class="center">
+      <div class="logo">MOVER<span>.IA</span></div>
+      <div class="tag">Gestão para quem move o Brasil</div>
+      <form id="loginForm">
+        <input type="email" id="email" placeholder="E-mail" required autocomplete="username">
+        <input type="password" id="password" placeholder="Senha" required autocomplete="current-password">
+        <div class="err" id="loginErr">${loginError}</div>
+        <button type="submit" id="loginBtn">Entrar</button>
+      </form>
+    </div>
+  </div>`;
+}
+
+function attachLoginHandlers(){
+  document.getElementById('loginForm').addEventListener('submit', doLogin);
+}
+
+async function doLogin(e){
+  e.preventDefault();
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'Entrando...';
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if(error){
+    loginError = error.message === 'Invalid login credentials' ? 'E-mail ou senha incorretos.' : error.message;
+    render();
+    return;
+  }
+  loginError = '';
+  session = data.session;
+  render();
+}
+
+async function doLogout(){
+  await sb.auth.signOut();
+  session = null;
+  render();
+}
+
+const papelLabel = { admin_transportadora:'Administrador', gestor:'Escritório', mecanico:'Mecânico', motorista:'Motorista', admin_mover_ia:'MOVER.IA' };
+
+async function loadDashboard(){
+  const { data: usuario, error: uErr } = await sb
+    .from('usuario')
+    .select('nome, papel, transportadora:transportadora_id ( nome_fantasia, plano )')
+    .eq('id', session.user.id)
+    .single();
+
+  if(uErr || !usuario){
+    app.innerHTML = `<div class="wrap"><div class="content"><div class="status">Login funcionou, mas não encontrei seu cadastro na tabela "usuario". ${uErr ? '('+uErr.message+')' : ''}</div></div></div>`;
+    return;
+  }
+
+  const { data: veiculos } = await sb.from('veiculo').select('placa, tipo, modelo').order('tipo').order('placa');
+  const { data: itens } = await sb.from('checklist_item_padrao').select('ordem, descricao, padrao_esperado').order('ordem');
+
+  const cavalos = (veiculos||[]).filter(v=>v.tipo==='cavalo');
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <div class="co">${usuario.transportadora ? usuario.transportadora.nome_fantasia : '—'}</div>
+          <div class="role">${usuario.nome} · ${papelLabel[usuario.papel] || usuario.papel}</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        <h3>Frota (${cavalos.length} conjuntos)</h3>
+        ${cavalos.map(v=>`<div class="card"><div class="l1">${v.placa}<span class="pill">cavalo</span></div><div class="l2">${v.modelo||''}</div></div>`).join('') || '<div class="status">Nenhum veículo cadastrado</div>'}
+
+        <h3>Checklist padrão (${(itens||[]).length} itens)</h3>
+        ${(itens||[]).slice(0,5).map(i=>`<div class="card"><div class="l1">${i.ordem}. ${i.descricao}</div><div class="l2">${i.padrao_esperado||''}</div></div>`).join('')}
+        ${(itens||[]).length > 5 ? `<div class="status">+ ${itens.length-5} itens</div>` : ''}
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+}
+
+init();
+</script>
