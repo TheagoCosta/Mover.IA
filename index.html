@@ -33,7 +33,17 @@
   .card .l1{font-weight:700; font-size:14.5px; display:flex; align-items:center;}
   .card .l2{color:var(--text-secondary); font-size:13px; margin-top:2px;}
   .pill{display:inline-block; font-size:11px; padding:2px 8px; border-radius:100px; background:var(--asphalt-700); color:var(--text-secondary); margin-left:8px; font-weight:600;}
+  .pill.ok{background:rgba(63,178,127,.15); color:#3fb27f;}
+  .pill.vence_em_breve{background:rgba(255,197,61,.15); color:var(--line-yellow);}
+  .pill.vencido{background:rgba(227,90,94,.15); color:var(--danger);}
   .status{color:var(--text-secondary); font-size:14px; text-align:center; padding:40px 20px;}
+  .tabs{display:flex; gap:4px; padding:0 20px; border-bottom:1px solid var(--border);}
+  .tab{background:transparent; border:none; color:var(--text-secondary); font-size:13.5px; font-weight:600; padding:12px 4px; cursor:pointer; border-bottom:2px solid transparent; border-radius:0;}
+  .tab.active{color:var(--line-yellow); border-bottom-color:var(--line-yellow);}
+  .card .row{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px;}
+  .btn-small{background:var(--asphalt-700); color:var(--text-primary); border:1px solid var(--border); padding:8px 12px; font-size:12.5px; font-weight:600; border-radius:8px; cursor:pointer;}
+  .file-label{background:var(--asphalt-700); color:var(--text-primary); border:1px solid var(--border); padding:8px 12px; font-size:12.5px; font-weight:600; border-radius:8px; cursor:pointer; display:inline-block;}
+  .file-label input{display:none;}
 </style>
 
 <div id="app"></div>
@@ -45,6 +55,8 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let session = null;
 let loginError = '';
+let usuarioAtual = null;
+let screen = 'painel';
 
 const app = document.getElementById('app');
 
@@ -57,7 +69,7 @@ async function init(){
 
 function render(){
   if(!session){ app.innerHTML = loginScreen(); attachLoginHandlers(); }
-  else { app.innerHTML = `<div class="wrap"><div class="status">Carregando painel...</div></div>`; loadDashboard(); }
+  else { app.innerHTML = `<div class="wrap"><div class="status">Carregando painel...</div></div>`; loadShell(); }
 }
 
 function loginScreen(){
@@ -104,43 +116,116 @@ async function doLogout(){
 }
 
 const papelLabel = { admin_transportadora:'Administrador', gestor:'Escritório', mecanico:'Mecânico', motorista:'Motorista', admin_mover_ia:'MOVER.IA' };
+const statusLabel = { ok:'Em dia', vence_em_breve:'Vence em breve', vencido:'Vencido' };
 
-async function loadDashboard(){
-  const { data: usuario, error: uErr } = await sb
-    .from('usuario')
-    .select('nome, papel, transportadora:transportadora_id ( nome_fantasia, plano )')
-    .eq('id', session.user.id)
-    .single();
+async function loadShell(){
+  if(!usuarioAtual){
+    const { data: usuario, error: uErr } = await sb
+      .from('usuario')
+      .select('nome, papel, transportadora_id, transportadora:transportadora_id ( nome_fantasia, plano )')
+      .eq('id', session.user.id)
+      .single();
 
-  if(uErr || !usuario){
-    app.innerHTML = `<div class="wrap"><div class="content"><div class="status">Login funcionou, mas não encontrei seu cadastro na tabela "usuario". ${uErr ? '('+uErr.message+')' : ''}</div></div></div>`;
-    return;
+    if(uErr || !usuario){
+      app.innerHTML = `<div class="wrap"><div class="content"><div class="status">Login funcionou, mas não encontrei seu cadastro na tabela "usuario". ${uErr ? '('+uErr.message+')' : ''}</div></div></div>`;
+      return;
+    }
+    usuarioAtual = usuario;
   }
-
-  const { data: veiculos } = await sb.from('veiculo').select('placa, tipo, modelo').order('tipo').order('placa');
-  const { data: itens } = await sb.from('checklist_item_padrao').select('ordem, descricao, padrao_esperado').order('ordem');
-
-  const cavalos = (veiculos||[]).filter(v=>v.tipo==='cavalo');
 
   app.innerHTML = `
     <div class="wrap">
       <div class="top">
         <div>
-          <div class="co">${usuario.transportadora ? usuario.transportadora.nome_fantasia : '—'}</div>
-          <div class="role">${usuario.nome} · ${papelLabel[usuario.papel] || usuario.papel}</div>
+          <div class="co">${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '—'}</div>
+          <div class="role">${usuarioAtual.nome} · ${papelLabel[usuarioAtual.papel] || usuarioAtual.papel}</div>
         </div>
         <button class="sair" id="btnSair">Sair</button>
       </div>
-      <div class="content">
-        <h3>Frota (${cavalos.length} conjuntos)</h3>
-        ${cavalos.map(v=>`<div class="card"><div class="l1">${v.placa}<span class="pill">cavalo</span></div><div class="l2">${v.modelo||''}</div></div>`).join('') || '<div class="status">Nenhum veículo cadastrado</div>'}
-
-        <h3>Checklist padrão (${(itens||[]).length} itens)</h3>
-        ${(itens||[]).slice(0,5).map(i=>`<div class="card"><div class="l1">${i.ordem}. ${i.descricao}</div><div class="l2">${i.padrao_esperado||''}</div></div>`).join('')}
-        ${(itens||[]).length > 5 ? `<div class="status">+ ${itens.length-5} itens</div>` : ''}
+      <div class="tabs">
+        <button class="tab ${screen==='painel'?'active':''}" data-screen="painel">Painel</button>
+        <button class="tab ${screen==='documentos'?'active':''}" data-screen="documentos">Documentos</button>
       </div>
+      <div class="content" id="screenContent"><div class="status">Carregando...</div></div>
     </div>`;
+
   document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => {
+    screen = el.dataset.screen;
+    loadShell();
+  }));
+
+  if(screen === 'painel') loadPainel();
+  else if(screen === 'documentos') loadDocumentos();
+}
+
+async function loadPainel(){
+  const { data: veiculos } = await sb.from('veiculo').select('placa, tipo, modelo').order('tipo').order('placa');
+  const { data: itens } = await sb.from('checklist_item_padrao').select('ordem, descricao, padrao_esperado').order('ordem');
+  const cavalos = (veiculos||[]).filter(v=>v.tipo==='cavalo');
+
+  document.getElementById('screenContent').innerHTML = `
+    <h3>Frota (${cavalos.length} conjuntos)</h3>
+    ${cavalos.map(v=>`<div class="card"><div class="l1">${v.placa}<span class="pill">cavalo</span></div><div class="l2">${v.modelo||''}</div></div>`).join('') || '<div class="status">Nenhum veículo cadastrado</div>'}
+
+    <h3>Checklist padrão (${(itens||[]).length} itens)</h3>
+    ${(itens||[]).slice(0,5).map(i=>`<div class="card"><div class="l1">${i.ordem}. ${i.descricao}</div><div class="l2">${i.padrao_esperado||''}</div></div>`).join('')}
+    ${(itens||[]).length > 5 ? `<div class="status">+ ${itens.length-5} itens</div>` : ''}
+  `;
+}
+
+async function loadDocumentos(){
+  const { data: docs, error } = await sb
+    .from('documento')
+    .select('id, tipo, numero, validade, status, arquivo_url')
+    .eq('referente_a', 'empresa')
+    .order('tipo');
+
+  const el = document.getElementById('screenContent');
+  if(error){ el.innerHTML = `<div class="status">Erro ao carregar documentos: ${error.message}</div>`; return; }
+
+  el.innerHTML = `
+    <h3>Documentos da empresa (${(docs||[]).length})</h3>
+    ${(docs||[]).map(d => `
+      <div class="card">
+        <div class="l1">${d.tipo}<span class="pill ${d.status}">${statusLabel[d.status]||d.status}</span></div>
+        <div class="l2">${d.numero || ''}${d.validade ? ' · válido até '+formatarData(d.validade) : ''}</div>
+        <div class="row">
+          ${d.arquivo_url
+            ? `<button class="btn-small" data-ver="${d.id}">Ver arquivo</button>`
+            : `<span class="l2">Nenhum arquivo anexado</span>`}
+          <label class="file-label">${d.arquivo_url ? 'Substituir' : 'Anexar arquivo'}<input type="file" data-anexar="${d.id}"></label>
+        </div>
+      </div>
+    `).join('') || '<div class="status">Nenhum documento cadastrado</div>'}
+  `;
+
+  el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, docs)));
+  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0])));
+}
+
+function formatarData(iso){
+  const [y,m,d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+async function anexarArquivo(docId, file){
+  if(!file) return;
+  const el = document.getElementById('screenContent');
+  const path = `${usuarioAtual.transportadora_id}/${docId}_${Date.now()}_${file.name}`;
+  const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
+  if(upErr){ alert('Erro ao enviar arquivo: ' + upErr.message); return; }
+  const { error: updErr } = await sb.from('documento').update({ arquivo_url: path }).eq('id', docId);
+  if(updErr){ alert('Arquivo enviado, mas não consegui atualizar o registro: ' + updErr.message); return; }
+  loadDocumentos();
+}
+
+async function verArquivo(docId, docs){
+  const doc = (docs||[]).find(d => String(d.id) === String(docId));
+  if(!doc || !doc.arquivo_url) return;
+  const { data, error } = await sb.storage.from('documentos').createSignedUrl(doc.arquivo_url, 300);
+  if(error){ alert('Erro ao abrir arquivo: ' + error.message); return; }
+  window.open(data.signedUrl, '_blank');
 }
 
 init();
