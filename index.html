@@ -623,6 +623,63 @@ function labelPosicaoConjunto(ordem, tipo){
 }
 const tipoLabelGlobal = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
 
+async function loadDocumentosMotorista(){
+  const { data: docs, error } = await sb.from('documento')
+    .select('id, tipo, numero, validade, status, arquivo_url')
+    .eq('referente_a', 'motorista')
+    .eq('referente_id', session.user.id)
+    .order('tipo');
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">Meus documentos</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        ${error ? `<div class="status">Erro ao carregar documentos: ${error.message}</div>` : ''}
+        ${(docs||[]).map(d => cardDocumento(d)).join('') || '<div class="status">Nenhum documento cadastrado para você ainda — peça ao escritório para cadastrar</div>'}
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
+  document.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, docs)));
+  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0], loadDocumentosMotorista)));
+}
+
+async function loadDocumentosConjunto(){
+  const conjunto = await carregarMeuConjunto();
+  const veiculoIds = conjunto ? conjunto.conjunto_item.map(ci => ci.veiculo_id) : [];
+  const placaPorVeiculo = {};
+  if(conjunto) conjunto.conjunto_item.forEach(ci => { placaPorVeiculo[ci.veiculo_id] = ci.veiculo.placa; });
+
+  const { data: docs, error } = veiculoIds.length
+    ? await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'veiculo').in('referente_id', veiculoIds).order('tipo')
+    : { data: [], error: null };
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">Documentos do conjunto</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        ${error ? `<div class="status">Erro ao carregar documentos: ${error.message}</div>` : ''}
+        ${(docs||[]).map(d => cardDocumento(d, placaPorVeiculo[d.referente_id] || '')).join('') || '<div class="status">Nenhum documento cadastrado para os veículos do seu conjunto ainda</div>'}
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
+  document.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, docs)));
+  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0], loadDocumentosConjunto)));
+}
+
 async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ loadChecklistMotorista(); return; }
   if(motoristaScreen === 'historicoJornada'){ loadHistoricoJornadas(); return; }
@@ -630,6 +687,8 @@ async function loadShellMotorista(){
   if(motoristaScreen === 'jornadaPausa'){ loadJornadaPausa(); return; }
   if(motoristaScreen === 'jornadaEncerrar'){ loadJornadaEncerrar(); return; }
   if(motoristaScreen === 'abastecimento'){ loadAbastecimentoMotorista(); return; }
+  if(motoristaScreen === 'documentosMotorista'){ loadDocumentosMotorista(); return; }
+  if(motoristaScreen === 'documentosConjunto'){ loadDocumentosConjunto(); return; }
 
   const conjunto = await carregarMeuConjunto();
   const jornada = await carregarJornadaAtiva();
@@ -681,6 +740,10 @@ async function loadShellMotorista(){
               </div>
             `).join('')}</div>`
           : '<div class="status">Nenhum conjunto vinculado a você ainda</div>'}
+        <div class="card clickable" id="btnDocumentosConjunto">
+          <div class="l1">Documentos do conjunto</div>
+          <div class="l2">CRLV e licenciamento dos veículos</div>
+        </div>
 
         <h3>Checklist pré-viagem</h3>
         <div class="card clickable" id="btnAbrirChecklist">
@@ -693,12 +756,20 @@ async function loadShellMotorista(){
           <div class="l1">Registrar abastecimento</div>
           <div class="l2">Toque para lançar km e litros e ver o consumo médio</div>
         </div>
+
+        <h3>Documentos</h3>
+        <div class="card clickable" id="btnDocumentosMotorista">
+          <div class="l1">Meus documentos</div>
+          <div class="l2">CNH, exames e outros documentos pessoais</div>
+        </div>
       </div>
     </div>`;
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnAbrirChecklist').addEventListener('click', () => { motoristaScreen = 'checklist'; loadShellMotorista(); });
   document.getElementById('btnHistoricoJornada').addEventListener('click', () => { motoristaScreen = 'historicoJornada'; loadShellMotorista(); });
   document.getElementById('btnAbastecimento').addEventListener('click', () => { motoristaScreen = 'abastecimento'; loadShellMotorista(); });
+  document.getElementById('btnDocumentosMotorista').addEventListener('click', () => { motoristaScreen = 'documentosMotorista'; loadShellMotorista(); });
+  document.getElementById('btnDocumentosConjunto').addEventListener('click', () => { motoristaScreen = 'documentosConjunto'; loadShellMotorista(); });
   document.querySelectorAll('.list-item[data-placa]').forEach(el => el.addEventListener('click', () => {
     alert(`${el.dataset.placa}\n\nDetalhes do veículo em breve.`);
   }));
@@ -873,34 +944,131 @@ async function criarViagem(e){
   loadPainel();
 }
 
+function cardDocumento(d, subtitulo){
+  return `
+    <div class="card">
+      <div class="l1">${d.tipo}<span class="pill ${d.status}">${statusLabel[d.status]||d.status}</span></div>
+      <div class="l2">${subtitulo ? subtitulo+' · ' : ''}${d.numero || ''}${d.validade ? ' · válido até '+formatarData(d.validade) : ''}</div>
+      <div class="row">
+        ${d.arquivo_url
+          ? `<button class="btn-small" data-ver="${d.id}">Ver arquivo</button>`
+          : `<span class="l2">Nenhum arquivo anexado</span>`}
+        <label class="file-label">${d.arquivo_url ? 'Substituir' : 'Anexar arquivo'}<input type="file" data-anexar="${d.id}"></label>
+      </div>
+    </div>`;
+}
+
 async function loadDocumentos(){
-  const { data: docs, error } = await sb
-    .from('documento')
-    .select('id, tipo, numero, validade, status, arquivo_url')
-    .eq('referente_a', 'empresa')
-    .order('tipo');
+  const { data: docsEmpresa, error } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url').eq('referente_a', 'empresa').order('tipo');
+  const { data: docsMotorista } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'motorista').order('tipo');
+  const { data: docsVeiculo } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'veiculo').order('tipo');
+  const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
+  const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
 
   const el = document.getElementById('screenContent');
   if(error){ el.innerHTML = `<div class="status">Erro ao carregar documentos: ${error.message}</div>`; return; }
 
+  const motoristaNome = Object.fromEntries((motoristas||[]).map(m => [m.id, m.nome]));
+  const veiculoPlaca = Object.fromEntries((veiculos||[]).map(v => [v.id, v.placa]));
+  const todosDocs = [...(docsEmpresa||[]), ...(docsMotorista||[]), ...(docsVeiculo||[])];
+
   el.innerHTML = `
-    <h3>Documentos da empresa (${(docs||[]).length})</h3>
-    ${(docs||[]).map(d => `
-      <div class="card">
-        <div class="l1">${d.tipo}<span class="pill ${d.status}">${statusLabel[d.status]||d.status}</span></div>
-        <div class="l2">${d.numero || ''}${d.validade ? ' · válido até '+formatarData(d.validade) : ''}</div>
-        <div class="row">
-          ${d.arquivo_url
-            ? `<button class="btn-small" data-ver="${d.id}">Ver arquivo</button>`
-            : `<span class="l2">Nenhum arquivo anexado</span>`}
-          <label class="file-label">${d.arquivo_url ? 'Substituir' : 'Anexar arquivo'}<input type="file" data-anexar="${d.id}"></label>
-        </div>
-      </div>
-    `).join('') || '<div class="status">Nenhum documento cadastrado</div>'}
+    <h3>Documentos da empresa (${(docsEmpresa||[]).length})</h3>
+    ${(docsEmpresa||[]).map(d => cardDocumento(d)).join('') || '<div class="status">Nenhum documento cadastrado</div>'}
+
+    <h3>Documentos de motoristas (${(docsMotorista||[]).length})</h3>
+    ${(docsMotorista||[]).map(d => cardDocumento(d, motoristaNome[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
+    <div class="card">
+      <form id="formNovoDocMotorista">
+        <select id="docMotoristaSelect" required>
+          <option value="">Selecione o motorista</option>
+          ${(motoristas||[]).map(m => `<option value="${m.id}">${m.nome}</option>`).join('')}
+        </select>
+        <input type="text" id="docMotoristaTipo" placeholder="Tipo (ex: CNH, Exame toxicológico)" required>
+        <input type="text" id="docMotoristaNumero" placeholder="Número (opcional)">
+        <input type="date" id="docMotoristaValidade">
+        <select id="docMotoristaStatus">
+          <option value="ok">Em dia</option>
+          <option value="vence_em_breve">Vence em breve</option>
+          <option value="vencido">Vencido</option>
+        </select>
+        <button type="submit">Adicionar documento de motorista</button>
+      </form>
+    </div>
+
+    <h3>Documentos de veículos (${(docsVeiculo||[]).length})</h3>
+    ${(docsVeiculo||[]).map(d => cardDocumento(d, veiculoPlaca[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
+    <div class="card">
+      <form id="formNovoDocVeiculo">
+        <select id="docVeiculoSelect" required>
+          <option value="">Selecione o veículo</option>
+          ${(veiculos||[]).map(v => `<option value="${v.id}">${v.placa}</option>`).join('')}
+        </select>
+        <input type="text" id="docVeiculoTipo" placeholder="Tipo (ex: CRLV, Licenciamento)" required>
+        <input type="text" id="docVeiculoNumero" placeholder="Número (opcional)">
+        <input type="date" id="docVeiculoValidade">
+        <select id="docVeiculoStatus">
+          <option value="ok">Em dia</option>
+          <option value="vence_em_breve">Vence em breve</option>
+          <option value="vencido">Vencido</option>
+        </select>
+        <button type="submit">Adicionar documento de veículo</button>
+      </form>
+    </div>
   `;
 
-  el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, docs)));
-  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0])));
+  el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
+  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivo(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
+  const formMot = document.getElementById('formNovoDocMotorista');
+  if(formMot) formMot.addEventListener('submit', criarDocumentoMotorista);
+  const formVei = document.getElementById('formNovoDocVeiculo');
+  if(formVei) formVei.addEventListener('submit', criarDocumentoVeiculo);
+}
+
+async function criarDocumentoMotorista(e){
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  const motoristaId = document.getElementById('docMotoristaSelect').value;
+  const tipo = document.getElementById('docMotoristaTipo').value.trim();
+  const numero = document.getElementById('docMotoristaNumero').value.trim();
+  const validade = document.getElementById('docMotoristaValidade').value;
+  const status = document.getElementById('docMotoristaStatus').value;
+  if(!motoristaId || !tipo){ alert('Selecione o motorista e informe o tipo do documento.'); return; }
+  btn.disabled = true; btn.textContent = 'Adicionando...';
+  const { error } = await sb.from('documento').insert({
+    transportadora_id: usuarioAtual.transportadora_id,
+    referente_a: 'motorista',
+    referente_id: motoristaId,
+    tipo,
+    numero: numero || null,
+    validade: validade || null,
+    status
+  });
+  if(error){ alert('Erro ao adicionar documento: ' + error.message); btn.disabled = false; btn.textContent = 'Adicionar documento de motorista'; return; }
+  loadDocumentos();
+}
+
+async function criarDocumentoVeiculo(e){
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  const veiculoId = document.getElementById('docVeiculoSelect').value;
+  const tipo = document.getElementById('docVeiculoTipo').value.trim();
+  const numero = document.getElementById('docVeiculoNumero').value.trim();
+  const validade = document.getElementById('docVeiculoValidade').value;
+  const status = document.getElementById('docVeiculoStatus').value;
+  if(!veiculoId || !tipo){ alert('Selecione o veículo e informe o tipo do documento.'); return; }
+  btn.disabled = true; btn.textContent = 'Adicionando...';
+  const { error } = await sb.from('documento').insert({
+    transportadora_id: usuarioAtual.transportadora_id,
+    referente_a: 'veiculo',
+    referente_id: veiculoId,
+    tipo,
+    numero: numero || null,
+    validade: validade || null,
+    status
+  });
+  if(error){ alert('Erro ao adicionar documento: ' + error.message); btn.disabled = false; btn.textContent = 'Adicionar documento de veículo'; return; }
+  loadDocumentos();
 }
 
 function formatarData(iso){
@@ -914,15 +1082,14 @@ function sanitizarNomeArquivo(nome){
     .replace(/[^a-zA-Z0-9.\-]/g, '_');
 }
 
-async function anexarArquivo(docId, file){
+async function anexarArquivo(docId, file, onDone){
   if(!file) return;
-  const el = document.getElementById('screenContent');
   const path = `${usuarioAtual.transportadora_id}/${docId}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
   const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
   if(upErr){ alert('Erro ao enviar arquivo: ' + upErr.message); return; }
   const { error: updErr } = await sb.from('documento').update({ arquivo_url: path }).eq('id', docId);
   if(updErr){ alert('Arquivo enviado, mas não consegui atualizar o registro: ' + updErr.message); return; }
-  loadDocumentos();
+  (onDone || loadDocumentos)();
 }
 
 async function verArquivo(docId, docs){
