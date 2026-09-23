@@ -209,10 +209,16 @@ function formatarData(iso){
   return `${d}/${m}/${y}`;
 }
 
+function sanitizarNomeArquivo(nome){
+  return nome
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9.\-]/g, '_');
+}
+
 async function anexarArquivo(docId, file){
   if(!file) return;
   const el = document.getElementById('screenContent');
-  const path = `${usuarioAtual.transportadora_id}/${docId}_${Date.now()}_${file.name}`;
+  const path = `${usuarioAtual.transportadora_id}/${docId}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
   const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
   if(upErr){ alert('Erro ao enviar arquivo: ' + upErr.message); return; }
   const { error: updErr } = await sb.from('documento').update({ arquivo_url: path }).eq('id', docId);
