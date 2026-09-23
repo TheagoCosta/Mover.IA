@@ -196,10 +196,73 @@ async function carregarMeuConjunto(){
   return meuConjunto;
 }
 
+async function carregarJornadaAtiva(){
+  const { data } = await sb.from('jornada')
+    .select('id, inicio, status')
+    .eq('motorista_id', session.user.id)
+    .neq('status', 'encerrada')
+    .order('inicio', { ascending: false })
+    .limit(1);
+  return (data && data[0]) || null;
+}
+
+const jornadaStatusLabel = { ativa: 'Em andamento', pausada: 'Pausada' };
+
+function jornadaBotoes(jornada){
+  if(!jornada) return `<button id="btnJornadaIniciar">Iniciar jornada</button>`;
+  if(jornada.status === 'ativa') return `
+    <div class="ans-row">
+      <button class="ans-btn" id="btnJornadaPausar" style="flex:1;">Pausar</button>
+      <button class="ans-btn bad" id="btnJornadaEncerrar" style="flex:1;">Encerrar</button>
+    </div>`;
+  return `
+    <div class="ans-row">
+      <button class="ans-btn ok" id="btnJornadaRetomar" style="flex:1;">Retomar</button>
+      <button class="ans-btn bad" id="btnJornadaEncerrar" style="flex:1;">Encerrar</button>
+    </div>`;
+}
+
+function attachJornadaHandlers(jornada){
+  const ini = document.getElementById('btnJornadaIniciar');
+  if(ini) ini.addEventListener('click', iniciarJornada);
+  const pausar = document.getElementById('btnJornadaPausar');
+  if(pausar) pausar.addEventListener('click', () => atualizarJornada(jornada.id, 'pausada', 'pausa'));
+  const retomar = document.getElementById('btnJornadaRetomar');
+  if(retomar) retomar.addEventListener('click', () => atualizarJornada(jornada.id, 'ativa', 'retomada'));
+  const encerrar = document.getElementById('btnJornadaEncerrar');
+  if(encerrar) encerrar.addEventListener('click', () => encerrarJornada(jornada.id));
+}
+
+async function iniciarJornada(){
+  const { data, error } = await sb.from('jornada').insert({
+    transportadora_id: usuarioAtual.transportadora_id,
+    motorista_id: session.user.id,
+    status: 'ativa'
+  }).select('id').single();
+  if(error){ alert('Erro ao iniciar jornada: ' + error.message); return; }
+  await sb.from('jornada_evento').insert({ jornada_id: data.id, tipo: 'inicio' });
+  loadShellMotorista();
+}
+
+async function atualizarJornada(jornadaId, novoStatus, tipoEvento){
+  const { error } = await sb.from('jornada').update({ status: novoStatus }).eq('id', jornadaId);
+  if(error){ alert('Erro: ' + error.message); return; }
+  await sb.from('jornada_evento').insert({ jornada_id: jornadaId, tipo: tipoEvento });
+  loadShellMotorista();
+}
+
+async function encerrarJornada(jornadaId){
+  const { error } = await sb.from('jornada').update({ status: 'encerrada', fim: new Date().toISOString() }).eq('id', jornadaId);
+  if(error){ alert('Erro: ' + error.message); return; }
+  await sb.from('jornada_evento').insert({ jornada_id: jornadaId, tipo: 'fim' });
+  loadShellMotorista();
+}
+
 async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ loadChecklistMotorista(); return; }
 
   const conjunto = await carregarMeuConjunto();
+  const jornada = await carregarJornadaAtiva();
   const { data: itens } = await sb.from('checklist_item_padrao').select('id').eq('ativo', true);
   const veiculosOrdenados = conjunto ? [...conjunto.conjunto_item].sort((a,b)=>a.ordem-b.ordem) : [];
   const tipoLabel = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
@@ -214,6 +277,13 @@ async function loadShellMotorista(){
         <button class="sair" id="btnSair">Sair</button>
       </div>
       <div class="content">
+        <h3>Jornada</h3>
+        <div class="card">
+          <div class="l1">${jornada ? jornadaStatusLabel[jornada.status] : 'Nenhuma jornada aberta'}${jornada ? `<span class="pill ${jornada.status==='ativa'?'ok':'vence_em_breve'}">${jornada.status==='ativa'?'Ativa':'Pausada'}</span>` : ''}</div>
+          ${jornada ? `<div class="l2">Iniciada às ${new Date(jornada.inicio).toLocaleString('pt-BR')}</div>` : ''}
+          ${jornadaBotoes(jornada)}
+        </div>
+
         <h3>Meu conjunto</h3>
         ${veiculosOrdenados.length
           ? `<div class="card"><div class="l1">${veiculosOrdenados.map(v=>`${v.veiculo.placa} (${tipoLabel[v.veiculo.tipo]||v.veiculo.tipo})`).join(' → ')}</div></div>`
@@ -228,6 +298,7 @@ async function loadShellMotorista(){
     </div>`;
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnAbrirChecklist').addEventListener('click', () => { motoristaScreen = 'checklist'; loadShellMotorista(); });
+  attachJornadaHandlers(jornada);
 }
 
 async function loadChecklistMotorista(){
@@ -354,7 +425,7 @@ function formatarData(iso){
 
 function sanitizarNomeArquivo(nome){
   return nome
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-zA-Z0-9.\-]/g, '_');
 }
 
