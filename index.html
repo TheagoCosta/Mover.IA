@@ -133,6 +133,8 @@ async function loadShell(){
     usuarioAtual = usuario;
   }
 
+  if(usuarioAtual.papel === 'motorista'){ loadShellMotorista(); return; }
+
   app.innerHTML = `
     <div class="wrap">
       <div class="top">
@@ -157,6 +159,43 @@ async function loadShell(){
 
   if(screen === 'painel') loadPainel();
   else if(screen === 'documentos') loadDocumentos();
+}
+
+async function loadShellMotorista(){
+  const { data: conjuntos } = await sb
+    .from('conjunto')
+    .select('id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo))')
+    .eq('motorista_id', session.user.id);
+
+  const { data: itens } = await sb.from('checklist_item_padrao').select('id').eq('ativo', true);
+
+  const conjunto = (conjuntos && conjuntos[0]) || null;
+  const veiculosOrdenados = conjunto ? [...conjunto.conjunto_item].sort((a,b)=>a.ordem-b.ordem) : [];
+  const tipoLabel = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <div class="co">${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '—'}</div>
+          <div class="role">${usuarioAtual.nome} · ${papelLabel[usuarioAtual.papel] || usuarioAtual.papel}</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        <h3>Meu conjunto</h3>
+        ${veiculosOrdenados.length
+          ? `<div class="card"><div class="l1">${veiculosOrdenados.map(v=>`${v.veiculo.placa} (${tipoLabel[v.veiculo.tipo]||v.veiculo.tipo})`).join(' → ')}</div></div>`
+          : '<div class="status">Nenhum conjunto vinculado a você ainda</div>'}
+
+        <h3>Checklist pré-viagem</h3>
+        <div class="card">
+          <div class="l1">${(itens||[]).length} itens no padrão da ${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : 'empresa'}</div>
+          <div class="l2">Preenchimento do checklist chega na próxima etapa</div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
 }
 
 async function loadPainel(){
