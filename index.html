@@ -57,6 +57,13 @@
   .ans-btn.active.bad{background:var(--danger); border-color:var(--danger); color:#fff;}
   .ans-btn.active.na{background:#b9a9e8; border-color:#b9a9e8; color:#2c2440;}
   .progress{position:sticky; top:0; background:var(--asphalt-900); padding:12px 0; margin-top:-4px; z-index:2; border-bottom:1px solid var(--border); margin-bottom:12px;}
+  .list-item{display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); cursor:pointer;}
+  .list-item:last-child{border-bottom:none;}
+  .li-ic{width:34px; height:34px; border-radius:9px; background:var(--asphalt-700); display:flex; align-items:center; justify-content:center; color:var(--line-yellow); flex-shrink:0;}
+  .li-body{flex:1; min-width:0;}
+  .li-title{color:var(--text-primary); font-size:13.5px; font-weight:700;}
+  .li-sub{color:var(--text-secondary); font-size:12px; margin-top:1px;}
+  .chev{color:var(--text-secondary); font-size:18px;}
 </style>
 </head>
 <body>
@@ -209,7 +216,7 @@ async function carregarJornadaAtiva(){
 const jornadaStatusLabel = { ativa: 'Em andamento', pausada: 'Pausada' };
 
 function jornadaBotoes(jornada){
-  if(!jornada) return `<button id="btnJornadaIniciar">Iniciar jornada</button>`;
+  if(!jornada) return `<button id="btnJornadaIniciar" style="margin-top:14px; width:100%;">Iniciar jornada</button>`;
   if(jornada.status === 'ativa') return `
     <div class="ans-row">
       <button class="ans-btn" id="btnJornadaPausar" style="flex:1;">Pausar</button>
@@ -398,6 +405,20 @@ async function loadHistoricoJornadas(){
   document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
 }
 
+function iconeVeiculo(tipo){
+  if(tipo === 'cavalo') return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h13v13H1z"/><path d="M14 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="1.5"/><circle cx="17.5" cy="18.5" r="1.5"/></svg>`;
+  if(tipo === 'dolly') return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="6" rx="1"/><circle cx="7" cy="19" r="2"/><circle cx="17" cy="19" r="2"/></svg>`;
+  return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="10" rx="1"/><circle cx="6.5" cy="19" r="2"/><circle cx="17.5" cy="19" r="2"/></svg>`;
+}
+
+function labelPosicaoConjunto(ordem, tipo){
+  if(tipo === 'cavalo') return 'Cavalo mecânico';
+  if(tipo === 'dolly') return 'Dolly';
+  if(tipo === 'carreta') return ordem <= 2 ? '1ª Carreta' : '2ª Carreta';
+  return tipoLabelGlobal[tipo] || tipo;
+}
+const tipoLabelGlobal = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
+
 async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ loadChecklistMotorista(); return; }
   if(motoristaScreen === 'historicoJornada'){ loadHistoricoJornadas(); return; }
@@ -408,7 +429,6 @@ async function loadShellMotorista(){
   const viagem = await carregarViagemAtual();
   const { data: itens } = await sb.from('checklist_item_padrao').select('id').eq('ativo', true);
   const veiculosOrdenados = conjunto ? [...conjunto.conjunto_item].sort((a,b)=>a.ordem-b.ordem) : [];
-  const tipoLabel = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
 
   app.innerHTML = `
     <div class="wrap">
@@ -442,7 +462,16 @@ async function loadShellMotorista(){
 
         <h3>Meu conjunto</h3>
         ${veiculosOrdenados.length
-          ? `<div class="card"><div class="l1">${veiculosOrdenados.map(v=>`${v.veiculo.placa} (${tipoLabel[v.veiculo.tipo]||v.veiculo.tipo})`).join(' → ')}</div></div>`
+          ? `<div class="card" style="padding:2px 14px;">${veiculosOrdenados.map(v => `
+              <div class="list-item" data-placa="${v.veiculo.placa}">
+                <div class="li-ic">${iconeVeiculo(v.veiculo.tipo)}</div>
+                <div class="li-body">
+                  <div class="li-title">${v.veiculo.placa}</div>
+                  <div class="li-sub">${labelPosicaoConjunto(v.ordem, v.veiculo.tipo)}</div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+            `).join('')}</div>`
           : '<div class="status">Nenhum conjunto vinculado a você ainda</div>'}
 
         <h3>Checklist pré-viagem</h3>
@@ -462,6 +491,9 @@ async function loadShellMotorista(){
   document.getElementById('btnAbrirChecklist').addEventListener('click', () => { motoristaScreen = 'checklist'; loadShellMotorista(); });
   document.getElementById('btnHistoricoJornada').addEventListener('click', () => { motoristaScreen = 'historicoJornada'; loadShellMotorista(); });
   document.getElementById('btnAbastecimento').addEventListener('click', () => { motoristaScreen = 'abastecimento'; loadShellMotorista(); });
+  document.querySelectorAll('.list-item[data-placa]').forEach(el => el.addEventListener('click', () => {
+    alert(`${el.dataset.placa}\n\nDetalhes do veículo em breve.`);
+  }));
   const btnFinalizarViagem = document.getElementById('btnFinalizarViagem');
   if(btnFinalizarViagem) btnFinalizarViagem.addEventListener('click', () => finalizarViagem(viagem.id));
   attachJornadaHandlers(jornada);
