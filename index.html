@@ -138,6 +138,9 @@ async function doLogout(){
   meuConjunto = null;
   motoristaScreen = 'home';
   chkAnswers = {};
+  jornadaEmEdicaoId = null;
+  motivoSelecionado = null;
+  jornadaDetalheId = null;
   screen = 'painel';
   render();
 }
@@ -203,6 +206,22 @@ async function carregarMeuConjunto(){
   return meuConjunto;
 }
 
+const MOTIVOS_PARADA = [
+  'Parado na garagem',
+  'Parada no posto',
+  'Chegada no local de carregamento',
+  'Em carregamento',
+  'Chegada no local de descarga',
+  'Em descarga',
+  'Pausa para alimentação',
+  'Pausa para manutenção',
+  'Outro'
+];
+
+let jornadaEmEdicaoId = null;
+let motivoSelecionado = null;
+let jornadaDetalheId = null;
+
 async function carregarJornadaAtiva(){
   const { data } = await sb.from('jornada')
     .select('id, inicio, status')
@@ -210,7 +229,17 @@ async function carregarJornadaAtiva(){
     .neq('status', 'encerrada')
     .order('inicio', { ascending: false })
     .limit(1);
-  return (data && data[0]) || null;
+  const jornada = (data && data[0]) || null;
+  if(jornada && jornada.status === 'pausada'){
+    const { data: ultimoEvento } = await sb.from('jornada_evento')
+      .select('motivo')
+      .eq('jornada_id', jornada.id)
+      .eq('tipo', 'pausa')
+      .order('criado_em', { ascending: false })
+      .limit(1);
+    jornada.motivoAtual = (ultimoEvento && ultimoEvento[0] && ultimoEvento[0].motivo) || null;
+  }
+  return jornada;
 }
 
 const jornadaStatusLabel = { ativa: 'Em andamento', pausada: 'Pausada' };
@@ -219,7 +248,7 @@ function jornadaBotoes(jornada){
   if(!jornada) return `<button id="btnJornadaIniciar" style="margin-top:14px; width:100%;">Iniciar jornada</button>`;
   if(jornada.status === 'ativa') return `
     <div class="ans-row">
-      <button class="ans-btn" id="btnJornadaPausar" style="flex:1;">Pausar</button>
+      <button class="ans-btn" id="btnJornadaPausar" style="flex:1;">Registrar parada</button>
       <button class="ans-btn bad" id="btnJornadaEncerrar" style="flex:1;">Encerrar</button>
     </div>`;
   return `
@@ -233,11 +262,11 @@ function attachJornadaHandlers(jornada){
   const ini = document.getElementById('btnJornadaIniciar');
   if(ini) ini.addEventListener('click', iniciarJornada);
   const pausar = document.getElementById('btnJornadaPausar');
-  if(pausar) pausar.addEventListener('click', () => atualizarJornada(jornada.id, 'pausada', 'pausa'));
+  if(pausar) pausar.addEventListener('click', () => { jornadaEmEdicaoId = jornada.id; motoristaScreen = 'jornadaPausa'; loadShellMotorista(); });
   const retomar = document.getElementById('btnJornadaRetomar');
   if(retomar) retomar.addEventListener('click', () => atualizarJornada(jornada.id, 'ativa', 'retomada'));
   const encerrar = document.getElementById('btnJornadaEncerrar');
-  if(encerrar) encerrar.addEventListener('click', () => encerrarJornada(jornada.id));
+  if(encerrar) encerrar.addEventListener('click', () => { jornadaEmEdicaoId = jornada.id; motoristaScreen = 'jornadaEncerrar'; loadShellMotorista(); });
 }
 
 async function iniciarJornada(){
@@ -258,10 +287,141 @@ async function atualizarJornada(jornadaId, novoStatus, tipoEvento){
   loadShellMotorista();
 }
 
-async function encerrarJornada(jornadaId){
-  const { error } = await sb.from('jornada').update({ status: 'encerrada', fim: new Date().toISOString() }).eq('id', jornadaId);
-  if(error){ alert('Erro: ' + error.message); return; }
-  await sb.from('jornada_evento').insert({ jornada_id: jornadaId, tipo: 'fim' });
+async function loadJornadaPausa(){
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">Registrar parada</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        <h3>O que está acontecendo?</h3>
+        <div class="card" style="padding:2px 14px;">
+          ${MOTIVOS_PARADA.map(m => `
+            <div class="list-item" data-motivo="${m}">
+              <div class="li-body"><div class="li-title">${m}</div></div>
+              <div class="chev">${motivoSelecionado===m?'✓':'›'}</div>
+            </div>
+          `).join('')}
+        </div>
+        <h3>Observação (opcional)</h3>
+        <div class="card">
+          <textarea id="pausaObs" rows="3" placeholder="Detalhe o motivo, se precisar" style="width:100%; background:var(--asphalt-800); border:1px solid var(--border); color:var(--text-primary); border-radius:10px; padding:12px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
+        </div>
+        <button id="btnConfirmarPausa" ${motivoSelecionado?'':'disabled'}>Confirmar parada</button>
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { motivoSelecionado = null; motoristaScreen = 'home'; loadShellMotorista(); });
+  document.querySelectorAll('.list-item[data-motivo]').forEach(el => el.addEventListener('click', () => {
+    motivoSelecionado = el.dataset.motivo;
+    loadJornadaPausa();
+  }));
+  const btn = document.getElementById('btnConfirmarPausa');
+  if(btn) btn.addEventListener('click', confirmarPausa);
+}
+
+async function confirmarPausa(){
+  const btn = document.getElementById('btnConfirmarPausa');
+  btn.disabled = true; btn.textContent = 'Salvando...';
+  const obs = document.getElementById('pausaObs').value.trim();
+
+  const { error } = await sb.from('jornada').update({ status: 'pausada' }).eq('id', jornadaEmEdicaoId);
+  if(error){ alert('Erro ao registrar parada: ' + error.message); btn.disabled = false; btn.textContent = 'Confirmar parada'; return; }
+  await sb.from('jornada_evento').insert({ jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, observacao: obs || null });
+
+  motivoSelecionado = null;
+  motoristaScreen = 'home';
+  loadShellMotorista();
+}
+
+async function loadJornadaEncerrar(){
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">Encerrar jornada</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        <h3>Observação final (opcional)</h3>
+        <div class="card">
+          <textarea id="encerrarObs" rows="3" placeholder="Alguma observação sobre a jornada?" style="width:100%; background:var(--asphalt-800); border:1px solid var(--border); color:var(--text-primary); border-radius:10px; padding:12px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
+        </div>
+        <h3>Assinatura do motorista</h3>
+        <div class="card" style="padding:10px;">
+          <canvas id="canvasAssinatura" style="width:100%; height:160px; background:var(--asphalt-700); border-radius:8px; touch-action:none; display:block;"></canvas>
+          <button class="btn-small" id="btnLimparAssinatura" style="margin-top:8px;">Limpar assinatura</button>
+        </div>
+        <button id="btnConfirmarEncerramento" disabled>Confirmar e encerrar jornada</button>
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
+
+  const canvas = document.getElementById('canvasAssinatura');
+  const ctx = canvas.getContext('2d');
+  function ajustarCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    const escala = window.devicePixelRatio || 1;
+    canvas.width = rect.width * escala;
+    canvas.height = rect.height * escala;
+    ctx.scale(escala, escala);
+    ctx.strokeStyle = '#edeef0';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+  }
+  ajustarCanvas();
+
+  let desenhando = false;
+  function posicaoNoCanvas(e){
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    desenhando = true;
+    document.getElementById('btnConfirmarEncerramento').disabled = false;
+    const p = posicaoNoCanvas(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if(!desenhando) return;
+    const p = posicaoNoCanvas(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  });
+  window.addEventListener('pointerup', () => { desenhando = false; });
+
+  document.getElementById('btnLimparAssinatura').addEventListener('click', () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    document.getElementById('btnConfirmarEncerramento').disabled = true;
+  });
+
+  document.getElementById('btnConfirmarEncerramento').addEventListener('click', () => confirmarEncerramento(canvas));
+}
+
+async function confirmarEncerramento(canvas){
+  const btn = document.getElementById('btnConfirmarEncerramento');
+  btn.disabled = true; btn.textContent = 'Salvando...';
+  const obs = document.getElementById('encerrarObs').value.trim();
+  const assinaturaBase64 = canvas.toDataURL('image/png');
+
+  const { error } = await sb.from('jornada').update({
+    status: 'encerrada',
+    fim: new Date().toISOString(),
+    assinatura_base64: assinaturaBase64,
+    assinado_em: new Date().toISOString()
+  }).eq('id', jornadaEmEdicaoId);
+  if(error){ alert('Erro ao encerrar jornada: ' + error.message); btn.disabled = false; btn.textContent = 'Confirmar e encerrar jornada'; return; }
+  await sb.from('jornada_evento').insert({ jornada_id: jornadaEmEdicaoId, tipo: 'fim', observacao: obs || null });
+
+  motoristaScreen = 'home';
   loadShellMotorista();
 }
 
@@ -394,15 +554,59 @@ async function loadHistoricoJornadas(){
       <div class="content">
         ${error ? `<div class="status">Erro ao carregar histórico: ${error.message}</div>` : ''}
         ${(jornadas||[]).map(j => `
-          <div class="card">
+          <div class="card clickable" data-jornada="${j.id}">
             <div class="l1">${new Date(j.inicio).toLocaleDateString('pt-BR')}${j.fim ? `<span class="pill ok">${formatarDuracao(j.inicio, j.fim)}</span>` : ''}</div>
-            <div class="l2">${new Date(j.inicio).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} até ${j.fim ? new Date(j.fim).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '—'}</div>
+            <div class="l2">${new Date(j.inicio).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} até ${j.fim ? new Date(j.fim).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '—'} · toque para ver detalhes</div>
           </div>
         `).join('') || '<div class="status">Nenhuma jornada encerrada ainda</div>'}
       </div>
     </div>`;
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnVoltar').addEventListener('click', () => { motoristaScreen = 'home'; loadShellMotorista(); });
+  document.querySelectorAll('.card[data-jornada]').forEach(el => el.addEventListener('click', () => {
+    jornadaDetalheId = el.dataset.jornada;
+    motoristaScreen = 'historicoJornadaDetalhe';
+    loadShellMotorista();
+  }));
+}
+
+const TIPO_EVENTO_LABEL = { inicio: 'Início da jornada', pausa: 'Parada', retomada: 'Retomada', fim: 'Fim da jornada' };
+
+async function loadHistoricoJornadaDetalhe(){
+  const { data: jornada } = await sb.from('jornada').select('id, inicio, fim, assinatura_base64').eq('id', jornadaDetalheId).single();
+  const { data: eventos } = await sb.from('jornada_evento')
+    .select('tipo, motivo, observacao, criado_em')
+    .eq('jornada_id', jornadaDetalheId)
+    .order('criado_em');
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <button class="backbtn" id="btnVoltar">← Voltar</button>
+          <div class="co">${jornada ? new Date(jornada.inicio).toLocaleDateString('pt-BR') : 'Detalhe da jornada'}</div>
+        </div>
+        <button class="sair" id="btnSair">Sair</button>
+      </div>
+      <div class="content">
+        <h3>Linha do tempo</h3>
+        ${(eventos||[]).map(ev => `
+          <div class="card">
+            <div class="l1">${ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo}</div>
+            <div class="l2">${new Date(ev.criado_em).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}${ev.observacao ? ' · '+ev.observacao : ''}</div>
+          </div>
+        `).join('') || '<div class="status">Nenhum evento registrado</div>'}
+
+        ${jornada && jornada.assinatura_base64 ? `
+          <h3>Assinatura do motorista</h3>
+          <div class="card" style="padding:10px;">
+            <img src="${jornada.assinatura_base64}" style="width:100%; background:#fff; border-radius:8px; display:block;">
+          </div>
+        ` : ''}
+      </div>
+    </div>`;
+  document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnVoltar').addEventListener('click', () => { jornadaDetalheId = null; motoristaScreen = 'historicoJornada'; loadShellMotorista(); });
 }
 
 function iconeVeiculo(tipo){
@@ -422,6 +626,9 @@ const tipoLabelGlobal = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
 async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ loadChecklistMotorista(); return; }
   if(motoristaScreen === 'historicoJornada'){ loadHistoricoJornadas(); return; }
+  if(motoristaScreen === 'historicoJornadaDetalhe'){ loadHistoricoJornadaDetalhe(); return; }
+  if(motoristaScreen === 'jornadaPausa'){ loadJornadaPausa(); return; }
+  if(motoristaScreen === 'jornadaEncerrar'){ loadJornadaEncerrar(); return; }
   if(motoristaScreen === 'abastecimento'){ loadAbastecimentoMotorista(); return; }
 
   const conjunto = await carregarMeuConjunto();
@@ -443,6 +650,7 @@ async function loadShellMotorista(){
         <h3>Jornada</h3>
         <div class="card">
           <div class="l1">${jornada ? jornadaStatusLabel[jornada.status] : 'Nenhuma jornada aberta'}${jornada ? `<span class="pill ${jornada.status==='ativa'?'ok':'vence_em_breve'}">${jornada.status==='ativa'?'Ativa':'Pausada'}</span>` : ''}</div>
+          ${jornada && jornada.status==='pausada' && jornada.motivoAtual ? `<div class="l2">${jornada.motivoAtual}</div>` : ''}
           ${jornada ? `<div class="l2">Iniciada às ${new Date(jornada.inicio).toLocaleString('pt-BR')}</div>` : ''}
           ${jornadaBotoes(jornada)}
         </div>
