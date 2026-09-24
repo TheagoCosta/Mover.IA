@@ -143,6 +143,7 @@ async function doLogout(){
   jornadaEmEdicaoId = null;
   motivoSelecionado = null;
   jornadaDetalheId = null;
+  documentosSubtela = 'lista';
   screen = 'painel';
   render();
 }
@@ -186,6 +187,7 @@ async function loadShell(){
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => {
     screen = el.dataset.screen;
+    documentosSubtela = 'lista';
     loadShell();
   }));
 
@@ -1035,7 +1037,11 @@ async function processarQrLido(docId, conteudo, onSalvo){
   (onSalvo || (()=>{}))();
 }
 
+let documentosSubtela = 'lista';
+
 async function loadDocumentos(){
+  if(documentosSubtela === 'manual'){ loadDocumentosManual(); return; }
+
   const { data: docsEmpresa, error } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo').eq('referente_a', 'empresa').order('tipo');
   const { data: docsMotorista } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'motorista').order('tipo');
   const { data: docsVeiculo } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'veiculo').order('tipo');
@@ -1050,9 +1056,9 @@ async function loadDocumentos(){
   const todosDocs = [...(docsEmpresa||[]), ...(docsMotorista||[]), ...(docsVeiculo||[])];
 
   el.innerHTML = `
-    <div class="card clickable" id="btnAdicionarDocumentoAuto" style="border-color:var(--line-yellow-dim);">
-      <div class="l1">📎 Adicionar documento</div>
-      <div class="l2">Envie o PDF (CNH, CRLV etc.) — o app tenta descobrir sozinho de quem é e onde encaixar</div>
+    <div class="card clickable" id="btnAdicionarDocumentoAuto" style="border:2px dashed var(--line-yellow-dim); text-align:center;">
+      <div class="l1" style="justify-content:center;">📎 Arraste o arquivo aqui</div>
+      <div class="l2">ou toque para selecionar (PDF de CNH, CRLV etc. — o app descobre sozinho de quem é)</div>
     </div>
 
     <h3>Documentos da empresa (${(docsEmpresa||[]).length})</h3>
@@ -1060,8 +1066,42 @@ async function loadDocumentos(){
 
     <h3>Documentos de motoristas (${(docsMotorista||[]).length})</h3>
     ${(docsMotorista||[]).map(d => cardDocumento(d, motoristaNome[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
+
+    <h3>Documentos de veículos (${(docsVeiculo||[]).length})</h3>
+    ${(docsVeiculo||[]).map(d => cardDocumento(d, veiculoPlaca[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
+
+    <div class="card clickable" id="btnCadastrarManual">
+      <div class="l1">Cadastrar documento manualmente</div>
+      <div class="l2">Para quando o app não conseguir identificar sozinho</div>
+    </div>
+  `;
+
+  const dropArea = document.getElementById('btnAdicionarDocumentoAuto');
+  dropArea.addEventListener('click', abrirUploadAutomatico);
+  dropArea.addEventListener('dragover', (e) => { e.preventDefault(); dropArea.style.borderColor = 'var(--line-yellow)'; });
+  dropArea.addEventListener('dragleave', () => { dropArea.style.borderColor = 'var(--line-yellow-dim)'; });
+  dropArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropArea.style.borderColor = 'var(--line-yellow-dim)';
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(file) processarUploadAutomatico(file);
+  });
+
+  document.getElementById('btnCadastrarManual').addEventListener('click', () => { documentosSubtela = 'manual'; loadDocumentos(); });
+  el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
+  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
+  el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
+}
+
+async function loadDocumentosManual(){
+  const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
+  const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
+  const el = document.getElementById('screenContent');
+
+  el.innerHTML = `
+    <button class="backbtn" id="btnVoltarManual">← Voltar</button>
+    <h3>Documento de motorista</h3>
     <div class="card">
-      <div class="l2" style="margin-bottom:8px;">Ou cadastre manualmente:</div>
       <form id="formNovoDocMotorista">
         <select id="docMotoristaSelect" required>
           <option value="">Selecione o motorista</option>
@@ -1079,10 +1119,8 @@ async function loadDocumentos(){
       </form>
     </div>
 
-    <h3>Documentos de veículos (${(docsVeiculo||[]).length})</h3>
-    ${(docsVeiculo||[]).map(d => cardDocumento(d, veiculoPlaca[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
+    <h3>Documento de veículo</h3>
     <div class="card">
-      <div class="l2" style="margin-bottom:8px;">Ou cadastre manualmente:</div>
       <form id="formNovoDocVeiculo">
         <select id="docVeiculoSelect" required>
           <option value="">Selecione o veículo</option>
@@ -1101,10 +1139,7 @@ async function loadDocumentos(){
     </div>
   `;
 
-  document.getElementById('btnAdicionarDocumentoAuto').addEventListener('click', abrirUploadAutomatico);
-  el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
-  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
-  el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
+  document.getElementById('btnVoltarManual').addEventListener('click', () => { documentosSubtela = 'lista'; loadDocumentos(); });
   const formMot = document.getElementById('formNovoDocMotorista');
   if(formMot) formMot.addEventListener('submit', criarDocumentoMotorista);
   const formVei = document.getElementById('formNovoDocVeiculo');
@@ -1131,6 +1166,7 @@ async function criarDocumentoMotorista(e){
     status
   });
   if(error){ alert('Erro ao adicionar documento: ' + error.message); btn.disabled = false; btn.textContent = 'Adicionar documento de motorista'; return; }
+  documentosSubtela = 'lista';
   loadDocumentos();
 }
 
@@ -1154,6 +1190,7 @@ async function criarDocumentoVeiculo(e){
     status
   });
   if(error){ alert('Erro ao adicionar documento: ' + error.message); btn.disabled = false; btn.textContent = 'Adicionar documento de veículo'; return; }
+  documentosSubtela = 'lista';
   loadDocumentos();
 }
 
@@ -1286,16 +1323,34 @@ async function processarUploadAutomatico(file){
   const deteccao = detectarTipoDocumento(texto);
   const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
   const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
+  const { data: calendario } = await sb.from('calendario_licenciamento').select('final_placa, mes');
   const datas = texto ? extrairDatasPossiveis(texto) : [];
 
   const motoristaSugerido = deteccao.referenteA === 'motorista' ? encontrarMotoristaPorNome(texto, motoristas) : null;
   const veiculoSugerido = deteccao.referenteA === 'veiculo' ? encontrarVeiculoPorPlaca(texto, veiculos) : null;
+  const sugestaoCalendario = veiculoSugerido ? sugerirValidadePorPlaca(veiculoSugerido.placa, calendario) : null;
 
-  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas });
+  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario });
+}
+
+function sugerirValidadePorPlaca(placa, calendario){
+  if(!placa || !calendario || !calendario.length) return null;
+  const digitos = (placa || '').replace(/[^0-9]/g, '');
+  if(!digitos.length) return null;
+  const finalPlaca = parseInt(digitos[digitos.length - 1], 10);
+  const linha = calendario.find(c => c.final_placa === finalPlaca);
+  if(!linha) return null;
+  const hoje = new Date();
+  let ano = hoje.getFullYear();
+  let dataFinal = new Date(ano, linha.mes, 0);
+  if(dataFinal < hoje){ ano += 1; dataFinal = new Date(ano, linha.mes, 0); }
+  const dd = String(dataFinal.getDate()).padStart(2, '0');
+  const mm = String(linha.mes).padStart(2, '0');
+  return `${dd}/${mm}/${ano}`;
 }
 
 function mostrarRevisaoDocumento(ctx){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas } = ctx;
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
 
   const modalHtml = `
@@ -1317,6 +1372,10 @@ function mostrarRevisaoDocumento(ctx){
         <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${deteccao.tipo || ''}" style="margin-top:10px;">
         <input type="text" id="revisaoNumero" placeholder="Número (opcional)" style="margin-top:10px;">
 
+        ${sugestaoCalendario ? `
+          <div class="l2" style="margin-top:14px;">Sugestão pelo calendário do Detran (final da placa):</div>
+          <button class="ans-btn ok" data-data="${sugestaoCalendario}" style="flex:none; padding:8px 12px; margin-top:6px;" type="button">${sugestaoCalendario}</button>
+        ` : ''}
         ${datas.length ? `
           <div class="l2" style="margin-top:14px;">Datas encontradas no arquivo — toque na que for a validade:</div>
           <div id="revisaoDatas" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
@@ -1350,10 +1409,10 @@ function mostrarRevisaoDocumento(ctx){
   renderReferenteIdSelect();
 
   document.getElementById('revisaoReferenteA').addEventListener('change', (e) => { referenteA = e.target.value; renderReferenteIdSelect(); });
-  document.querySelectorAll('#revisaoDatas [data-data]').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('[data-data]').forEach(btn => btn.addEventListener('click', () => {
     const [dd, mm, yyyy] = btn.dataset.data.split('/');
     document.getElementById('revisaoValidade').value = `${yyyy}-${mm}-${dd}`;
-    document.querySelectorAll('#revisaoDatas [data-data]').forEach(b => b.classList.remove('active', 'ok'));
+    document.querySelectorAll('[data-data]').forEach(b => b.classList.remove('active', 'ok'));
     btn.classList.add('active', 'ok');
   }));
 
