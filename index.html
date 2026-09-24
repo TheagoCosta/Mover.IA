@@ -9,6 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <style>
   :root{
     --asphalt-900:#14181d; --asphalt-800:#1b2027; --asphalt-700:#242b33;
@@ -1371,6 +1372,14 @@ async function extrairTextoPdf(file){
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   let texto = '';
+  // Alguns documentos digitais (ex: CNH Digital) têm os dados pessoais só
+  // como imagem/foto — sem texto selecionável na página. Nesses casos, o
+  // título do arquivo (ex: "CNH Digital", "CRLV Digital") é a pista mais
+  // confiável disponível, então incluímos ele também.
+  try{
+    const meta = await pdf.getMetadata();
+    if(meta && meta.info && meta.info.Title) texto += meta.info.Title + '\n';
+  } catch(e){ /* metadata pode não existir, segue sem ela */ }
   for(let i = 1; i <= Math.min(pdf.numPages, 3); i++){
     const pagina = await pdf.getPage(i);
     const conteudo = await pagina.getTextContent();
@@ -1419,8 +1428,16 @@ async function anexarArquivoComLeitura(docId, file, onDone){
   if(!file) return;
   if(file.type === 'application/pdf'){
     try{
-      const texto = await extrairTextoPdf(file);
-      const datas = extrairDatasPossiveis(texto);
+      let texto = await extrairTextoPdf(file);
+      let datas = extrairDatasPossiveis(texto);
+      if(!datas.length){
+        // PDF sem data em texto selecionável (ex: documento com dados só em
+        // foto/imagem) — tenta achar a validade por OCR antes de desistir.
+        mostrarStatusOcr(true, 'Lendo o documento com reconhecimento de imagem...');
+        const textoOcr = await ocrArquivo(file);
+        mostrarStatusOcr(false);
+        if(textoOcr) datas = extrairDatasPossiveis(textoOcr);
+      }
       if(datas.length) await mostrarSelecaoDeData(docId, datas);
     } catch(e){
       // se não conseguir ler o texto do PDF, segue o upload normalmente
@@ -1441,8 +1458,13 @@ function normalizarTextoGrudado(t){
 
 function detectarTipoDocumento(texto){
   const t = normalizarTextoGrudado(texto);
-  if(t.includes('HABILITACAO') || t.includes('DRIVERLICENSE') || t.includes('CARTEIRANACIONALDETRANSITO')) return { referenteA: 'motorista', tipo: 'CNH' };
-  if(t.includes('LICENCIAMENTODEVEICULO') || t.includes('CRLV') || t.includes('CERTIFICADODEREGISTRO')) return { referenteA: 'veiculo', tipo: 'CRLV' };
+  // A CNH Digital emitida pelo SENATRAN não traz o nome/número em texto
+  // selecionável (é uma foto/imagem) — só o cabeçalho padrão do documento
+  // e o título do arquivo, por isso os sinais abaixo miram nesse texto fixo.
+  if(t.includes('HABILITACAO') || t.includes('DRIVERLICENSE') || t.includes('CARTEIRANACIONALDETRANSITO')
+     || t.includes('CNHDIGITAL') || t.includes('ASSINADORSERPRO')) return { referenteA: 'motorista', tipo: 'CNH' };
+  if(t.includes('LICENCIAMENTODEVEICULO') || t.includes('CRLV') || t.includes('CERTIFICADODEREGISTRO')
+     || t.includes('CRLVDIGITAL')) return { referenteA: 'veiculo', tipo: 'CRLV' };
   return { referenteA: null, tipo: '' };
 }
 
@@ -1469,22 +1491,87 @@ async function abrirUploadAutomatico(){
   input.click();
 }
 
+function mostrarStatusOcr(mostrar, mensagem){
+  let el = document.getElementById('ocrStatus');
+  if(mostrar){
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'ocrStatus';
+      el.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,.8); z-index:60; display:flex; align-items:center; justify-content:center; padding:24px;';
+      document.body.appendChild(el);
+    }
+    el.innerHTML = `<div style="text-align:center; color:var(--text-primary);">🔍 ${mensagem || 'Lendo o documento...'}<br><span style="color:var(--text-secondary); font-size:12.5px;">Isso pode levar alguns segundos</span></div>`;
+  } else if(el){
+    el.remove();
+  }
+}
+
+// Alguns documentos (como a CNH Digital) trazem o nome/validade só como foto,
+// sem texto selecionável no PDF. Nesse caso, renderiza a página como imagem
+// (ou usa a imagem enviada direto) e lê o texto dela por reconhecimento óptico
+// (OCR), rodando inteiramente no navegador — sem enviar a imagem pra fora.
+async function ocrArquivo(file){
+  if(typeof Tesseract === 'undefined') return '';
+  try{
+    let fonteImagem = file;
+    if(file.type === 'application/pdf'){
+      const buffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+      const pagina = await pdf.getPage(1);
+      const viewport = pagina.getViewport({ scale: 3 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      await pagina.render({ canvasContext: ctx, viewport }).promise;
+      fonteImagem = canvas;
+    }
+    const resultado = await Tesseract.recognize(fonteImagem, 'eng');
+    return (resultado && resultado.data && resultado.data.text) || '';
+  } catch(e){
+    return '';
+  }
+}
+
 async function processarUploadAutomatico(file){
   let texto = '';
   if(file.type === 'application/pdf'){
     try{ texto = await extrairTextoPdf(file); } catch(e){ texto = ''; }
   }
-  const deteccao = detectarTipoDocumento(texto);
+  let deteccao = detectarTipoDocumento(texto);
   const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
   const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
   const { data: calendario } = await sb.from('calendario_licenciamento').select('final_placa, mes');
-  const datas = texto ? extrairDatasPossiveis(texto) : [];
+  let datas = texto ? extrairDatasPossiveis(texto) : [];
 
-  const motoristaSugerido = deteccao.referenteA === 'motorista' ? encontrarMotoristaPorNome(texto, motoristas) : null;
-  const veiculoSugerido = deteccao.referenteA === 'veiculo' ? encontrarVeiculoPorPlaca(texto, veiculos) : null;
+  let motoristaSugerido = deteccao.referenteA === 'motorista' ? encontrarMotoristaPorNome(texto, motoristas) : null;
+  let veiculoSugerido = deteccao.referenteA === 'veiculo' ? encontrarVeiculoPorPlaca(texto, veiculos) : null;
+
+  // Falta nome/placa ou validade? Documento provavelmente traz os dados só
+  // como imagem (ex: CNH Digital) — tenta completar com OCR antes de mostrar
+  // a tela de confirmação, pra já vir tudo pronto sempre que possível.
+  const faltaInfo = !deteccao.tipo
+    || (deteccao.referenteA === 'motorista' && !motoristaSugerido)
+    || (deteccao.referenteA === 'veiculo' && !veiculoSugerido)
+    || !datas.length;
+  let usouOcr = false;
+  if(faltaInfo){
+    mostrarStatusOcr(true, 'Lendo o documento com reconhecimento de imagem...');
+    const textoOcr = await ocrArquivo(file);
+    mostrarStatusOcr(false);
+    if(textoOcr){
+      usouOcr = true;
+      texto = texto + '\n' + textoOcr;
+      deteccao = detectarTipoDocumento(texto);
+      datas = extrairDatasPossiveis(texto);
+      motoristaSugerido = deteccao.referenteA === 'motorista' ? encontrarMotoristaPorNome(texto, motoristas) : motoristaSugerido;
+      veiculoSugerido = deteccao.referenteA === 'veiculo' ? encontrarVeiculoPorPlaca(texto, veiculos) : veiculoSugerido;
+    }
+  }
+
   const sugestaoCalendario = veiculoSugerido ? sugerirValidadePorPlaca(veiculoSugerido.placa, calendario) : null;
 
-  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario });
+  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr });
 }
 
 function sugerirValidadePorPlaca(placa, calendario){
@@ -1504,7 +1591,7 @@ function sugerirValidadePorPlaca(placa, calendario){
 }
 
 function mostrarRevisaoDocumento(ctx){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario } = ctx;
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
 
   const modalHtml = `
@@ -1512,7 +1599,7 @@ function mostrarRevisaoDocumento(ctx){
       <div style="background:var(--asphalt-900); width:100%; border-radius:16px 16px 0 0; padding:20px; max-height:85vh; overflow:auto;">
         <h3 style="margin-top:0;">Confirme o documento</h3>
         ${deteccao.tipo
-          ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${deteccao.tipo}</b>${motoristaSugerido ? ' de ' + motoristaSugerido.nome : ''}${veiculoSugerido ? ' do veículo ' + veiculoSugerido.placa : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}</div>`
+          ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${deteccao.tipo}</b>${motoristaSugerido ? ' de ' + motoristaSugerido.nome : ''}${veiculoSugerido ? ' do veículo ' + veiculoSugerido.placa : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}${usouOcr ? ' <span class="pill ok" style="margin-left:0;">lido por imagem</span>' : ''}</div>`
           : `<div class="l2" style="margin-bottom:14px;">Não consegui identificar automaticamente este arquivo — preencha abaixo.</div>`}
 
         <select id="revisaoReferenteA">
