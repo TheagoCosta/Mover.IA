@@ -179,7 +179,7 @@ async function loadShell(){
   if(!usuarioAtual){
     const { data: usuario, error: uErr } = await sb
       .from('usuario')
-      .select('nome, papel, transportadora_id, transportadora:transportadora_id ( nome_fantasia, plano )')
+      .select('nome, papel, transportadora_id, senha_temporaria, transportadora:transportadora_id ( nome_fantasia, plano )')
       .eq('id', session.user.id)
       .single();
 
@@ -190,6 +190,7 @@ async function loadShell(){
     usuarioAtual = usuario;
   }
 
+  if(usuarioAtual.papel === 'motorista' && usuarioAtual.senha_temporaria){ loadPrimeiroAcessoMotorista(); return; }
   if(usuarioAtual.papel === 'motorista'){ loadShellMotorista(); return; }
 
   app.innerHTML = `
@@ -217,6 +218,56 @@ async function loadShell(){
 
   if(screen === 'painel') loadPainel();
   else if(screen === 'documentos') loadDocumentos();
+}
+
+// Primeiro acesso de um motorista cadastrado automaticamente (login criado
+// ao enviar a CNH dele): confirma a identidade pelo CPF (quando o app
+// conseguiu ler o CPF do documento) e obriga a trocar a senha temporária
+// antes de liberar o resto do app.
+async function loadPrimeiroAcessoMotorista(){
+  const { data: perfil } = await sb.from('motorista_perfil').select('cpf').eq('usuario_id', session.user.id).maybeSingle();
+  const cpfCadastrado = perfil ? perfil.cpf : null;
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="center">
+        <div class="logo" style="font-size:20px;">Bem-vindo, ${usuarioAtual.nome.split(' ')[0]}</div>
+        <div class="tag">Primeiro acesso — confirme seus dados e crie sua senha</div>
+        <form id="primeiroAcessoForm">
+          ${cpfCadastrado ? `<input type="text" id="paCpf" placeholder="Confirme seu CPF" required inputmode="numeric">` : ''}
+          <input type="password" id="paSenha1" placeholder="Nova senha (mín. 6 caracteres)" required minlength="6">
+          <input type="password" id="paSenha2" placeholder="Confirme a nova senha" required minlength="6">
+          <div class="err" id="paErr"></div>
+          <button type="submit" id="paBtn">Confirmar e entrar</button>
+        </form>
+      </div>
+    </div>`;
+
+  document.getElementById('primeiroAcessoForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('paErr');
+    errEl.textContent = '';
+    const senha1 = document.getElementById('paSenha1').value;
+    const senha2 = document.getElementById('paSenha2').value;
+
+    if(cpfCadastrado){
+      const cpfDigitado = document.getElementById('paCpf').value.replace(/\D/g, '');
+      const cpfSalvo = cpfCadastrado.replace(/\D/g, '');
+      if(cpfDigitado !== cpfSalvo){ errEl.textContent = 'CPF não confere com o que temos cadastrado.'; return; }
+    }
+    if(senha1.length < 6){ errEl.textContent = 'A senha precisa ter pelo menos 6 caracteres.'; return; }
+    if(senha1 !== senha2){ errEl.textContent = 'As senhas não são iguais.'; return; }
+
+    const btn = document.getElementById('paBtn');
+    btn.disabled = true; btn.textContent = 'Salvando...';
+
+    const { error: erroSenha } = await sb.auth.updateUser({ password: senha1 });
+    if(erroSenha){ errEl.textContent = 'Erro ao trocar a senha: ' + erroSenha.message; btn.disabled = false; btn.textContent = 'Confirmar e entrar'; return; }
+
+    await sb.from('usuario').update({ senha_temporaria: false }).eq('id', session.user.id);
+    usuarioAtual.senha_temporaria = false;
+    loadShell();
+  });
 }
 
 let meuConjunto = null;
@@ -1468,10 +1519,37 @@ function detectarTipoDocumento(texto){
   return { referenteA: null, tipo: '' };
 }
 
+function normalizarPalavras(t){
+  return normalizarTexto(t).replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+}
+
+function nomeBateExato(texto, motorista){
+  if(!motorista) return false;
+  const t = normalizarTextoGrudado(texto);
+  return t.includes(normalizarTextoGrudado(motorista.nome));
+}
+
 function encontrarMotoristaPorNome(texto, motoristas){
   const t = normalizarTextoGrudado(texto);
-  const encontrados = (motoristas || []).filter(m => t.includes(normalizarTextoGrudado(m.nome)));
-  return encontrados.length === 1 ? encontrados[0] : null;
+  const exatos = (motoristas || []).filter(m => t.includes(normalizarTextoGrudado(m.nome)));
+  if(exatos.length === 1) return exatos[0];
+  if(exatos.length > 1) return null; // mais de um nome bate igual — ambíguo, não arrisca
+
+  // Nenhum nome bateu perfeito — o OCR pode ter errado uma letra (comum em
+  // nomes compostos/acentuados). Tenta por palavras do nome, exigindo a
+  // maior parte delas presente como palavra inteira no texto lido.
+  const palavrasTexto = new Set(normalizarPalavras(texto));
+  const candidatos = (motoristas || []).map(m => {
+    const palavrasNome = normalizarPalavras(m.nome).filter(p => p.length >= 3);
+    if(!palavrasNome.length) return null;
+    const acertos = palavrasNome.filter(p => palavrasTexto.has(p)).length;
+    return { motorista: m, acertos, total: palavrasNome.length };
+  }).filter(c => c && c.acertos >= Math.max(2, Math.ceil(c.total * 0.6)));
+
+  candidatos.sort((a, b) => b.acertos - a.acertos);
+  if(candidatos.length === 1) return candidatos[0].motorista;
+  if(candidatos.length > 1 && candidatos[0].acertos > candidatos[1].acertos) return candidatos[0].motorista;
+  return null;
 }
 
 function encontrarVeiculoPorPlaca(texto, veiculos){
@@ -1504,6 +1582,37 @@ function mostrarStatusOcr(mostrar, mensagem){
   } else if(el){
     el.remove();
   }
+}
+
+function mostrarToast(mensagem){
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed; left:16px; right:16px; bottom:20px; background:#3fb27f; color:#0d1f16; font-weight:700; font-size:13.5px; padding:14px 16px; border-radius:12px; z-index:70; text-align:center; box-shadow:0 6px 20px rgba(0,0,0,.35);';
+  el.textContent = mensagem;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+// Insere o documento no banco e sobe o arquivo — usado tanto quando a
+// pessoa confirma manualmente no cartão de revisão quanto quando o app
+// tem certeza suficiente pra cadastrar sozinho, sem perguntar nada.
+async function salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, validade, file }){
+  const { data: novoDoc, error } = await sb.from('documento').insert({
+    transportadora_id: usuarioAtual.transportadora_id,
+    referente_a: referenteA,
+    referente_id: referenteId,
+    tipo,
+    numero: numero || null,
+    validade: validade || null,
+    status: 'ok'
+  }).select('id').single();
+
+  if(error) return { error };
+
+  const path = `${usuarioAtual.transportadora_id}/${novoDoc.id}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
+  const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
+  if(upErr) return { error: upErr, docId: novoDoc.id };
+  await sb.from('documento').update({ arquivo_url: path }).eq('id', novoDoc.id);
+  return { docId: novoDoc.id };
 }
 
 // Alguns documentos (como a CNH Digital) trazem o nome/validade só como foto,
@@ -1585,6 +1694,83 @@ function extrairValidadeCNH(texto){
   return futuras.length ? futuras.sort().pop() : null;
 }
 
+// O texto lido guarda as quebras de linha originais do cartão — usamos isso
+// pra achar o nome certo: ele fica na linha logo abaixo do rótulo "NOME E
+// SOBRENOME" (a mesma linha também tem, mais adiante, a data de 1ª
+// habilitação da coluna ao lado — por isso cortamos no primeiro número).
+function extrairNomeCNH(texto){
+  const linhas = (texto || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const idx = linhas.findIndex(l => normalizarTextoComEspacos(l).includes('SOBRENOME'));
+  if(idx === -1 || idx + 1 >= linhas.length) return null;
+  let linhaNome = linhas[idx + 1];
+  const corte = linhaNome.search(/[0-9]/);
+  if(corte !== -1) linhaNome = linhaNome.slice(0, corte);
+  linhaNome = linhaNome.replace(/[^A-Za-zÀ-ÿ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if(linhaNome.split(' ').length < 2 || linhaNome.length < 5) return null;
+  return linhaNome.toLowerCase().replace(/(^|\s)(\S)/g, (m, p1, p2) => p1 + p2.toUpperCase());
+}
+
+function extrairCpfCNH(texto){
+  const t = normalizarTextoComEspacos(texto);
+  const idx = t.search(/\bCPF\b/);
+  if(idx === -1) return null;
+  const trecho = t.slice(idx, idx + 60);
+  const m = trecho.match(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}/);
+  return m ? m[0] : null;
+}
+
+// Chama a função de servidor que cria o login do motorista com segurança
+// (a chave de acesso total do banco nunca fica no app — só dentro dessa
+// função, que roda no Supabase). Precisa dela publicada lá antes de
+// funcionar (ver instruções no arquivo da função).
+async function criarMotoristaAutomatico(nome, cpf){
+  try{
+    const { data: sessaoAtual } = await sb.auth.getSession();
+    const token = sessaoAtual && sessaoAtual.session ? sessaoAtual.session.access_token : null;
+    if(!token) return { error: 'Sessão expirada — atualize a página e tente de novo.' };
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/criar-motorista-automatico`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ nome, cpf })
+    });
+    const dados = await resp.json();
+    if(!resp.ok) return { error: (dados && dados.error) || 'Erro ao cadastrar motorista.' };
+    return { motorista: dados };
+  } catch(e){
+    return { error: 'Erro ao cadastrar motorista: ' + e.message };
+  }
+}
+
+// Mostra o login e a senha temporária gerados — fica na tela até o Thiago
+// confirmar que anotou, porque essa é a única vez que a senha aparece (não
+// tem e-mail de verdade pra reenviar depois).
+function mostrarCredenciaisNovoMotorista(info){
+  return new Promise((resolve) => {
+    const modalHtml = `
+      <div id="credModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
+        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:420px; width:100%;">
+          <h3 style="margin-top:0;">Motorista novo cadastrado</h3>
+          <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema — criei o cadastro dele e um login temporário. Anote e repasse pra ele: no primeiro acesso, vai pedir pra confirmar o CPF e trocar a senha.</div>
+          <div class="card">
+            <div class="l1">Login</div>
+            <div class="l2" style="font-size:17px; color:var(--text-primary); font-weight:700;">${info.login}</div>
+          </div>
+          <div class="card">
+            <div class="l1">Senha temporária</div>
+            <div class="l2" style="font-size:17px; color:var(--text-primary); font-weight:700;">${info.senhaTemporaria}</div>
+          </div>
+          <button id="btnEntendiCredenciais" style="margin-top:10px; width:100%;">Entendi, anotei</button>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    document.getElementById('btnEntendiCredenciais').addEventListener('click', () => {
+      const m = document.getElementById('credModal');
+      if(m) m.remove();
+      resolve();
+    });
+  });
+}
+
 async function processarUploadAutomatico(file){
   let texto = '';
   if(file.type === 'application/pdf'){
@@ -1630,6 +1816,58 @@ async function processarUploadAutomatico(file){
   if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH'){
     numeroSugerido = extrairNumeroRegistroCNH(texto);
     validadeSugerida = extrairValidadeCNH(texto);
+  }
+
+  // Motorista não está cadastrado ainda? Se der pra ler o nome dele direto
+  // da CNH, cadastra ele sozinho (login + senha temporária) antes de seguir
+  // pro documento — assim já entra tudo de uma vez, do jeito que o Thiago
+  // pediu.
+  if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH' && !motoristaSugerido){
+    const nomeCNH = extrairNomeCNH(texto);
+    const cpfCNH = extrairCpfCNH(texto);
+    if(nomeCNH && validadeSugerida){
+      mostrarStatusOcr(true, 'Motorista não encontrado — cadastrando automaticamente...');
+      const resultadoCriacao = await criarMotoristaAutomatico(nomeCNH, cpfCNH);
+      mostrarStatusOcr(false);
+      if(resultadoCriacao.motorista){
+        motoristaSugerido = { id: resultadoCriacao.motorista.usuarioId, nome: nomeCNH };
+        motoristas.push(motoristaSugerido);
+        await mostrarCredenciaisNovoMotorista(resultadoCriacao.motorista);
+      }
+      // Se der erro (ex: função ainda não publicada no Supabase), segue sem
+      // travar — cai na tela de confirmação normal, pra cadastrar na mão.
+    }
+  }
+
+  // Confiança alta o bastante pra cadastrar sozinho, sem precisar perguntar?
+  // Só quando o nome bate exato (não só por palavras parecidas), a placa foi
+  // encontrada e a validade veio de um jeito confiável — senão, mostra a
+  // tela de confirmação pra pessoa conferir/completar.
+  const dataBrParaIso = (d) => { if(!d) return null; const [dd, mm, yyyy] = d.split('/'); return `${yyyy}-${mm}-${dd}`; };
+  let podeSalvarAutomatico = false;
+  let validadeAuto = null;
+  if(deteccao.referenteA === 'motorista' && motoristaSugerido && nomeBateExato(texto, motoristaSugerido) && deteccao.tipo && validadeSugerida){
+    podeSalvarAutomatico = true;
+    validadeAuto = dataBrParaIso(validadeSugerida);
+  } else if(deteccao.referenteA === 'veiculo' && veiculoSugerido && deteccao.tipo && (sugestaoCalendario || datas.length === 1)){
+    podeSalvarAutomatico = true;
+    validadeAuto = dataBrParaIso(sugestaoCalendario || datas[0]);
+  }
+
+  if(podeSalvarAutomatico){
+    const referenteId = deteccao.referenteA === 'motorista' ? motoristaSugerido.id : veiculoSugerido.id;
+    const nomeExibicao = deteccao.referenteA === 'motorista' ? motoristaSugerido.nome : veiculoSugerido.placa;
+    const { error } = await salvarDocumentoNoBanco({
+      referenteA: deteccao.referenteA, referenteId, tipo: deteccao.tipo,
+      numero: numeroSugerido, validade: validadeAuto, file
+    });
+    if(!error){
+      mostrarToast(`✅ ${deteccao.tipo} de ${nomeExibicao} cadastrado automaticamente`);
+      loadDocumentos();
+      return;
+    }
+    // Deu erro salvando sozinho — não trava o Thiago, cai pra tela de
+    // confirmação normal pra ele conseguir salvar na mão.
   }
 
   mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida });
@@ -1739,22 +1977,10 @@ function mostrarRevisaoDocumento(ctx){
 
     btn.disabled = true; btn.textContent = 'Salvando...';
 
-    const { data: novoDoc, error } = await sb.from('documento').insert({
-      transportadora_id: usuarioAtual.transportadora_id,
-      referente_a: referenteA,
-      referente_id: referenteId,
-      tipo,
-      numero: numero || null,
-      validade: validade || null,
-      status: 'ok'
-    }).select('id').single();
+    const { error, docId } = await salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, validade, file });
 
-    if(error){ alert('Erro ao criar o documento: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar documento'; return; }
-
-    const path = `${usuarioAtual.transportadora_id}/${novoDoc.id}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
-    const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
-    if(upErr){ alert('Documento criado, mas não consegui enviar o arquivo: ' + upErr.message); fechar(); loadDocumentos(); return; }
-    await sb.from('documento').update({ arquivo_url: path }).eq('id', novoDoc.id);
+    if(error && !docId){ alert('Erro ao criar o documento: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar documento'; return; }
+    if(error){ alert('Documento criado, mas não consegui enviar o arquivo: ' + error.message); fechar(); loadDocumentos(); return; }
 
     fechar();
     loadDocumentos();
