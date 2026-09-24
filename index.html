@@ -1833,9 +1833,15 @@ async function processarUploadAutomatico(file){
         motoristaSugerido = { id: resultadoCriacao.motorista.usuarioId, nome: nomeCNH };
         motoristas.push(motoristaSugerido);
         await mostrarCredenciaisNovoMotorista(resultadoCriacao.motorista);
+      } else if(resultadoCriacao.error){
+        // Não trava o Thiago (segue pra confirmação manual), mas avisa o
+        // motivo — assim dá pra saber se é a função que falta publicar, ou
+        // outra coisa.
+        alert('Não consegui cadastrar o motorista automaticamente: ' + resultadoCriacao.error);
       }
-      // Se der erro (ex: função ainda não publicada no Supabase), segue sem
-      // travar — cai na tela de confirmação normal, pra cadastrar na mão.
+    } else {
+      const motivo = !nomeCNH ? 'o nome' : 'a validade';
+      alert('Não consegui ler ' + motivo + ' deste motorista automaticamente pra cadastrar ele sozinho — selecione manualmente abaixo (ou complete os dados e cadastre-o pela tela de Documentos > Cadastrar documentos > motorista).');
     }
   }
 
