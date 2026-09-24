@@ -1510,27 +1510,79 @@ function mostrarStatusOcr(mostrar, mensagem){
 // sem texto selecionável no PDF. Nesse caso, renderiza a página como imagem
 // (ou usa a imagem enviada direto) e lê o texto dela por reconhecimento óptico
 // (OCR), rodando inteiramente no navegador — sem enviar a imagem pra fora.
+// Usa "bloco único uniforme" (PSM 6) em vez do modo automático — funciona
+// bem melhor em documentos de identidade com várias colunas/campos como a
+// CNH, e renderiza numa resolução bem alta pra não perder os números
+// pequenos (CPF, nº de registro) nem o texto em vermelho do cartão.
 async function ocrArquivo(file){
   if(typeof Tesseract === 'undefined') return '';
+  let worker = null;
   try{
     let fonteImagem = file;
     if(file.type === 'application/pdf'){
       const buffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
       const pagina = await pdf.getPage(1);
-      const viewport = pagina.getViewport({ scale: 3 });
+      const viewport = pagina.getViewport({ scale: 4.5 });
       const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       await pagina.render({ canvasContext: ctx, viewport }).promise;
       fonteImagem = canvas;
     }
-    const resultado = await Tesseract.recognize(fonteImagem, 'eng');
+    worker = await Tesseract.createWorker('eng');
+    await worker.setParameters({ tessedit_pageseg_mode: '6' });
+    const resultado = await worker.recognize(fonteImagem);
     return (resultado && resultado.data && resultado.data.text) || '';
   } catch(e){
     return '';
+  } finally {
+    if(worker) try{ await worker.terminate(); } catch(e){ /* ignora */ }
   }
+}
+
+// Campos específicos da CNH que valem a pena buscar "pelo rótulo" no texto
+// lido (em vez de só listar todas as datas/números achados): o nº de
+// registro e a validade, que na CNH aparecem em vermelho no layout oficial.
+function normalizarTextoComEspacos(t){
+  return (t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+}
+
+function extrairNumeroRegistroCNH(texto){
+  const t = normalizarTextoComEspacos(texto);
+  const idx = t.search(/N.?\s*REGISTRO/);
+  if(idx === -1) return null;
+  const trecho = t.slice(idx, idx + 80);
+  // Pode ter o CPF (com pontos/traço) pelo caminho — pega o 1º bloco de
+  // 8 a 11 dígitos corridos (o CPF nunca aparece assim, sempre com pontuação).
+  const m = trecho.match(/\d{8,11}/);
+  return m ? m[0] : null;
+}
+
+function extrairValidadeCNH(texto){
+  const t = normalizarTextoComEspacos(texto);
+  // No layout oficial, "DATA EMISSAO" e "VALIDADE" aparecem como rótulos em
+  // sequência, seguidos logo abaixo pelas duas datas correspondentes na
+  // mesma ordem — a 2ª data é a validade.
+  const idx = t.search(/DATA\s*EMISS[AÃ]O/);
+  if(idx !== -1){
+    const trecho = t.slice(idx, idx + 150);
+    const encontradas = trecho.match(/\d{2}\/\d{2}\/\d{4}/g);
+    if(encontradas && encontradas.length >= 2) return encontradas[1];
+  }
+  // Sem o rótulo, fica a última alternativa: entre as datas encontradas, a
+  // validade é a única que ainda está no futuro (nascimento/1ª habilitação/
+  // emissão são sempre datas passadas).
+  const todasDatas = t.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
+  const hoje = new Date();
+  const futuras = todasDatas.filter(d => {
+    const [dd, mm, yyyy] = d.split('/');
+    return new Date(`${yyyy}-${mm}-${dd}`) > hoje;
+  });
+  return futuras.length ? futuras.sort().pop() : null;
 }
 
 async function processarUploadAutomatico(file){
@@ -1571,7 +1623,16 @@ async function processarUploadAutomatico(file){
 
   const sugestaoCalendario = veiculoSugerido ? sugerirValidadePorPlaca(veiculoSugerido.placa, calendario) : null;
 
-  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr });
+  // Na CNH, o nº de registro e a validade aparecem em vermelho no cartão —
+  // busca eles especificamente pelo rótulo, em vez de só listar tudo que
+  // achou, pra vir pronto igual já acontece com placa/nome.
+  let numeroSugerido = null, validadeSugerida = null;
+  if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH'){
+    numeroSugerido = extrairNumeroRegistroCNH(texto);
+    validadeSugerida = extrairValidadeCNH(texto);
+  }
+
+  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida });
 }
 
 function sugerirValidadePorPlaca(placa, calendario){
@@ -1591,8 +1652,9 @@ function sugerirValidadePorPlaca(placa, calendario){
 }
 
 function mostrarRevisaoDocumento(ctx){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr } = ctx;
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
+  const outrasDatas = validadeSugerida ? datas.filter(d => d !== validadeSugerida) : datas;
 
   const modalHtml = `
     <div id="uploadModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:flex-end;">
@@ -1611,19 +1673,23 @@ function mostrarRevisaoDocumento(ctx){
         <div id="revisaoReferenteIdWrap" style="margin-top:10px;"></div>
 
         <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${deteccao.tipo || ''}" style="margin-top:10px;">
-        <input type="text" id="revisaoNumero" placeholder="Número (opcional)" style="margin-top:10px;">
+        <input type="text" id="revisaoNumero" placeholder="Número (opcional)" value="${numeroSugerido || ''}" style="margin-top:10px;">
 
         ${sugestaoCalendario ? `
           <div class="l2" style="margin-top:14px;">Sugestão pelo calendário do Detran (final da placa):</div>
           <button class="ans-btn ok" data-data="${sugestaoCalendario}" style="flex:none; padding:8px 12px; margin-top:6px;" type="button">${sugestaoCalendario}</button>
         ` : ''}
-        ${datas.length ? `
-          <div class="l2" style="margin-top:14px;">Datas encontradas no arquivo — toque na que for a validade:</div>
+        ${validadeSugerida ? `
+          <div class="l2" style="margin-top:14px;">Validade encontrada no documento:</div>
+          <button class="ans-btn ok active" data-data="${validadeSugerida}" style="flex:none; padding:8px 12px; margin-top:6px;" type="button">${validadeSugerida}</button>
+        ` : ''}
+        ${outrasDatas.length ? `
+          <div class="l2" style="margin-top:14px;">${validadeSugerida ? 'Outras datas encontradas no arquivo:' : 'Datas encontradas no arquivo — toque na que for a validade:'}</div>
           <div id="revisaoDatas" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
-            ${datas.map(d => `<button class="ans-btn" data-data="${d}" style="flex:none; padding:8px 12px;" type="button">${d}</button>`).join('')}
+            ${outrasDatas.map(d => `<button class="ans-btn" data-data="${d}" style="flex:none; padding:8px 12px;" type="button">${d}</button>`).join('')}
           </div>
         ` : ''}
-        <input type="date" id="revisaoValidade" style="margin-top:10px;">
+        <input type="date" id="revisaoValidade" value="${(() => { if(!validadeSugerida) return ''; const [dd,mm,yyyy]=validadeSugerida.split('/'); return `${yyyy}-${mm}-${dd}`; })()}" style="margin-top:10px;">
 
         <button id="btnSalvarUploadAutomatico" style="margin-top:16px; width:100%;">Salvar documento</button>
         <button class="btn-small" id="btnCancelarUploadAutomatico" style="margin-top:8px; width:100%;">Cancelar</button>
