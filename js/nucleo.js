@@ -13,6 +13,11 @@ let screen = 'painel';
 
 const app = document.getElementById('app');
 
+// Tema da página: claro (escritório) ou escuro (motorista, mecânico, login)
+function definirTema(tema){
+  document.body.classList.toggle('tema-escritorio', tema === 'escritorio');
+}
+
 async function init(){
   app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`;
   const { data } = await sb.auth.getSession();
@@ -21,23 +26,28 @@ async function init(){
 }
 
 function render(){
-  if(!session){ app.innerHTML = loginScreen(); attachLoginHandlers(); }
-  else { app.innerHTML = `<div class="wrap"><div class="status">Carregando painel...</div></div>`; loadShell(); }
+  if(!session){ definirTema('escuro'); app.innerHTML = loginScreen(); attachLoginHandlers(); }
+  else { app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`; loadShell(); }
 }
 
 function loginScreen(){
   return `
   <div class="wrap">
     <div class="center">
-      <img src="img/logo.png" alt="MOVER.IA" style="width:84px; height:auto; margin-bottom:10px;">
+      <img src="img/logo.png" alt="" style="width:78px; height:auto; margin-bottom:10px;">
       <div class="logo">MOVER<span>.IA</span></div>
       <div class="tag">Gestão para quem move o Brasil</div>
-      <form id="loginForm">
-        <input type="text" id="email" placeholder="E-mail ou login" required autocomplete="username" autocapitalize="none" spellcheck="false">
-        <input type="password" id="password" placeholder="Senha" required autocomplete="current-password">
-        <div class="err" id="loginErr">${loginError}</div>
-        <button type="submit" id="loginBtn">Entrar</button>
-      </form>
+      <div class="auth-card">
+        <form id="loginForm">
+          <div class="field-row" style="margin:0;"><label for="email">E-mail ou login</label>
+            <input type="text" id="email" placeholder="ex: carlos.alves" required autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+          <div class="field-row" style="margin:0;"><label for="password">Senha</label>
+            <input type="password" id="password" placeholder="••••••••" required autocomplete="current-password"></div>
+          <div class="err" id="loginErr">${esc(loginError)}</div>
+          <button type="submit" id="loginBtn">Entrar</button>
+        </form>
+      </div>
+      <div class="l2" style="margin-top:14px; text-align:center;">Esqueceu a senha? Fale com o escritório da sua transportadora.</div>
     </div>
   </div>`;
 }
@@ -80,12 +90,14 @@ async function doLogout(){
   motivoSelecionado = null;
   jornadaDetalheId = null;
   documentosSubtela = 'lista';
+  docAbaMotorista = 'meus';
   screen = 'painel';
   render();
 }
 
 const papelLabel = { admin_transportadora:'Administrador', gestor:'Escritório', mecanico:'Mecânico', motorista:'Motorista', admin_mover_ia:'MOVER.IA' };
 const statusLabel = { ok:'Em dia', vence_em_breve:'Vence em breve', vencido:'Vencido' };
+const PAPEIS_GESTAO = ['admin_transportadora', 'gestor', 'admin_mover_ia'];
 
 async function loadShell(){
   if(!usuarioAtual){
@@ -102,34 +114,33 @@ async function loadShell(){
     usuarioAtual = usuario;
   }
 
-  if(usuarioAtual.papel === 'motorista' && usuarioAtual.senha_temporaria){ loadPrimeiroAcessoMotorista(); return; }
-  if(usuarioAtual.papel === 'motorista'){ loadShellMotorista(); return; }
+  if(usuarioAtual.papel === 'motorista' && usuarioAtual.senha_temporaria){ definirTema('escuro'); loadPrimeiroAcessoMotorista(); return; }
+  if(usuarioAtual.papel === 'motorista'){ definirTema('escuro'); loadShellMotorista(); return; }
+  if(usuarioAtual.papel === 'mecanico'){ definirTema('escuro'); loadShellMecanico(); return; }
 
+  definirTema('escritorio');
+  loadEscritorio();
+}
+
+// O app do mecânico (chamados de oficina + frota) chega na etapa 3.
+function loadShellMecanico(){
+  const primeiroNome = esc((usuarioAtual.nome || '').split(' ')[0]);
   app.innerHTML = `
-    <div class="wrap">
-      <div class="top">
-        <div>
-          <div class="co">${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '—'}</div>
-          <div class="role">${usuarioAtual.nome} · ${papelLabel[usuarioAtual.papel] || usuarioAtual.papel}</div>
+    <div class="m-app" style="padding-bottom:0;">
+      <div class="app-header"><div class="row">
+        <div><h2>Oficina</h2><div class="sub">${primeiroNome} · Mecânico</div></div>
+        <div class="avatar">${esc(iniciais(usuarioAtual.nome))}</div>
+      </div></div>
+      <div class="m-content">
+        <div class="card em-breve-box">
+          <div class="ic-grande">${ic('wrench', 34)}</div>
+          <div class="card-dark-title">Área do mecânico em construção</div>
+          <div class="card-dark-sub">Em breve você vai ver e atualizar aqui os chamados de manutenção abertos pelos motoristas.</div>
         </div>
-        <button class="sair" id="btnSair">Sair</button>
+        <button class="btn btn-outline" id="btnSair">${ic('logout', 16)} Sair</button>
       </div>
-      <div class="tabs">
-        <button class="tab ${screen==='painel'?'active':''}" data-screen="painel">Painel</button>
-        <button class="tab ${screen==='documentos'?'active':''}" data-screen="documentos">Documentos</button>
-      </div>
-      <div class="content" id="screenContent"><div class="status">Carregando...</div></div>
     </div>`;
-
   document.getElementById('btnSair').addEventListener('click', doLogout);
-  document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => {
-    screen = el.dataset.screen;
-    documentosSubtela = 'lista';
-    loadShell();
-  }));
-
-  if(screen === 'painel') loadPainel();
-  else if(screen === 'documentos') loadDocumentos();
 }
 
 // Primeiro acesso de um motorista cadastrado automaticamente (login criado
@@ -143,9 +154,9 @@ async function loadPrimeiroAcessoMotorista(){
   app.innerHTML = `
     <div class="wrap">
       <div class="center">
-        <div class="logo" style="font-size:20px;">Bem-vindo, ${usuarioAtual.nome.split(' ')[0]}</div>
+        <div class="logo" style="font-size:22px;">Olá, ${esc(usuarioAtual.nome.split(' ')[0])}</div>
         <div class="tag">Primeiro acesso — confirme seus dados e crie sua senha</div>
-        <form id="primeiroAcessoForm">
+        <form id="primeiroAcessoForm" class="auth-card">
           ${cpfCadastrado ? `<input type="text" id="paCpf" placeholder="Confirme seu CPF" required inputmode="numeric">` : ''}
           <input type="password" id="paSenha1" placeholder="Nova senha (mín. 6 caracteres)" required minlength="6">
           <input type="password" id="paSenha2" placeholder="Confirme a nova senha" required minlength="6">

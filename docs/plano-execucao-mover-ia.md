@@ -187,9 +187,20 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [ ] Módulo de Oficina/Manutenção: motorista abre chamado (categoria, urgência, descrição, foto); acompanhamento de status (aberto/andamento/concluído)
 - [ ] Login e telas do **mecânico interno**: papel de acesso restrito no mesmo app (só Oficina + listagem de frota — placas, conjuntos, motoristas), com campo de observação do conserto e anexo de fotos, sem acesso a documentos ou dados pessoais
 
+### Atualização 29/09 — sessão no Claude Code
+- [x] OCR da CNH corrigido para o modelo antigo (DENATRAN) + conferência do CPF pelos dígitos + tela de conferência quando a leitura é incerta. Testado com a CNH real da Mirian
+- [x] Fluxo completo de cadastro automático testado de ponta a ponta (CNH → login criado → 1º acesso com CPF e troca de senha)
+- [x] Login do motorista só com o login (ex: `mirian.custodio`), sem precisar do e-mail interno
+- [x] App dividido em arquivos (`css/`, `js/`, `img/`) — sem build, publica igual no GitHub Pages
+- [x] Claude conectado direto ao Supabase (conector oficial) — migrações agora ficam em `supabase/migrations/`
+- [x] **Regras de acesso por papel** (LGPD): motorista só vê o que é dele (jornadas, abastecimentos, CPF/CNH), mecânico sem documentos, gestão vê tudo. Testado simulando cada usuário
+- [x] **Etapa 1 da reconstrução conforme o protótipo**: escritório com menu lateral e as 13 seções do protótipo (dados reais; Oficina, Capacitações, Agenda e Usuários só leitura por enquanto; Integração "em breve"); app do motorista no visual do protótipo (abas, medidor de direção contínua de 5h30, linha do tempo da jornada, documentos em abas Meus/Veículo/Empresa)
+- [x] Status dos documentos agora é calculado pela validade (vencido / vence em 30 dias / em dia), não mais marcado à mão
+- Próximas etapas combinadas: 2) completar Bloco 4 (cadastros e edição pelo painel: vincular conjunto, editar empresa etc.) · 3) Oficina + app do mecânico · 4) agenda, capacitações, notificações, convite de usuários
+
 ### Bloco 4 — Painel do escritório
-- [ ] Dashboard com KPIs e alertas
-- [ ] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos
+- [x] Dashboard com KPIs e alertas (29/09 — motoristas, conjuntos, checklists irregulares, documentos vencendo, horas de condução da semana)
+- [x] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos (29/09 — consulta, detalhes e exportação para Excel; falta cadastrar/editar pelo painel)
 - [ ] Agenda de compromissos (revisões, exames, treinamentos)
 - [ ] Relatório de consumo médio por veículo e por motorista (comparativo, evolução no tempo, alerta de consumo fora do padrão)
 - [ ] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação

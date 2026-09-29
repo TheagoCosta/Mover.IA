@@ -72,56 +72,93 @@ async function processarQrLido(docId, conteudo, onSalvo){
 }
 
 let documentosSubtela = 'lista';
+let documentosFiltro = 'todos';
+
+// Linha de documento no app do motorista (lista escura, no estilo do protótipo)
+function cardDocumento(d, subtitulo, podeEditar = true){
+  return `
+    <div class="list-item" style="align-items:flex-start;">
+      <div class="li-ic">${ic('doc', 16)}</div>
+      <div class="li-body">
+        <div class="li-title">${esc(d.tipo)}</div>
+        <div class="li-sub">${subtitulo ? esc(subtitulo) + ' · ' : ''}${d.numero ? 'nº ' + esc(d.numero) + ' · ' : ''}${esc(textoVencimento(d))}</div>
+        ${d.qr_conteudo ? `<div class="li-sub">QR Code lido ✓</div>` : ''}
+        <div class="li-acoes">
+          ${d.arquivo_url ? `<button class="btn-small" data-ver="${d.id}">${ic('eye', 14)} Ver</button>` : '<span class="li-sub">Sem arquivo anexado</span>'}
+          ${podeEditar ? `<label class="file-label">${ic('upload', 14)} ${d.arquivo_url ? 'Substituir' : 'Anexar'}<input type="file" accept="application/pdf,image/*" data-anexar="${d.id}"></label>
+          <button class="btn-small" data-qr="${d.id}">${ic('qr', 14)} QR</button>` : ''}
+        </div>
+      </div>
+      <div class="li-row-end">${pillDoc(d)}</div>
+    </div>`;
+}
 
 async function loadDocumentos(){
   if(documentosSubtela === 'manual'){ loadDocumentosManual(); return; }
 
-  const { data: docsEmpresa, error } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo').eq('referente_a', 'empresa').order('tipo');
-  const { data: docsMotorista } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'motorista').order('tipo');
-  const { data: docsVeiculo } = await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id').eq('referente_a', 'veiculo').order('tipo');
-  const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
-  const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
-
   const el = document.getElementById('screenContent');
-  if(error){ el.innerHTML = `<div class="status">Erro ao carregar documentos: ${error.message}</div>`; return; }
+  const [{ data: docs, error }, { data: motoristas }, { data: veiculos }] = await Promise.all([
+    sb.from('documento').select('id, referente_a, referente_id, tipo, numero, validade, status, arquivo_url, qr_conteudo').order('tipo'),
+    sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome'),
+    sb.from('veiculo').select('id, placa').order('placa'),
+  ]);
+  if(error){ el.innerHTML = `<div class="status">Erro ao carregar documentos: ${esc(error.message)}</div>`; return; }
 
   const motoristaNome = Object.fromEntries((motoristas||[]).map(m => [m.id, m.nome]));
   const veiculoPlaca = Object.fromEntries((veiculos||[]).map(v => [v.id, v.placa]));
-  const todosDocs = [...(docsEmpresa||[]), ...(docsMotorista||[]), ...(docsVeiculo||[])];
+  const nomeRef = (d) => d.referente_a === 'empresa' ? 'Empresa' : d.referente_a === 'motorista' ? (motoristaNome[d.referente_id] || '—') : (veiculoPlaca[d.referente_id] || '—');
+  const todosDocs = docs || [];
+  const filtros = [['todos', 'Todos'], ['empresa', 'Empresa'], ['motorista', 'Motoristas'], ['veiculo', 'Veículos'], ['alerta', 'Vencidos / a vencer']];
+  const visiveis = todosDocs
+    .filter(d => documentosFiltro === 'todos' || (documentosFiltro === 'alerta' ? statusDocumento(d) !== 'ok' : d.referente_a === documentosFiltro))
+    .sort((a, b) => PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)] || nomeRef(a).localeCompare(nomeRef(b)));
+  const contagem = (k) => k === 'todos' ? todosDocs.length : k === 'alerta' ? todosDocs.filter(d => statusDocumento(d) !== 'ok').length : todosDocs.filter(d => d.referente_a === k).length;
 
   el.innerHTML = `
-    <div class="card clickable" id="btnAdicionarDocumentoAuto" style="border:2px dashed var(--line-yellow-dim); text-align:center;">
-      <div class="l1" style="justify-content:center;">📎 Arraste o arquivo aqui</div>
-      <div class="l2">ou toque para selecionar (PDF de CNH, CRLV etc. — o app descobre sozinho de quem é)</div>
+    <div class="upload-box" id="btnAdicionarDocumentoAuto">
+      ${ic('upload', 28)}
+      <b>Arraste o arquivo aqui ou clique para selecionar</b>
+      <div>PDF ou foto de CNH, CRLV etc. — o app descobre sozinho de quem é e sugere a validade</div>
     </div>
-
-    <h3>Documentos da empresa (${(docsEmpresa||[]).length})</h3>
-    ${(docsEmpresa||[]).map(d => cardDocumento(d)).join('') || '<div class="status">Nenhum documento cadastrado</div>'}
-
-    <h3>Documentos de motoristas (${(docsMotorista||[]).length})</h3>
-    ${(docsMotorista||[]).map(d => cardDocumento(d, motoristaNome[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
-
-    <h3>Documentos de veículos (${(docsVeiculo||[]).length})</h3>
-    ${(docsVeiculo||[]).map(d => cardDocumento(d, veiculoPlaca[d.referente_id] || '—')).join('') || '<div class="status">Nenhum documento cadastrado ainda</div>'}
-
-    <div class="card clickable" id="btnCadastrarManual">
-      <div class="l1">Cadastrar documento manualmente</div>
-      <div class="l2">Para quando o app não conseguir identificar sozinho</div>
+    <div class="doc-tabs" style="max-width:640px;">
+      ${filtros.map(([k, l]) => `<button class="${documentosFiltro === k ? 'active' : ''}" data-filtro="${k}">${l} (${contagem(k)})</button>`).join('')}
     </div>
-  `;
+    <div class="o-panel">
+      <div class="o-panel-head"><h3>Documentos (${visiveis.length})</h3>
+        <div class="o-acoes">
+          <button class="btn btn-outline btn-sm" id="btnCadastrarManual">${ic('plus', 14)} Cadastrar manualmente</button>
+          ${botaoExportar('btnCsvDocumentos')}
+        </div>
+      </div>
+      ${visiveis.length ? `<div class="o-table-wrap"><table class="o-table"><thead><tr><th>Referente a</th><th>Documento</th><th>Validade</th><th>Status</th><th>Arquivo</th></tr></thead><tbody>
+        ${visiveis.map(d => `<tr>
+          <td>${esc(nomeRef(d))}<div class="sub">${{ empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo' }[d.referente_a] || ''}</div></td>
+          <td>${esc(d.tipo)}${d.numero ? `<div class="sub mono">nº ${esc(d.numero)}</div>` : ''}${d.qr_conteudo ? '<div class="sub">QR Code lido ✓</div>' : ''}</td>
+          <td class="sub">${esc(textoVencimento(d))}</td>
+          <td>${badgeDoc(d)}</td>
+          <td><div class="o-acoes">
+            ${d.arquivo_url ? `<button class="o-dl-btn" data-ver="${d.id}" title="Ver arquivo">${ic('eye', 15)}</button>` : ''}
+            <label class="o-dl-btn" title="${d.arquivo_url ? 'Substituir arquivo' : 'Anexar arquivo'}">${ic('upload', 15)}<input type="file" accept="application/pdf,image/*" data-anexar="${d.id}"></label>
+            <button class="o-dl-btn" data-qr="${d.id}" title="Escanear QR Code">${ic('qr', 15)}</button>
+          </div></td></tr>`).join('')}
+      </tbody></table></div>` : `<div class="o-empty-note">Nenhum documento neste filtro.</div>`}
+    </div>`;
 
   const dropArea = document.getElementById('btnAdicionarDocumentoAuto');
   dropArea.addEventListener('click', abrirUploadAutomatico);
   dropArea.addEventListener('dragover', (e) => { e.preventDefault(); dropArea.style.borderColor = 'var(--line-yellow)'; });
-  dropArea.addEventListener('dragleave', () => { dropArea.style.borderColor = 'var(--line-yellow-dim)'; });
+  dropArea.addEventListener('dragleave', () => { dropArea.style.borderColor = ''; });
   dropArea.addEventListener('drop', (e) => {
     e.preventDefault();
-    dropArea.style.borderColor = 'var(--line-yellow-dim)';
+    dropArea.style.borderColor = '';
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
     if(file) processarUploadAutomatico(file);
   });
 
+  el.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { documentosFiltro = b.dataset.filtro; loadDocumentos(); }));
   document.getElementById('btnCadastrarManual').addEventListener('click', () => { documentosSubtela = 'manual'; loadDocumentos(); });
+  document.getElementById('btnCsvDocumentos').addEventListener('click', () => baixarCSV('documentos', ['Referente a', 'Tipo', 'Documento', 'Número', 'Validade', 'Status'],
+    visiveis.map(d => [nomeRef(d), d.referente_a, d.tipo, d.numero || '', d.validade ? fmtData(d.validade) : '', ROTULO_STATUS_DOC[statusDocumento(d)]])));
   el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
   el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
   el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
@@ -133,43 +170,47 @@ async function loadDocumentosManual(){
   const el = document.getElementById('screenContent');
 
   el.innerHTML = `
-    <button class="backbtn" id="btnVoltarManual">← Voltar</button>
-    <h3>Documento de motorista</h3>
-    <div class="card">
+    <button class="btn btn-outline btn-sm" id="btnVoltarManual" style="margin-bottom:16px;">${ic('back', 14)} Voltar para documentos</button>
+    <div class="two-col" style="grid-template-columns:1fr 1fr;">
+    <div class="o-panel"><div class="o-panel-head"><h3>Documento de motorista</h3></div>
+    <div class="o-panel-body">
       <form id="formNovoDocMotorista">
         <select id="docMotoristaSelect" required>
           <option value="">Selecione o motorista</option>
-          ${(motoristas||[]).map(m => `<option value="${m.id}">${m.nome}</option>`).join('')}
+          ${(motoristas||[]).map(m => `<option value="${m.id}">${esc(m.nome)}</option>`).join('')}
         </select>
         <input type="text" id="docMotoristaTipo" placeholder="Tipo (ex: CNH, Exame toxicológico)" required>
         <input type="text" id="docMotoristaNumero" placeholder="Número (opcional)">
-        <input type="date" id="docMotoristaValidade">
+        <div class="field-row" style="margin:0;"><label>Validade</label><input type="date" id="docMotoristaValidade"></div>
+        <div class="field-row" style="margin:0;"><label>Situação (só vale se não tiver validade)</label>
         <select id="docMotoristaStatus">
           <option value="ok">Em dia</option>
           <option value="vence_em_breve">Vence em breve</option>
           <option value="vencido">Vencido</option>
-        </select>
+        </select></div>
         <button type="submit">Adicionar documento de motorista</button>
       </form>
-    </div>
+    </div></div>
 
-    <h3>Documento de veículo</h3>
-    <div class="card">
+    <div class="o-panel"><div class="o-panel-head"><h3>Documento de veículo</h3></div>
+    <div class="o-panel-body">
       <form id="formNovoDocVeiculo">
         <select id="docVeiculoSelect" required>
           <option value="">Selecione o veículo</option>
-          ${(veiculos||[]).map(v => `<option value="${v.id}">${v.placa}</option>`).join('')}
+          ${(veiculos||[]).map(v => `<option value="${v.id}">${esc(v.placa)}</option>`).join('')}
         </select>
         <input type="text" id="docVeiculoTipo" placeholder="Tipo (ex: CRLV, Licenciamento)" required>
         <input type="text" id="docVeiculoNumero" placeholder="Número (opcional)">
-        <input type="date" id="docVeiculoValidade">
+        <div class="field-row" style="margin:0;"><label>Validade</label><input type="date" id="docVeiculoValidade"></div>
+        <div class="field-row" style="margin:0;"><label>Situação (só vale se não tiver validade)</label>
         <select id="docVeiculoStatus">
           <option value="ok">Em dia</option>
           <option value="vence_em_breve">Vence em breve</option>
           <option value="vencido">Vencido</option>
-        </select>
+        </select></div>
         <button type="submit">Adicionar documento de veículo</button>
       </form>
+    </div></div>
     </div>
   `;
 
