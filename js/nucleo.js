@@ -141,8 +141,8 @@ async function loadPrimeiroAcessoMotorista(){
         <div class="tag">Primeiro acesso — confirme seus dados e crie sua senha</div>
         <form id="primeiroAcessoForm" class="auth-card">
           ${cpfCadastrado ? `<input type="text" id="paCpf" placeholder="Confirme seu CPF" required inputmode="numeric">` : ''}
-          <input type="password" id="paSenha1" placeholder="Nova senha (mín. 6 caracteres)" required minlength="6">
-          <input type="password" id="paSenha2" placeholder="Confirme a nova senha" required minlength="6">
+          <input type="password" id="paSenha1" placeholder="Nova senha (mín. 8 caracteres)" required minlength="8">
+          <input type="password" id="paSenha2" placeholder="Confirme a nova senha" required minlength="8">
           <div class="err" id="paErr"></div>
           <button type="submit" id="paBtn">Confirmar e entrar</button>
         </form>
@@ -161,7 +161,7 @@ async function loadPrimeiroAcessoMotorista(){
       const cpfSalvo = cpfCadastrado.replace(/\D/g, '');
       if(cpfDigitado !== cpfSalvo){ errEl.textContent = 'CPF não confere com o que temos cadastrado.'; return; }
     }
-    if(senha1.length < 6){ errEl.textContent = 'A senha precisa ter pelo menos 6 caracteres.'; return; }
+    if(senha1.length < 8){ errEl.textContent = 'A senha precisa ter pelo menos 8 caracteres.'; return; }
     if(senha1 !== senha2){ errEl.textContent = 'As senhas não são iguais.'; return; }
 
     const btn = document.getElementById('paBtn');
