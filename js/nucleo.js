@@ -105,7 +105,7 @@ async function loadShell(){
   if(!usuarioAtual){
     const { data: usuario, error: uErr } = await sb
       .from('usuario')
-      .select('nome, papel, transportadora_id, senha_temporaria, transportadora:transportadora_id ( nome_fantasia, plano )')
+      .select('nome, papel, ativo, transportadora_id, senha_temporaria, transportadora:transportadora_id ( nome_fantasia, plano )')
       .eq('id', session.user.id)
       .single();
 
@@ -114,6 +114,16 @@ async function loadShell(){
       return;
     }
     usuarioAtual = usuario;
+  }
+
+  if(!usuarioAtual.ativo){
+    definirTema('escuro');
+    app.innerHTML = `<div class="wrap"><div class="center">
+      <div class="logo" style="font-size:22px;">Acesso desativado</div>
+      <div class="tag">Seu acesso ao MOVER.IA foi desativado pela transportadora. Se isso for um engano, fale com o escritório.</div>
+      <button class="btn btn-outline" id="btnSair" style="max-width:260px;">Sair</button></div></div>`;
+    document.getElementById('btnSair').addEventListener('click', doLogout);
+    return;
   }
 
   // Login criado automaticamente (motorista pela CNH, mecânico em Usuários):

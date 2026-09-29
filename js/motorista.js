@@ -35,7 +35,8 @@ async function carregarMeuConjunto(){
   const { data: conjuntos } = await sb
     .from('conjunto')
     .select('id, conjunto_item(ordem, veiculo_id, veiculo:veiculo_id(placa, tipo))')
-    .eq('motorista_id', session.user.id);
+    .eq('motorista_id', session.user.id)
+    .eq('ativo', true);
   meuConjunto = (conjuntos && conjuntos[0]) || false;
   return meuConjunto;
 }

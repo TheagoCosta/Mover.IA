@@ -197,11 +197,12 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [x] **Etapa 1 da reconstrução conforme o protótipo**: escritório com menu lateral e as 13 seções do protótipo (dados reais; Oficina, Capacitações, Agenda e Usuários só leitura por enquanto; Integração "em breve"); app do motorista no visual do protótipo (abas, medidor de direção contínua de 5h30, linha do tempo da jornada, documentos em abas Meus/Veículo/Empresa)
 - [x] Status dos documentos agora é calculado pela validade (vencido / vence em 30 dias / em dia), não mais marcado à mão
 - [x] **Etapa 3 — Oficina + app do mecânico** (feita antes da etapa 2, por escolha do Thiago): motorista abre chamado (veículo, categoria, urgência, descrição, foto) e acompanha; app do mecânico (Chamados: iniciar reparo, observação, foto do reparo, concluir · Frota: placas, conjuntos, motoristas, sem documentos); seção Oficina do escritório com as mesmas ações (oficina terceirizada), abrir chamado e exportar planilha; cadastro de mecânico em Usuários (login criado sozinho). Fotos reduzidas no celular antes de enviar, em bucket privado `oficina`. Migração `supabase/migrations/20260929_02_oficina.sql`
-- Próximas etapas combinadas: 2) completar Bloco 4 (cadastros e edição pelo painel: vincular conjunto, editar empresa etc.) · 4) agenda, capacitações, notificações, convite de usuários do escritório
+- [x] **Etapa 2 — cadastros e edição pelo painel**: motoristas e usuários (nome, telefone, CPF, categoria da CNH, conjunto; gerar nova senha temporária; desativar/reativar acesso), veículos (cadastrar, editar, desativar; placa validada), montar/editar/desfazer conjuntos (cavalo → carreta → dolly → carreta), dados da empresa (CNPJ e plano travados) e editar/excluir documentos. Nova função de servidor `gerenciar-usuario`; usuário desativado perde acesso a tudo na hora. Migração `supabase/migrations/20260929_03_cadastros_escritorio.sql`. Segurança testada no banco real (motorista não edita cadastros nem vira admin; ninguém muda papel/CNPJ pelo app)
+- Próxima etapa combinada: 4) agenda, capacitações, notificações, convite de usuários do escritório
 
 ### Bloco 4 — Painel do escritório
 - [x] Dashboard com KPIs e alertas (29/09 — motoristas, conjuntos, checklists irregulares, documentos vencendo, horas de condução da semana)
-- [x] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos (29/09 — consulta, detalhes e exportação para Excel; falta cadastrar/editar pelo painel)
+- [x] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos (29/09 — consulta, detalhes, exportação para Excel, cadastro e edição)
 - [ ] Agenda de compromissos (revisões, exames, treinamentos)
 - [ ] Relatório de consumo médio por veículo e por motorista (comparativo, evolução no tempo, alerta de consumo fora do padrão)
 - [x] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação (29/09)

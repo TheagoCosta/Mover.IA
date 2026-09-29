@@ -140,6 +140,7 @@ async function loadDocumentos(){
             ${d.arquivo_url ? `<button class="o-dl-btn" data-ver="${d.id}" title="Ver arquivo">${ic('eye', 15)}</button>` : ''}
             <label class="o-dl-btn" title="${d.arquivo_url ? 'Substituir arquivo' : 'Anexar arquivo'}">${ic('upload', 15)}<input type="file" accept="application/pdf,image/*" data-anexar="${d.id}"></label>
             <button class="o-dl-btn" data-qr="${d.id}" title="Escanear QR Code">${ic('qr', 15)}</button>
+            <button class="o-dl-btn" data-editar-doc="${d.id}" title="Editar ou excluir">${ic('gear', 15)}</button>
           </div></td></tr>`).join('')}
       </tbody></table></div>` : `<div class="o-empty-note">Nenhum documento neste filtro.</div>`}
     </div>`;
@@ -162,6 +163,10 @@ async function loadDocumentos(){
   el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
   el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
   el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
+  el.querySelectorAll('[data-editar-doc]').forEach(btn => btn.addEventListener('click', () => {
+    const d = todosDocs.find(x => x.id === btn.dataset.editarDoc);
+    abrirEditarDocumento(d, nomeRef(d));
+  }));
 }
 
 async function loadDocumentosManual(){

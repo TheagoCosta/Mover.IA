@@ -81,7 +81,7 @@ async function consultar(promessa){
   if(error) throw new Error(error.message);
   return data || [];
 }
-const qUsuarios = () => consultar(sb.from('usuario').select('id, nome, papel, email, ativo, senha_temporaria, criado_em').order('nome'));
+const qUsuarios = () => consultar(sb.from('usuario').select('id, nome, papel, email, telefone, ativo, senha_temporaria, criado_em').order('nome'));
 const qVeiculos = () => consultar(sb.from('veiculo').select('id, placa, tipo, modelo, ano, ativo').order('placa'));
 const qConjuntos = () => consultar(sb.from('conjunto').select('id, ativo, motorista_id, motorista:motorista_id(nome), conjunto_item(ordem, veiculo_id, veiculo:veiculo_id(placa, tipo, modelo))'));
 const qDocumentos = () => consultar(sb.from('documento').select('id, referente_a, referente_id, tipo, numero, validade, status, arquivo_url, qr_conteudo').order('tipo'));
@@ -244,89 +244,6 @@ async function criarViagem(e){
 }
 
 // ---------------------------------------------------------------------
-// MOTORISTAS
-// ---------------------------------------------------------------------
-async function secaoMotoristas(el){
-  const [usuarios, conjuntos, docs, jornadasAbertas] = await Promise.all([
-    qUsuarios(), qConjuntos(),
-    consultar(sb.from('documento').select('id, referente_id, tipo, numero, validade, status').eq('referente_a', 'motorista')),
-    consultar(sb.from('jornada').select('motorista_id, status').neq('status', 'encerrada')),
-  ]);
-  const motoristas = usuarios.filter(u => u.papel === 'motorista');
-  const linhas = motoristas.map(m => {
-    const meusDocs = docs.filter(d => d.referente_id === m.id);
-    const cnh = meusDocs.find(d => /cnh/i.test(d.tipo));
-    const conj = conjuntos.find(c => c.motorista_id === m.id && c.ativo);
-    const jornada = jornadasAbertas.find(j => j.motorista_id === m.id);
-    const pior = piorStatus(meusDocs);
-    const situacao = !m.ativo ? badge('grey', 'Inativo') : m.senha_temporaria ? badge('amber', 'Aguardando 1º acesso')
-      : jornada ? badge('blue', jornada.status === 'pausada' ? 'Em parada' : 'Em jornada') : badge('green', 'Ativo');
-    return { m, meusDocs, conj, cnh, pior, situacao };
-  });
-
-  el.innerHTML = `
-    <div class="o-banner">${ic('doc', 18)}<div class="txt"><b>Cadastrar motorista novo</b>Envie a CNH dele em <a href="#" data-ir="documentos">Documentos</a> — o app lê o nome e o CPF e cria o login sozinho.</div></div>
-    ${painel(`Motoristas (${motoristas.length})`,
-      motoristas.length ? tabela(['Motorista', 'Conjunto', 'CNH', 'Documentos', 'Situação'],
-        linhas.map(({ m, conj, cnh, pior, meusDocs, situacao }) => `<tr class="clickable" data-motorista="${m.id}">
-          <td>${nomeCelula(m.nome, loginDoEmail(m.email))}</td>
-          <td class="mono">${esc(conj ? cavaloDoConjunto(conj) : '—')}</td>
-          <td>${cnh ? `${badgeDoc(cnh)}<div class="sub">${esc(textoVencimento(cnh))}</div>` : '<span class="sub">Não cadastrada</span>'}</td>
-          <td>${pior ? badge(COR_STATUS_DOC[pior], `${meusDocs.length} · ${ROTULO_STATUS_DOC[pior]}`) : '<span class="sub">Nenhum</span>'}</td>
-          <td>${situacao}</td></tr>`))
-        : vazio('Nenhum motorista cadastrado ainda.'))}`;
-
-  el.querySelectorAll('[data-ir]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = a.dataset.ir; loadEscritorio(); }));
-  el.querySelectorAll('[data-motorista]').forEach(tr => tr.addEventListener('click', () => {
-    const { m, meusDocs, conj } = linhas.find(l => l.m.id === tr.dataset.motorista);
-    abrirModal(m.nome, `
-      <div class="l2" style="margin-bottom:12px;">Login: <b>${esc(loginDoEmail(m.email))}</b> · ${esc(papelLabel[m.papel])}</div>
-      <div class="section-label" style="margin-top:0;">Conjunto</div>
-      ${conj ? itensOrdenados(conj).map(i => `<div class="l2">${esc(labelPosicaoConjunto(i.ordem, i.veiculo.tipo))}: <b class="mono">${esc(i.veiculo.placa)}</b></div>`).join('') : '<div class="l2">Nenhum conjunto vinculado.</div>'}
-      <div class="section-label">Documentos</div>
-      ${meusDocs.length ? meusDocs.map(d => `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 0;"><div>${esc(d.tipo)}<div class="l2">${esc(textoVencimento(d))}</div></div>${badgeDoc(d)}</div>`).join('') : '<div class="l2">Nenhum documento cadastrado.</div>'}
-    `);
-  }));
-}
-
-// ---------------------------------------------------------------------
-// VEÍCULOS
-// ---------------------------------------------------------------------
-async function secaoVeiculos(el){
-  const [veiculos, conjuntos, docs] = await Promise.all([
-    qVeiculos(), qConjuntos(),
-    consultar(sb.from('documento').select('id, referente_id, tipo, validade, status').eq('referente_a', 'veiculo')),
-  ]);
-  const docsDe = (vid) => docs.filter(d => d.referente_id === vid);
-  const conjuntoDoVeiculo = {};
-  conjuntos.forEach(c => (c.conjunto_item || []).forEach(i => { conjuntoDoVeiculo[i.veiculo_id] = c; }));
-  const celulaPlaca = (item) => item ? `<span class="mono">${esc(item.veiculo.placa)}</span>` : '<span class="sub">—</span>';
-
-  el.innerHTML = `
-    ${painel(`Conjuntos (${conjuntos.length})`,
-      conjuntos.length ? tabela(['Motorista', 'Cavalo', '1ª carreta', 'Dolly', '2ª carreta', 'Documentos'],
-        conjuntos.map(c => {
-          const itens = itensOrdenados(c);
-          const porTipo = (tipo, n = 0) => itens.filter(i => i.veiculo && i.veiculo.tipo === tipo)[n];
-          const pior = piorStatus(itens.flatMap(i => docsDe(i.veiculo_id)));
-          return `<tr><td>${c.motorista ? esc(c.motorista.nome) : '<span class="sub">Sem motorista</span>'}</td>
-            <td>${celulaPlaca(porTipo('cavalo'))}</td><td>${celulaPlaca(porTipo('carreta', 0))}</td>
-            <td>${celulaPlaca(porTipo('dolly'))}</td><td>${celulaPlaca(porTipo('carreta', 1))}</td>
-            <td>${pior ? badge(COR_STATUS_DOC[pior], ROTULO_STATUS_DOC[pior]) : '<span class="sub">Nenhum</span>'}</td></tr>`;
-        }))
-        : vazio('Nenhum conjunto cadastrado.'))}
-    ${painel(`Veículos (${veiculos.length})`,
-      tabela(['Placa', 'Tipo', 'Modelo', 'Motorista do conjunto', 'Documentos'],
-        veiculos.map(v => {
-          const c = conjuntoDoVeiculo[v.id];
-          const meus = docsDe(v.id);
-          return `<tr><td class="mono">${esc(v.placa)}</td><td>${esc(tipoLabelGlobal[v.tipo] || v.tipo)}</td><td class="sub">${esc([v.modelo, v.ano].filter(Boolean).join(' · ') || '—')}</td>
-            <td>${c && c.motorista ? esc(c.motorista.nome) : '<span class="sub">—</span>'}</td>
-            <td>${meus.length ? meus.map(d => `<div style="margin:2px 0;">${badgeDoc(d)} <span class="sub">${esc(d.tipo)}</span></div>`).join('') : '<span class="sub">Nenhum</span>'}</td></tr>`;
-        })))}`;
-}
-
-// ---------------------------------------------------------------------
 // ABASTECIMENTO
 // ---------------------------------------------------------------------
 async function secaoAbastecimento(el){
@@ -461,22 +378,6 @@ async function secaoAgenda(el){
 }
 
 // ---------------------------------------------------------------------
-// USUÁRIOS
-// ---------------------------------------------------------------------
-async function secaoUsuarios(el){
-  const usuarios = await qUsuarios();
-  const ordem = { admin_transportadora:0, gestor:1, mecanico:2, motorista:3, admin_mover_ia:4 };
-  const lista = [...usuarios].sort((a, b) => (ordem[a.papel] ?? 9) - (ordem[b.papel] ?? 9) || a.nome.localeCompare(b.nome));
-  el.innerHTML = `
-    <div class="o-banner">${ic('users', 18)}<div class="txt"><b>Quem cadastra quem</b>Motoristas são cadastrados automaticamente ao enviar a CNH em Documentos. Mecânicos, pelo botão ao lado. O convite de usuários do escritório (por e-mail) chega numa próxima etapa.</div></div>
-    ${painel(`Usuários (${usuarios.length})`,
-      tabela(['Nome', 'Login / e-mail', 'Papel', 'Situação'],
-        lista.map(u => `<tr><td>${nomeCelula(u.nome)}</td><td class="mono">${esc(loginDoEmail(u.email))}</td><td>${esc(papelLabel[u.papel] || u.papel)}</td><td>${!u.ativo ? badge('grey', 'Inativo') : u.senha_temporaria ? badge('amber', 'Aguardando 1º acesso') : badge('green', 'Ativo')}</td></tr>`)),
-      `<button class="btn btn-primary btn-sm" id="btnNovoMecanico">${ic('wrench', 15)} Cadastrar mecânico</button>`)}`;
-  document.getElementById('btnNovoMecanico').addEventListener('click', abrirCadastroMecanico);
-}
-
-// ---------------------------------------------------------------------
 // INTEGRAÇÃO (Bloco 5 do plano)
 // ---------------------------------------------------------------------
 function secaoIntegracao(el){
@@ -492,32 +393,4 @@ function secaoIntegracao(el){
     </div></div>`)}`;
 }
 
-// ---------------------------------------------------------------------
-// CONFIGURAÇÕES
-// ---------------------------------------------------------------------
-async function secaoConfig(el){
-  const [empresa] = await consultar(sb.from('transportadora').select('*').eq('id', usuarioAtual.transportadora_id));
-  const usuarios = await qUsuarios();
-  if(!empresa){ el.innerHTML = vazio('Não encontrei os dados da transportadora.'); return; }
-  const plano = PLANOS[empresa.plano] || PLANOS.Essencial;
-  const nMot = usuarios.filter(u => u.papel === 'motorista' && u.ativo).length;
-  const nEsc = usuarios.filter(u => u.papel !== 'motorista' && u.papel !== 'admin_mover_ia' && u.ativo).length;
-  const campo = (rotulo, valor) => `<div class="field-row"><label>${rotulo}</label><input value="${esc(valor || '—')}" disabled></div>`;
-  el.innerHTML = `
-    <div class="two-col">
-      ${painel('Dados da empresa', `<div class="o-panel-body">
-        ${campo('Razão social', empresa.razao_social)}${campo('Nome fantasia', empresa.nome_fantasia)}
-        <div class="o-form-grid">${campo('CNPJ', empresa.cnpj)}${campo('RNTRC / ANTT', empresa.rntrc)}${campo('Registro IBAMA', empresa.ibama_registro)}</div>
-        ${campo('Endereço', empresa.endereco)}
-        <div class="o-form-grid">${campo('Telefone', empresa.telefone)}${campo('E-mail de contato', empresa.email)}</div>
-        <div class="l2">A edição destes dados pelo painel chega numa próxima etapa.</div>
-      </div>`)}
-      ${painel('Plano contratado', `<div class="o-panel-body">
-        <div class="kpi-row" style="grid-template-columns:1fr; margin-bottom:12px;">${kpi(esc(empresa.plano), 'Plano atual', plano.mensalidade)}</div>
-        <div class="kpi-row" style="grid-template-columns:1fr 1fr; margin-bottom:0;">
-          ${kpi(`${nMot}/${plano.motoristas}`, 'Motoristas na franquia', nMot > plano.motoristas ? `${nMot - plano.motoristas} adiciona${nMot - plano.motoristas > 1 ? 'is' : 'l'}` : '', nMot > plano.motoristas ? 'ambar' : '')}
-          ${kpi(`${nEsc}/${plano.escritorio}`, 'Usuários de escritório')}
-        </div>
-      </div>`)}
-    </div>`;
-}
+// (as seções MOTORISTAS, VEÍCULOS, USUÁRIOS e CONFIGURAÇÕES ficam em js/cadastros.js, com edição)
