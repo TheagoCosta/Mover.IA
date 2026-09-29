@@ -126,7 +126,7 @@ function loginScreen(){
       <div class="logo">MOVER<span>.IA</span></div>
       <div class="tag">Gestão para quem move o Brasil</div>
       <form id="loginForm">
-        <input type="email" id="email" placeholder="E-mail" required autocomplete="username">
+        <input type="text" id="email" placeholder="E-mail ou login" required autocomplete="username" autocapitalize="none" spellcheck="false">
         <input type="password" id="password" placeholder="Senha" required autocomplete="current-password">
         <div class="err" id="loginErr">${loginError}</div>
         <button type="submit" id="loginBtn">Entrar</button>
@@ -141,7 +141,12 @@ function attachLoginHandlers(){
 
 async function doLogin(e){
   e.preventDefault();
-  const email = document.getElementById('email').value.trim();
+  // Motorista cadastrado automaticamente entra só com o login (ex:
+  // "carlos.alves") — por trás, o login dele é um e-mail interno nesse
+  // domínio (ver a função criar-motorista-automatico). Quem digitar um
+  // e-mail completo (admin/escritório) entra normalmente.
+  let email = document.getElementById('email').value.trim().toLowerCase();
+  if(email && !email.includes('@')) email += '@motoristas.moveria.app';
   const password = document.getElementById('password').value;
   const btn = document.getElementById('loginBtn');
   btn.disabled = true; btn.textContent = 'Entrando...';
