@@ -179,6 +179,9 @@ const POSICOES_CONJUNTO = [
   { ordem:4, tipo:'carreta', rotulo:'2ª carreta' },
 ];
 
+let filtroVeiculos = 'todos';
+let buscaVeiculos = '';
+
 async function secaoVeiculos(el){
   const [veiculos, conjuntosTodos, docs, usuarios] = await Promise.all([
     qVeiculos(), qConjuntos(),
@@ -191,7 +194,29 @@ async function secaoVeiculos(el){
   conjuntos.forEach(c => (c.conjunto_item || []).forEach(i => { conjuntoDoVeiculo[i.veiculo_id] = c; }));
   const celulaPlaca = (item) => item ? `<span class="mono">${esc(item.veiculo.placa)}</span>` : '<span class="sub">—</span>';
   const motoristas = usuarios.filter(u => u.papel === 'motorista' && u.ativo);
-  const ordenados = [...veiculos].sort((a, b) => (b.ativo - a.ativo) || a.placa.localeCompare(b.placa));
+  const posicaoDo = (v) => {
+    const c = conjuntoDoVeiculo[v.id];
+    const item = c && (c.conjunto_item || []).find(i => i.veiculo_id === v.id);
+    return item ? item.ordem : null;
+  };
+  const rotuloPosicao = (v) => {
+    const ordem = posicaoDo(v);
+    if(v.tipo === 'carreta') return ordem ? labelPosicaoConjunto(ordem, 'carreta').replace(/^./, s => s.toUpperCase()) : 'Carreta (fora de conjunto)';
+    return (tipoLabelGlobal[v.tipo] || v.tipo) + (ordem ? '' : ' (fora de conjunto)');
+  };
+  const FILTROS = [
+    ['todos', 'Todos', () => true],
+    ['cavalo', 'Cavalos', v => v.tipo === 'cavalo'],
+    ['carreta1', '1ª carretas', v => v.tipo === 'carreta' && posicaoDo(v) && posicaoDo(v) <= 2],
+    ['carreta2', '2ª carretas', v => v.tipo === 'carreta' && posicaoDo(v) > 2],
+    ['carreta', 'Todas as carretas', v => v.tipo === 'carreta'],
+    ['dolly', 'Dollys', v => v.tipo === 'dolly'],
+  ];
+  const filtro = FILTROS.find(f => f[0] === filtroVeiculos) || FILTROS[0];
+  const busca = buscaVeiculos.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const ordemTipo = { cavalo:0, carreta:1, dolly:2 };
+  const ordenados = veiculos.filter(filtro[2]).filter(v => !busca || v.placa.replace(/[^A-Z0-9]/g, '').includes(busca))
+    .sort((a, b) => (b.ativo - a.ativo) || ordemTipo[a.tipo] - ordemTipo[b.tipo] || (posicaoDo(a) || 9) - (posicaoDo(b) || 9) || a.placa.localeCompare(b.placa));
 
   el.innerHTML = `
     ${painel(`Conjuntos (${conjuntos.length})`,
@@ -206,16 +231,29 @@ async function secaoVeiculos(el){
         }))
         : vazio('Nenhum conjunto montado ainda.'),
       `<button class="btn btn-primary btn-sm" id="btnNovoConjunto">${ic('plus', 15)} Montar conjunto</button>`)}
-    ${painel(`Veículos (${veiculos.filter(v => v.ativo).length} ativos)`,
-      tabela(['Placa', 'Tipo', 'Modelo', 'Conjunto / motorista', 'Documentos'],
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
+      <div class="doc-tabs" style="margin:0; flex:1 1 520px;">
+        ${FILTROS.map(([k, l, f]) => `<button class="${filtroVeiculos === k ? 'active' : ''}" data-filtro-veic="${k}">${l} (${veiculos.filter(f).length})</button>`).join('')}
+      </div>
+      <input type="search" id="buscaPlaca" placeholder="Buscar placa" value="${esc(buscaVeiculos)}" style="flex:0 1 200px; padding:9px 12px;">
+    </div>
+    ${painel(`${filtro[1] === 'Todos' ? 'Veículos' : filtro[1]} (${ordenados.length})`,
+      ordenados.length ? tabela(['Placa', 'Posição', 'Modelo', 'Conjunto / motorista', 'Documentos'],
         ordenados.map(v => {
           const c = conjuntoDoVeiculo[v.id];
           const meus = docsDe(v.id);
-          return `<tr class="clickable" data-veiculo="${v.id}" style="${v.ativo ? '' : 'opacity:.55;'}"><td class="mono">${esc(v.placa)}</td><td>${esc(tipoLabelGlobal[v.tipo] || v.tipo)}${v.ativo ? '' : ' <span class="sub">(inativo)</span>'}</td><td class="sub">${esc([v.modelo, v.ano].filter(Boolean).join(' · ') || '—')}</td>
-            <td>${c ? (c.motorista ? esc(c.motorista.nome) : '<span class="sub">Conjunto sem motorista</span>') : '<span class="sub">Fora de conjunto</span>'}</td>
+          return `<tr class="clickable" data-veiculo="${v.id}" style="${v.ativo ? '' : 'opacity:.55;'}"><td class="mono">${esc(v.placa)}</td><td>${esc(rotuloPosicao(v))}${v.ativo ? '' : ' <span class="sub">(inativo)</span>'}</td><td class="sub">${esc([v.modelo, v.ano].filter(Boolean).join(' · ') || '—')}</td>
+            <td>${c ? `${c.motorista ? esc(c.motorista.nome) : '<span class="sub">Sem motorista</span>'}<div class="sub mono">cavalo ${esc(cavaloDoConjunto(c))}</div>` : '<span class="sub">Fora de conjunto</span>'}</td>
             <td>${meus.length ? meus.map(d => `<div style="margin:2px 0;">${badgeDoc(d)} <span class="sub">${esc(d.tipo)}</span></div>`).join('') : '<span class="sub">Nenhum</span>'}</td></tr>`;
-        })),
+        })) : vazio('Nenhum veículo neste filtro.'),
       `<button class="btn btn-primary btn-sm" id="btnNovoVeiculo">${ic('plus', 15)} Cadastrar veículo</button>`)}`;
+
+  el.querySelectorAll('[data-filtro-veic]').forEach(b => b.addEventListener('click', () => { filtroVeiculos = b.dataset.filtroVeic; secaoVeiculos(el); }));
+  const campoBusca = document.getElementById('buscaPlaca');
+  campoBusca.addEventListener('input', () => {
+    clearTimeout(campoBusca._t);
+    campoBusca._t = setTimeout(async () => { buscaVeiculos = campoBusca.value; await secaoVeiculos(el); const c = document.getElementById('buscaPlaca'); c.focus(); c.setSelectionRange(c.value.length, c.value.length); }, 250);
+  });
 
   document.getElementById('btnNovoVeiculo').addEventListener('click', () => abrirEditarVeiculo(null, veiculos));
   el.querySelectorAll('[data-veiculo]').forEach(tr => tr.addEventListener('click', () => abrirEditarVeiculo(veiculos.find(v => v.id === tr.dataset.veiculo), veiculos, conjuntoDoVeiculo[tr.dataset.veiculo])));

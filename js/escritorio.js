@@ -246,50 +246,67 @@ async function criarViagem(e){
 // ---------------------------------------------------------------------
 // ABASTECIMENTO
 // ---------------------------------------------------------------------
+let filtroAbastecimento = 'todos';
+
 async function secaoAbastecimento(el){
   const registros = await consultar(sb.from('abastecimento')
-    .select('id, data, km, litros, odometro_bomba, media_calculada, motorista:motorista_id(nome), veiculo:veiculo_id(placa)')
-    .order('data', { ascending:false }).limit(500));
+    .select('id, data, tipo, km, litros, arla_litros, odometro_bomba, posto, nota_numero, media_calculada, confirmado_em, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
+    .order('data', { ascending:false }).limit(1000));
   const trintaDias = new Date(Date.now() - 30 * 86400000);
   const recentes = registros.filter(a => new Date(a.data) >= trintaDias);
   const medias = registros.filter(a => a.media_calculada).map(a => Number(a.media_calculada));
   const mediaGeral = medias.length ? medias.reduce((s, v) => s + v, 0) / medias.length : null;
   const fmtNum = (n, casas = 1) => n == null ? '—' : Number(n).toLocaleString('pt-BR', { minimumFractionDigits:casas, maximumFractionDigits:casas });
+  const soma = (lista, campo) => lista.reduce((s, a) => s + (Number(a[campo]) || 0), 0);
+  const nInternos = recentes.filter(a => a.tipo === 'interno').length, nExternos = recentes.filter(a => a.tipo === 'externo').length;
 
   const porVeiculo = {};
   registros.forEach(a => {
     const placa = a.veiculo ? a.veiculo.placa : '—';
-    const v = porVeiculo[placa] || (porVeiculo[placa] = { placa, medias:[], litros:0, n:0, ultimoKm:null, ultimaData:null });
+    const v = porVeiculo[placa] || (porVeiculo[placa] = { placa, medias:[], litros:0, arla:0, n:0, ultimoKm:null, ultimaData:null });
     if(a.media_calculada) v.medias.push(Number(a.media_calculada));
-    v.litros += Number(a.litros) || 0; v.n++;
+    v.litros += Number(a.litros) || 0; v.arla += Number(a.arla_litros) || 0; v.n++;
     if(!v.ultimaData || new Date(a.data) > new Date(v.ultimaData)){ v.ultimaData = a.data; v.ultimoKm = a.km; }
   });
   const veiculos = Object.values(porVeiculo).map(v => ({ ...v, media: v.medias.length ? v.medias.reduce((s, x) => s + x, 0) / v.medias.length : null }))
     .sort((a, b) => (a.media ?? 99) - (b.media ?? 99));
 
+  const visiveis = filtroAbastecimento === 'todos' ? registros : registros.filter(a => a.tipo === filtroAbastecimento);
+  const origem = (a) => a.tipo === 'externo'
+    ? `${esc(a.posto || '—')}${a.nota_numero ? `<div class="sub mono">nota ${esc(a.nota_numero)}</div>` : ''}`
+    : a.tipo === 'interno'
+      ? `Bomba ${a.odometro_bomba != null ? fmtNum(a.odometro_bomba, 1) : '—'}${a.confirmado ? `<div class="sub">confirmado por ${esc(a.confirmado.nome)}</div>` : ''}`
+      : (a.odometro_bomba != null ? `Bomba ${fmtNum(a.odometro_bomba, 1)}` : '<span class="sub">—</span>');
+
   el.innerHTML = `
-    <div class="kpi-row tres">
-      ${kpi(mediaGeral ? fmtNum(mediaGeral, 2) + ' km/l' : '—', 'Consumo médio da frota', medias.length ? `${medias.length} abastecimento${medias.length > 1 ? 's' : ''} com média calculada` : 'A média aparece a partir do 2º abastecimento de cada veículo')}
-      ${kpi(fmtNum(recentes.reduce((s, a) => s + (Number(a.litros) || 0), 0), 0) + ' L', 'Litros nos últimos 30 dias')}
-      ${kpi(recentes.length, 'Abastecimentos nos últimos 30 dias')}
+    <div class="kpi-row">
+      ${kpi(mediaGeral ? fmtNum(mediaGeral, 2) + ' km/l' : '—', 'Consumo médio da frota', medias.length ? `${medias.length} abastecimento${medias.length > 1 ? 's' : ''} com média` : 'A média aparece a partir do 2º abastecimento de cada veículo')}
+      ${kpi(fmtNum(soma(recentes, 'litros'), 0) + ' L', 'Diesel nos últimos 30 dias')}
+      ${kpi(fmtNum(soma(recentes, 'arla_litros'), 0) + ' L', 'Arla nos últimos 30 dias')}
+      ${kpi(recentes.length, 'Abastecimentos em 30 dias', `${nInternos} interno${nInternos === 1 ? '' : 's'} · ${nExternos} externo${nExternos === 1 ? '' : 's'}`)}
     </div>
     ${painel('Consumo médio por veículo',
-      veiculos.length ? tabela(['Placa', 'Consumo médio', 'Abastecimentos', 'Litros (total)', 'Último km'],
-        veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
+      veiculos.length ? tabela(['Placa', 'Consumo médio', 'Abastecimentos', 'Diesel (total)', 'Arla (total)', 'Último km'],
+        veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td>${v.arla ? fmtNum(v.arla, 0) + ' L' : '<span class="sub">—</span>'}</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
         : vazio('Nenhum abastecimento registrado ainda. Os motoristas registram pelo app, em Mais → Abastecimentos.'),
       veiculos.length ? botaoExportar('btnCsvConsumo') : '')}
-    ${painel('Abastecimentos registrados',
-      registros.length ? tabela(['Data', 'Placa', 'Motorista', 'Km do veículo', 'Odômetro da bomba', 'Litros', 'Média'],
-        registros.slice(0, 100).map(a => `<tr><td class="sub">${fmtDataHora(a.data)}</td><td class="mono">${esc(a.veiculo ? a.veiculo.placa : '—')}</td><td>${esc(a.motorista ? a.motorista.nome : '—')}</td><td class="mono">${fmtNum(a.km, 0)}</td><td class="mono">${a.odometro_bomba != null ? fmtNum(a.odometro_bomba, 1) : '—'}</td><td>${fmtNum(a.litros, 1)} L</td><td>${a.media_calculada ? fmtNum(a.media_calculada, 2) + ' km/l' : '<span class="sub">—</span>'}</td></tr>`))
+    <div class="doc-tabs" style="max-width:420px;">
+      ${[['todos', 'Todos'], ['interno', 'Internos'], ['externo', 'Externos']].map(([k, l]) => `<button class="${filtroAbastecimento === k ? 'active' : ''}" data-filtro-abast="${k}">${l}</button>`).join('')}
+    </div>
+    ${painel(`Abastecimentos registrados (${visiveis.length})`,
+      visiveis.length ? tabela(['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km', 'Diesel', 'Arla', 'Média', 'Posto / confirmação'],
+        visiveis.slice(0, 200).map(a => `<tr><td class="sub">${fmtDataHora(a.data)}</td><td>${a.tipo ? badge(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : '<span class="sub">—</span>'}</td><td class="mono">${esc(a.veiculo ? a.veiculo.placa : '—')}</td><td>${esc(a.motorista ? a.motorista.nome : '—')}</td><td class="mono">${fmtNum(a.km, 0)}</td><td>${fmtNum(a.litros, 1)} L</td><td>${a.arla_litros ? fmtNum(a.arla_litros, 1) + ' L' : '<span class="sub">—</span>'}</td><td>${a.media_calculada ? fmtNum(a.media_calculada, 2) + ' km/l' : '<span class="sub">—</span>'}</td><td>${origem(a)}</td></tr>`))
         : vazio('Nada por aqui ainda.'),
-      registros.length ? botaoExportar('btnCsvAbastecimentos') : '')}`;
+      visiveis.length ? botaoExportar('btnCsvAbastecimentos') : '')}`;
 
+  el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
+  const dec = (v, c) => v == null || v === '' ? '' : Number(v).toFixed(c).replace('.', ',');
   const b1 = document.getElementById('btnCsvConsumo');
-  if(b1) b1.addEventListener('click', () => baixarCSV('consumo_por_veiculo', ['Placa', 'Consumo médio (km/l)', 'Abastecimentos', 'Litros (total)', 'Último km'],
-    veiculos.map(v => [v.placa, v.media ? v.media.toFixed(2).replace('.', ',') : '', v.n, String(v.litros).replace('.', ','), v.ultimoKm ?? ''])));
+  if(b1) b1.addEventListener('click', () => baixarCSV('consumo_por_veiculo', ['Placa', 'Consumo médio (km/l)', 'Abastecimentos', 'Diesel (total L)', 'Arla (total L)', 'Último km'],
+    veiculos.map(v => [v.placa, v.media ? dec(v.media, 2) : '', v.n, dec(v.litros, 1), dec(v.arla, 1), v.ultimoKm ?? ''])));
   const b2 = document.getElementById('btnCsvAbastecimentos');
-  if(b2) b2.addEventListener('click', () => baixarCSV('abastecimentos', ['Data', 'Placa', 'Motorista', 'Km do veículo', 'Odômetro da bomba', 'Litros', 'Média (km/l)'],
-    registros.map(a => [fmtDataHora(a.data), a.veiculo ? a.veiculo.placa : '', a.motorista ? a.motorista.nome : '', a.km, a.odometro_bomba ?? '', String(a.litros).replace('.', ','), a.media_calculada ? Number(a.media_calculada).toFixed(2).replace('.', ',') : ''])));
+  if(b2) b2.addEventListener('click', () => baixarCSV('abastecimentos', ['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km do veículo', 'Diesel (L)', 'Arla (L)', 'Odômetro da bomba', 'Posto', 'Nota / comprovante', 'Confirmado por', 'Média (km/l)'],
+    visiveis.map(a => [fmtDataHora(a.data), a.tipo ? ROTULO_TIPO_ABAST[a.tipo] : '', a.veiculo ? a.veiculo.placa : '', a.motorista ? a.motorista.nome : '', a.km, dec(a.litros, 2), dec(a.arla_litros, 2), a.odometro_bomba ?? '', a.posto || '', a.nota_numero || '', a.confirmado ? a.confirmado.nome : '', a.media_calculada ? dec(a.media_calculada, 2) : ''])));
 }
 
 // (a seção OFICINA fica em js/oficina.js, junto com o app do mecânico)
