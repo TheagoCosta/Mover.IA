@@ -96,12 +96,41 @@ async function carregarAlertasMotorista(veiculoIds){
   return alertas.sort((a, b) => PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)]);
 }
 
-async function carregarChecklistDeHoje(){
+// ---------------------------------------------------------------------
+// Checklist obrigatório a cada 24 horas
+// Passou de 24h do último checklist (ou nunca fez) → o app trava na aba
+// Checklist até ele enviar um novo. Exceção: com jornada aberta, a aba
+// Jornada (parada/encerrar) continua liberada — o registro de horas da
+// Lei do Motorista não pode ficar travado com o caminhão rodando.
+// Motorista sem conjunto não trava (não tem veículo para inspecionar).
+// ---------------------------------------------------------------------
+const VALIDADE_CHECKLIST_HORAS = 24;
+let travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false };
+
+async function carregarUltimoChecklist(){
   const { data } = await sb.from('checklist').select('id, criado_em')
     .eq('motorista_id', session.user.id)
-    .gte('criado_em', inicioDoDia().toISOString())
     .order('criado_em', { ascending: false }).limit(1);
   return (data && data[0]) || null;
+}
+
+async function atualizarTravaChecklist(){
+  const conjunto = await carregarMeuConjunto();
+  if(!conjunto){ travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false }; return travaChecklist; }
+  const [ultimo, { data: aberta }] = await Promise.all([
+    carregarUltimoChecklist(),
+    sb.from('jornada').select('id').eq('motorista_id', session.user.id).neq('status', 'encerrada').limit(1),
+  ]);
+  const venceEm = ultimo ? new Date(new Date(ultimo.criado_em).getTime() + VALIDADE_CHECKLIST_HORAS * 3600000) : null;
+  travaChecklist = { exigido:true, ultimo, venceEm, travado: !venceEm || venceEm <= new Date(), jornadaAberta: !!(aberta && aberta.length) };
+  return travaChecklist;
+}
+
+function liberadoComChecklistVencido(tela, aba){
+  if(tela === 'perfil') return true;
+  if(tela === 'home' && aba === 'checklist') return true;
+  if(travaChecklist.jornadaAberta && ((tela === 'home' && aba === 'jornada') || tela === 'jornadaPausa' || tela === 'jornadaEncerrar')) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------
@@ -129,10 +158,14 @@ function montarTelaMotorista({ header, conteudo, tab, voltarPara = 'home' }){
       ${header}
       <div class="m-content">${conteudo}</div>
       <nav class="tabbar">
-        ${ABAS_MOTORISTA.map(a => `<button class="tab ${abaAtiva === a.k ? 'active' : ''}" data-tab="${a.k}">${ic(a.i, 20)}<span>${a.l}</span></button>`).join('')}
+        ${ABAS_MOTORISTA.map(a => {
+          const travada = travaChecklist.travado && !liberadoComChecklistVencido('home', a.k);
+          return `<button class="tab ${abaAtiva === a.k ? 'active' : ''} ${travada ? 'travada' : ''}" data-tab="${a.k}">${ic(travada ? 'lock' : a.i, 20)}<span>${a.l}</span></button>`;
+        }).join('')}
       </nav>
     </div>`;
   document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    if(b.classList.contains('travada')){ mostrarToast('🔒 Faça o checklist do veículo para liberar o app'); return; }
     motoristaScreen = 'home'; motoristaTab = b.dataset.tab; loadShellMotorista(); window.scrollTo(0, 0);
   }));
   document.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => irParaMotorista(b.dataset.ir)));
@@ -155,6 +188,11 @@ async function loadShellMotorista(){
   if(motoristaScreen === 'checklist'){ motoristaScreen = 'home'; motoristaTab = 'checklist'; }
   if(motoristaScreen === 'documentosMotorista'){ motoristaScreen = 'documentos'; docAbaMotorista = 'meus'; }
   if(motoristaScreen === 'documentosConjunto'){ motoristaScreen = 'documentos'; docAbaMotorista = 'veiculo'; }
+
+  await atualizarTravaChecklist();
+  if(travaChecklist.travado && !liberadoComChecklistVencido(motoristaScreen, motoristaTab)){
+    motoristaScreen = 'home'; motoristaTab = 'checklist';
+  }
 
   const subtelas = {
     jornadaPausa: loadJornadaPausa, jornadaEncerrar: loadJornadaEncerrar, abastecimento: loadAbastecimentoMotorista,
@@ -208,8 +246,8 @@ function cardMedidorConducao(jornada){
 async function loadAbaInicio(){
   const conjunto = await carregarMeuConjunto();
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
-  const [jornada, viagem, alertas, checklistHoje, { data: ultimoAbast }, { data: meusChamados }] = await Promise.all([
-    carregarJornadaAtiva(), carregarViagemAtual(), carregarAlertasMotorista(veiculoIds), carregarChecklistDeHoje(),
+  const [jornada, viagem, alertas, { data: ultimoAbast }, { data: meusChamados }] = await Promise.all([
+    carregarJornadaAtiva(), carregarViagemAtual(), carregarAlertasMotorista(veiculoIds),
     sb.from('abastecimento').select('media_calculada').eq('motorista_id', session.user.id).not('media_calculada', 'is', null).order('data', { ascending:false }).limit(1),
     sb.from('chamado_manutencao').select('status').eq('motorista_id', session.user.id).neq('status', 'concluido'),
   ]);
@@ -221,18 +259,21 @@ async function loadAbaInicio(){
   const tile = (destino, icone, rotulo, meta, emBreve = false) =>
     `<div class="quick-tile ${emBreve ? 'em-breve' : ''}" data-ir="${destino}">${ic(icone, 20)}<div class="lbl">${rotulo}</div><div class="meta">${esc(meta)}</div></div>`;
   const excedeu = jornada && jornada.status === 'ativa' && jornada.conducao.continuoMin >= LIMITE_CONDUCAO_CONTINUA_MIN;
+  const horasParaVencer = travaChecklist.venceEm ? (travaChecklist.venceEm - Date.now()) / 3600000 : null;
+  const avisoChecklist = horasParaVencer !== null && horasParaVencer > 0 && horasParaVencer <= 2;
 
   montarTelaMotorista({
     tab: 'inicio',
     header: headerPrincipal(`${saudacaoHorario()}, ${primeiroNome}`, sub, `<div class="avatar" data-ir="perfil" style="cursor:pointer;">${esc(iniciais(usuarioAtual.nome))}</div>`),
     conteudo: `
       ${excedeu ? `<div class="alert-card vencido">${ic('alert', 18)}<div class="txt"><b>Hora de parar</b><span>Você passou de 5h30 dirigindo sem parar. Faça uma parada assim que for seguro.</span></div></div>` : ''}
+      ${avisoChecklist ? `<div class="alert-card" data-ir="tab:checklist" style="cursor:pointer;">${ic('checksq', 18)}<div class="txt"><b>Checklist vence às ${fmtHora(travaChecklist.venceEm)}</b><span>Faça um novo antes disso para o app não travar.</span></div></div>` : ''}
       ${alertas.map(a => `<div class="alert-card ${statusDocumento(a) === 'vencido' ? 'vencido' : ''} clickable" data-ir="documentos" style="cursor:pointer;">${ic('alert', 18)}<div class="txt"><b>${esc(a.tipo)} — ${ROTULO_STATUS_DOC[statusDocumento(a)]}</b><span>${esc(a.origem)} · ${esc(textoVencimento(a))}</span></div></div>`).join('')}
       <div class="section-label">Jornada de hoje</div>
       ${cardJornadaResumo(jornada)}
       <div class="section-label">Acesso rápido</div>
       <div class="grid2">
-        ${tile('tab:checklist', 'checksq', 'Checklist', checklistHoje ? `Enviado hoje às ${fmtHora(checklistHoje.criado_em)}` : 'Pendente hoje')}
+        ${tile('tab:checklist', 'checksq', 'Checklist', travaChecklist.venceEm ? `Vale até ${fmtDataCurta(travaChecklist.venceEm)} ${fmtHora(travaChecklist.venceEm)}` : 'Pendente')}
         ${tile('tab:viagem', 'truck', 'Viagem atual', viagem ? `${viagem.origem || '?'} → ${viagem.destino || '?'}` : 'Nenhuma')}
         ${tile('documentos', 'doc', 'Documentos', alertas.length ? `${alertas.length} pendência${alertas.length > 1 ? 's' : ''}` : 'Tudo em dia')}
         ${tile('abastecimento', 'fuel', 'Abastecimento', media ? `${media} (último)` : 'Registrar')}
@@ -488,19 +529,23 @@ function formatarDuracao(inicioIso, fimIso){
 // ---------------------------------------------------------------------
 async function loadChecklistMotorista(){
   const conjunto = await carregarMeuConjunto();
-  const [{ data: itens }, checklistHoje] = await Promise.all([
-    sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').eq('ativo', true).order('ordem'),
-    carregarChecklistDeHoje(),
-  ]);
+  const { data: itens } = await sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').eq('ativo', true).order('ordem');
   const total = (itens||[]).length;
   const respondidos = () => (itens||[]).filter(it => chkAnswers[it.id]).length;
   const veiculos = veiculosDoConjunto(conjunto);
+  const t = travaChecklist;
+  const faixa = !t.exigido ? ''
+    : t.travado ? `<div class="alert-card vencido">${ic('lock', 18)}<div class="txt"><b>Checklist obrigatório</b><span>${t.ultimo
+        ? `Seu último checklist foi em ${fmtData(t.ultimo.criado_em)} às ${fmtHora(t.ultimo.criado_em)} e vale ${VALIDADE_CHECKLIST_HORAS} horas.`
+        : 'Você ainda não fez o checklist do seu conjunto.'} Faça agora para liberar o app${t.jornadaAberta ? ' (a aba Jornada continua liberada para registrar paradas)' : ''}.</span></div></div>`
+    : `<div class="alert-card" style="border-left-color:var(--signal-green); color:var(--signal-green);">${ic('check', 18)}<div class="txt"><b>Checklist em dia</b><span>Vale até ${fmtData(t.venceEm)} às ${fmtHora(t.venceEm)}. Se precisar, pode enviar outro.</span></div></div>`;
 
   montarTelaMotorista({
     tab: 'checklist',
-    header: headerPrincipal('Checklist', placaCavalo(conjunto) ? `Pré-viagem · ${placaCavalo(conjunto)}` : 'Pré-viagem'),
+    header: headerPrincipal('Checklist', placaCavalo(conjunto) ? `Pré-viagem · ${placaCavalo(conjunto)}` : 'Pré-viagem',
+      `<div class="avatar" data-ir="perfil" style="cursor:pointer;" title="Meu perfil">${esc(iniciais(usuarioAtual.nome))}</div>`),
     conteudo: `
-      ${checklistHoje ? `<div class="alert-card" style="border-left-color:var(--signal-green); color:var(--signal-green);">${ic('check', 18)}<div class="txt"><b>Checklist de hoje já enviado</b><span>Às ${fmtHora(checklistHoje.criado_em)}. Se precisar, pode enviar outro.</span></div></div>` : ''}
+      ${faixa}
       <div class="card" style="font-size:12.5px;">
         <div class="li-sub" style="margin-bottom:4px;">Data da inspeção: <b style="color:var(--text-primary);">${fmtData(new Date())}</b></div>
         <div class="li-sub" style="margin-bottom:4px;">Motorista: <b style="color:var(--text-primary);">${esc(usuarioAtual.nome)}</b></div>

@@ -70,6 +70,12 @@ Deno.serve(async (req: Request) => {
     // consumo médio: km rodados desde o abastecimento anterior do veículo ÷ litros
     const { data: anterior } = await admin.from('abastecimento').select('km').eq('veiculo_id', b.veiculo_id).order('data', { ascending: false }).limit(1);
     const media = anterior && anterior[0] && km > Number(anterior[0].km) ? (km - Number(anterior[0].km)) / litros : null;
+    // média do Arla (separada): km desde o último abastecimento COM Arla ÷ litros de Arla
+    let mediaArla = null;
+    if (arla && arla > 0) {
+      const { data: antArla } = await admin.from('abastecimento').select('km').eq('veiculo_id', b.veiculo_id).gt('arla_litros', 0).order('data', { ascending: false }).limit(1);
+      if (antArla && antArla[0] && km > Number(antArla[0].km)) mediaArla = (km - Number(antArla[0].km)) / arla;
+    }
 
     const agora = new Date().toISOString();
     const { error } = await admin.from('abastecimento').insert({
@@ -80,11 +86,12 @@ Deno.serve(async (req: Request) => {
       data: agora,
       km, litros, odometro_bomba: odometro, arla_litros: arla,
       media_calculada: media,
+      media_arla_calculada: mediaArla,
       confirmado_por: confirmador.id,
       confirmado_em: agora,
     });
     if (error) return jsonResponse({ error: 'Erro ao salvar: ' + error.message }, 400);
-    return jsonResponse({ ok: true, media, confirmado_por: confirmador.nome });
+    return jsonResponse({ ok: true, media, media_arla: mediaArla, confirmado_por: confirmador.nome });
   } catch (e) {
     return jsonResponse({ error: 'Erro inesperado: ' + String(e) }, 500);
   }

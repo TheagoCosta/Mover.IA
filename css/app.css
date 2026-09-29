@@ -154,6 +154,7 @@ button:disabled{opacity:.55; cursor:default;}
 .tabbar{display:flex; border-top:1px solid var(--asphalt-700); background:var(--asphalt-850); position:fixed; bottom:0; left:50%; transform:translateX(-50%); width:100%; max-width:520px; padding:9px 6px calc(10px + env(safe-area-inset-bottom, 0px)); z-index:10;}
 .tab{flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-secondary); cursor:pointer; font-size:10.5px; font-weight:600; background:none; border:none; padding:0; border-radius:0;}
 .tab.active{color:var(--line-yellow);}
+.tab.travada{opacity:.4;}
 
 .doc-tabs{display:flex; gap:6px; margin-bottom:14px; background:var(--asphalt-800); padding:4px; border-radius:10px;}
 .doc-tabs button{flex:1; border:none; background:transparent; color:var(--text-secondary); padding:8px; border-radius:8px; font-size:12.5px; font-weight:600;}

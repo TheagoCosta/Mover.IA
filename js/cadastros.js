@@ -38,11 +38,22 @@ function campoTexto(id, rotulo, valor = '', extra = ''){
 // MOTORISTAS
 // ---------------------------------------------------------------------
 async function secaoMotoristas(el){
-  const [usuarios, conjuntos, docs, jornadasAbertas] = await Promise.all([
+  const [usuarios, conjuntos, docs, jornadasAbertas, checklists] = await Promise.all([
     qUsuarios(), qConjuntos(),
     consultar(sb.from('documento').select('id, referente_id, tipo, numero, validade, status').eq('referente_a', 'motorista')),
     consultar(sb.from('jornada').select('motorista_id, status').neq('status', 'encerrada')),
+    consultar(sb.from('checklist').select('motorista_id, criado_em').gte('criado_em', new Date(Date.now() - 30 * 86400000).toISOString()).order('criado_em', { ascending:false })),
   ]);
+  const ultimoChecklist = {};
+  checklists.forEach(c => { if(!ultimoChecklist[c.motorista_id]) ultimoChecklist[c.motorista_id] = c.criado_em; });
+  const celulaChecklist = (m, conj) => {
+    if(!conj) return '<span class="sub">Sem conjunto</span>';
+    const ult = ultimoChecklist[m.id];
+    const vence = ult ? new Date(new Date(ult).getTime() + VALIDADE_CHECKLIST_HORAS * 3600000) : null;
+    return vence && vence > new Date()
+      ? `${badge('green', 'Em dia')}<div class="sub">até ${fmtDataCurta(vence)} ${fmtHora(vence)}</div>`
+      : `${badge('red', 'Vencido')}<div class="sub">${ult ? 'último ' + fmtDataCurta(ult) + ' ' + fmtHora(ult) : 'nenhum em 30 dias'}</div>`;
+  };
   const motoristas = usuarios.filter(u => u.papel === 'motorista').sort((a, b) => (b.ativo - a.ativo) || a.nome.localeCompare(b.nome));
   const linhas = motoristas.map(m => {
     const meusDocs = docs.filter(d => d.referente_id === m.id);
@@ -58,10 +69,11 @@ async function secaoMotoristas(el){
   el.innerHTML = `
     <div class="o-banner">${ic('doc', 18)}<div class="txt"><b>Cadastrar motorista novo</b>Envie a CNH dele em <a href="#" data-ir="documentos">Documentos</a> — o app lê o nome e o CPF e cria o login sozinho. Clique num motorista para editar, vincular conjunto, gerar nova senha ou desativar.</div></div>
     ${painel(`Motoristas (${motoristas.filter(m => m.ativo).length} ativos)`,
-      motoristas.length ? tabela(['Motorista', 'Conjunto', 'CNH', 'Documentos', 'Situação'],
+      motoristas.length ? tabela(['Motorista', 'Conjunto', 'Checklist (24h)', 'CNH', 'Documentos', 'Situação'],
         linhas.map(({ m, conj, cnh, pior, meusDocs, situacao }) => `<tr class="clickable" data-usuario="${m.id}" style="${m.ativo ? '' : 'opacity:.55;'}">
           <td>${nomeCelula(m.nome, loginDoEmail(m.email))}</td>
           <td class="mono">${conj ? esc(cavaloDoConjunto(conj)) : '<span class="sub">Sem conjunto</span>'}</td>
+          <td>${m.ativo ? celulaChecklist(m, conj) : '<span class="sub">—</span>'}</td>
           <td>${cnh ? `${badgeDoc(cnh)}<div class="sub">${esc(textoVencimento(cnh))}</div>` : '<span class="sub">Não cadastrada</span>'}</td>
           <td>${pior ? badge(COR_STATUS_DOC[pior], `${meusDocs.length} · ${ROTULO_STATUS_DOC[pior]}`) : '<span class="sub">Nenhum</span>'}</td>
           <td>${situacao}</td></tr>`))
