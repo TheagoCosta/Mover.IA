@@ -1673,7 +1673,7 @@ function extrairNumeroRegistroCNH(texto){
 
 function extrairValidadeCNH(texto){
   const t = normalizarTextoComEspacos(texto);
-  // No layout oficial, "DATA EMISSAO" e "VALIDADE" aparecem como rótulos em
+  // Modelo novo da CNH: "DATA EMISSAO" e "VALIDADE" aparecem como rótulos em
   // sequência, seguidos logo abaixo pelas duas datas correspondentes na
   // mesma ordem — a 2ª data é a validade.
   const idx = t.search(/DATA\s*EMISS[AÃ]O/);
@@ -1682,41 +1682,161 @@ function extrairValidadeCNH(texto){
     const encontradas = trecho.match(/\d{2}\/\d{2}\/\d{4}/g);
     if(encontradas && encontradas.length >= 2) return encontradas[1];
   }
-  // Sem o rótulo, fica a última alternativa: entre as datas encontradas, a
-  // validade é a única que ainda está no futuro (nascimento/1ª habilitação/
-  // emissão são sempre datas passadas).
+  // Modelo antigo (DENATRAN): a linha de rótulos é "Nº REGISTRO | VALIDADE |
+  // 1ª HABILITAÇÃO" e, abaixo, os valores na mesma ordem — a 1ª data depois
+  // do rótulo VALIDADE é a validade.
+  const idxVal = t.search(/VALIDADE/);
+  if(idxVal !== -1){
+    const trecho = t.slice(idxVal, idxVal + 200);
+    const m = trecho.match(/\d{2}\/\d{2}\/\d{4}/);
+    if(m) return m[0];
+  }
+  // Sem rótulo nenhum, fica a última alternativa: entre as datas
+  // encontradas, a validade é a única que ainda está no futuro
+  // (nascimento/1ª habilitação/emissão são sempre datas passadas).
+  const dataBrParaDate = (d) => { const [dd, mm, yyyy] = d.split('/'); return new Date(`${yyyy}-${mm}-${dd}`); };
   const todasDatas = t.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
   const hoje = new Date();
-  const futuras = todasDatas.filter(d => {
-    const [dd, mm, yyyy] = d.split('/');
-    return new Date(`${yyyy}-${mm}-${dd}`) > hoje;
-  });
-  return futuras.length ? futuras.sort().pop() : null;
+  const futuras = todasDatas.filter(d => dataBrParaDate(d) > hoje);
+  return futuras.length ? futuras.sort((a, b) => dataBrParaDate(a) - dataBrParaDate(b)).pop() : null;
 }
 
-// O texto lido guarda as quebras de linha originais do cartão — usamos isso
-// pra achar o nome certo: ele fica na linha logo abaixo do rótulo "NOME E
-// SOBRENOME" (a mesma linha também tem, mais adiante, a data de 1ª
-// habilitação da coluna ao lado — por isso cortamos no primeiro número).
+// Palavras dos rótulos/cabeçalhos impressos na CNH — uma "linha de nome"
+// que tenha alguma delas não é nome de pessoa.
+const PALAVRAS_ROTULO_CNH = new Set(['REPUBLICA','FEDERATIVA','BRASIL','MINISTERIO','TRANSPORTES',
+  'INFRAESTRUTURA','SECRETARIA','NACIONAL','TRANSITO','DEPARTAMENTO','ESTADUAL','CARTEIRA',
+  'HABILITACAO','NOME','SOBRENOME','IDENTIDADE','EMISSOR','CPF','NASCIMENTO','FILIACAO',
+  'PERMISSAO','REGISTRO','VALIDADE','CATEGORIA','OBSERVACOES','ASSINATURA','PORTADOR','SENATRAN',
+  'DENATRAN','CONTRAN','SERPRO','DOCUMENTO','EMISSAO','DATA','LOCAL','DRIVER','LICENSE',
+  'PERMISO','CONDUCCION','ASSINADO','DIGITALMENTE','QR','CODE','GOVBR','SSP','DETRAN']);
+const CONECTIVOS_NOME = new Set(['DE','DA','DO','DAS','DOS','E']);
+
+// O OCR costuma "grudar" lixo do fundo/foto do cartão depois do nome (letras
+// soltas, minúsculas, símbolos, números). O nome em si sempre vem em
+// MAIÚSCULAS, então pega só a sequência de palavras maiúsculas do começo da
+// linha (tolerando até 2 "sujeirinhas" antes dela) e descarta o resto.
+function limparLinhaNome(linha){
+  const tokens = (linha || '').split(/\s+/).filter(Boolean);
+  const ehPalavraNome = (tk) => /^[A-ZÀ-Ý]{2,}$/.test(tk) || CONECTIVOS_NOME.has(tk);
+  let i = 0;
+  while(i < tokens.length && i < 2 && !(/^[A-ZÀ-Ý]{2,}$/.test(tokens[i]))) i++;
+  const nome = [];
+  for(; i < tokens.length && ehPalavraNome(tokens[i]); i++) nome.push(tokens[i]);
+  while(nome.length && CONECTIVOS_NOME.has(nome[nome.length - 1])) nome.pop();
+  const principais = nome.filter(p => !CONECTIVOS_NOME.has(p));
+  if(principais.length < 2 || nome.join('').length < 5) return null;
+  if(nome.some(p => PALAVRAS_ROTULO_CNH.has(normalizarTextoComEspacos(p)))) return null;
+  return nome.join(' ');
+}
+
+function formatarNomeProprio(nome){
+  return nome.toLowerCase()
+    .replace(/(^|\s)(\S)/g, (m, p1, p2) => p1 + p2.toUpperCase())
+    .replace(/ (De|Da|Do|Das|Dos|E)(?= )/g, (m, c) => ' ' + c.toLowerCase());
+}
+
+// Lê o nome do motorista no texto da CNH. Existem 2 modelos de CNH em
+// circulação (novo, com rótulo "NOME E SOBRENOME"; e o antigo do DENATRAN,
+// em que o nome vem logo acima de "DOC. IDENTIDADE"), e o OCR às vezes não
+// consegue ler o rótulo — por isso tenta várias estratégias, da mais segura
+// pra menos segura. Devolve { nome, confiavel }: "confiavel" = achou o nome
+// pela posição de um rótulo conhecido; senão foi um palpite e vale a pena
+// pedir pro Thiago conferir antes de criar o login.
 function extrairNomeCNH(texto){
   const linhas = (texto || '').split('\n').map(l => l.trim()).filter(Boolean);
-  const idx = linhas.findIndex(l => normalizarTextoComEspacos(l).includes('SOBRENOME'));
-  if(idx === -1 || idx + 1 >= linhas.length) return null;
-  let linhaNome = linhas[idx + 1];
-  const corte = linhaNome.search(/[0-9]/);
-  if(corte !== -1) linhaNome = linhaNome.slice(0, corte);
-  linhaNome = linhaNome.replace(/[^A-Za-zÀ-ÿ\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  if(linhaNome.split(' ').length < 2 || linhaNome.length < 5) return null;
-  return linhaNome.toLowerCase().replace(/(^|\s)(\S)/g, (m, p1, p2) => p1 + p2.toUpperCase());
+  const linhasNorm = linhas.map(normalizarTextoComEspacos);
+
+  // 1) Modelo novo: nome logo depois do rótulo "NOME E SOBRENOME" — na
+  // mesma linha (quando o OCR junta os dois) ou nas 2 linhas de baixo.
+  const idxSobrenome = linhasNorm.findIndex(l => l.includes('SOBRENOME'));
+  if(idxSobrenome !== -1){
+    const mesmaLinha = limparLinhaNome(linhas[idxSobrenome].replace(/^.*SOBRENOME/i, ''));
+    if(mesmaLinha) return { nome: formatarNomeProprio(mesmaLinha), confiavel: true };
+    for(let i = idxSobrenome + 1; i <= idxSobrenome + 2 && i < linhas.length; i++){
+      const nome = limparLinhaNome(linhas[i]);
+      if(nome) return { nome: formatarNomeProprio(nome), confiavel: true };
+    }
+  }
+
+  // 2) Modelo antigo: nome fica na linha logo acima de "DOC. IDENTIDADE".
+  const idxIdentidade = linhasNorm.findIndex(l => l.includes('IDENTIDADE'));
+  if(idxIdentidade > 0){
+    for(let i = idxIdentidade - 1; i >= Math.max(0, idxIdentidade - 2); i--){
+      const nome = limparLinhaNome(linhas[i]);
+      if(nome) return { nome: formatarNomeProprio(nome), confiavel: true };
+    }
+  }
+
+  // 3) Palpite: 1ª linha com cara de nome antes dos dados pessoais (CPF /
+  // identidade / filiação — depois disso vêm os nomes dos pais, que não
+  // podem ser confundidos com o do motorista).
+  let limite = linhasNorm.findIndex(l => /\bCPF\b|IDENTIDADE|FILIA/.test(l));
+  if(limite === -1) limite = linhas.length;
+  for(let i = 0; i < limite; i++){
+    const nome = limparLinhaNome(linhas[i]);
+    if(nome) return { nome: formatarNomeProprio(nome), confiavel: false };
+  }
+  return null;
 }
 
+// Confere os 2 dígitos verificadores do CPF — se o OCR trocou um único
+// número, a conta não fecha. Importante porque o CPF é usado no 1º acesso do
+// motorista: um CPF lido errado deixaria ele trancado pra fora.
+function cpfValido(cpf){
+  const d = (cpf || '').replace(/\D/g, '');
+  if(d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  const digito = (n) => {
+    let soma = 0;
+    for(let i = 0; i < n; i++) soma += parseInt(d[i], 10) * (n + 1 - i);
+    const resto = (soma * 10) % 11;
+    return resto === 10 ? 0 : resto;
+  };
+  return digito(9) === parseInt(d[9], 10) && digito(10) === parseInt(d[10], 10);
+}
+
+// Só devolve CPF que passa na conferência dos dígitos — procura primeiro
+// perto do rótulo "CPF" e, se não achar, no texto todo.
 function extrairCpfCNH(texto){
   const t = normalizarTextoComEspacos(texto);
   const idx = t.search(/\bCPF\b/);
-  if(idx === -1) return null;
-  const trecho = t.slice(idx, idx + 60);
-  const m = trecho.match(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}/);
-  return m ? m[0] : null;
+  const trechos = idx !== -1 ? [t.slice(idx, idx + 80), t] : [t];
+  for(const trecho of trechos){
+    const achados = trecho.match(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}/g) || [];
+    const valido = achados.find(cpfValido);
+    if(valido) return valido;
+  }
+  return null;
+}
+
+// Palpite de nome (não achou pelo rótulo) ou CPF que não fechou a conta?
+// Antes de criar um login de verdade, mostra o que foi lido pro Thiago
+// conferir/corrigir. Devolve { nome, cpf } confirmados, ou null se cancelar.
+function confirmarDadosNovoMotorista(nome, cpf){
+  return new Promise((resolve) => {
+    const modalHtml = `
+      <div id="confNovoMotModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
+        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:420px; width:100%;">
+          <h3 style="margin-top:0;">Confira os dados do motorista</h3>
+          <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema e vou criar o login dele. Não tive certeza da leitura — confira (e corrija se precisar) antes de continuar.</div>
+          <input type="text" id="confNovoMotNome" placeholder="Nome completo" value="${nome || ''}">
+          <input type="text" id="confNovoMotCpf" placeholder="CPF" inputmode="numeric" value="${cpf || ''}" style="margin-top:10px;">
+          <div id="confNovoMotErro" class="err" style="margin-top:8px;"></div>
+          <button id="btnConfNovoMotOk" style="margin-top:14px; width:100%;">Confirmar e cadastrar</button>
+          <button class="btn-small" id="btnConfNovoMotCancelar" style="margin-top:8px; width:100%;">Não cadastrar agora</button>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const fechar = (valor) => { const m = document.getElementById('confNovoMotModal'); if(m) m.remove(); resolve(valor); };
+    document.getElementById('btnConfNovoMotCancelar').addEventListener('click', () => fechar(null));
+    document.getElementById('btnConfNovoMotOk').addEventListener('click', () => {
+      const nomeDigitado = document.getElementById('confNovoMotNome').value.trim().replace(/\s+/g, ' ');
+      const cpfDigitado = document.getElementById('confNovoMotCpf').value.trim();
+      const erroEl = document.getElementById('confNovoMotErro');
+      if(nomeDigitado.split(' ').length < 2){ erroEl.textContent = 'Digite o nome completo.'; return; }
+      if(!cpfValido(cpfDigitado)){ erroEl.textContent = 'CPF inválido — confira os números.'; return; }
+      fechar({ nome: nomeDigitado, cpf: cpfDigitado });
+    });
+  });
 }
 
 // Chama a função de servidor que cria o login do motorista com segurança
@@ -1823,9 +1943,20 @@ async function processarUploadAutomatico(file){
   // pro documento — assim já entra tudo de uma vez, do jeito que o Thiago
   // pediu.
   if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH' && !motoristaSugerido){
-    const nomeCNH = extrairNomeCNH(texto);
-    const cpfCNH = extrairCpfCNH(texto);
-    if(nomeCNH && validadeSugerida){
+    const leituraNome = extrairNomeCNH(texto);
+    let nomeCNH = leituraNome ? leituraNome.nome : null;
+    let cpfCNH = extrairCpfCNH(texto);
+    // Leitura insegura (nome por palpite ou CPF que não fechou a conta)?
+    // Pede pro Thiago conferir antes de criar o login.
+    let cancelouConferencia = false;
+    if(nomeCNH && validadeSugerida && (!leituraNome.confiavel || !cpfCNH)){
+      const conferido = await confirmarDadosNovoMotorista(nomeCNH, cpfCNH);
+      if(conferido){ nomeCNH = conferido.nome; cpfCNH = conferido.cpf; }
+      else cancelouConferencia = true;
+    }
+    if(cancelouConferencia){
+      // Thiago preferiu não cadastrar agora — segue pra confirmação manual.
+    } else if(nomeCNH && validadeSugerida){
       mostrarStatusOcr(true, 'Motorista não encontrado — cadastrando automaticamente...');
       const resultadoCriacao = await criarMotoristaAutomatico(nomeCNH, cpfCNH);
       mostrarStatusOcr(false);
