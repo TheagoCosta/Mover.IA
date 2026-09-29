@@ -174,9 +174,18 @@ async function loadPrimeiroAcessoMotorista(){
     btn.disabled = true; btn.textContent = 'Salvando...';
 
     const { error: erroSenha } = await sb.auth.updateUser({ password: senha1 });
-    if(erroSenha){ errEl.textContent = 'Erro ao trocar a senha: ' + erroSenha.message; btn.disabled = false; btn.textContent = 'Confirmar e entrar'; return; }
+    if(erroSenha){
+      const msg = erroSenha.code === 'same_password' || /different from the old/i.test(erroSenha.message)
+        ? 'A nova senha precisa ser diferente da senha atual.'
+        : 'Erro ao trocar a senha: ' + erroSenha.message;
+      errEl.textContent = msg; btn.disabled = false; btn.textContent = 'Confirmar e entrar'; return;
+    }
 
-    await sb.from('usuario').update({ senha_temporaria: false }).eq('id', session.user.id);
+    // O motorista não pode gravar direto no próprio cadastro (pra não
+    // conseguir mudar o próprio papel, por exemplo) — essa função do banco
+    // só marca que a senha temporária já foi trocada.
+    const { error: erroMarcar } = await sb.rpc('marcar_senha_trocada');
+    if(erroMarcar){ errEl.textContent = 'Senha trocada, mas não consegui registrar: ' + erroMarcar.message; btn.disabled = false; btn.textContent = 'Confirmar e entrar'; return; }
     usuarioAtual.senha_temporaria = false;
     loadShell();
   });
