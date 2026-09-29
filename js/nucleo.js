@@ -91,6 +91,8 @@ async function doLogout(){
   jornadaDetalheId = null;
   documentosSubtela = 'lista';
   docAbaMotorista = 'meus';
+  mecanicoTab = 'chamados';
+  mecanicoFiltro = 'pendentes';
   screen = 'painel';
   render();
 }
@@ -114,33 +116,14 @@ async function loadShell(){
     usuarioAtual = usuario;
   }
 
-  if(usuarioAtual.papel === 'motorista' && usuarioAtual.senha_temporaria){ definirTema('escuro'); loadPrimeiroAcessoMotorista(); return; }
+  // Login criado automaticamente (motorista pela CNH, mecânico em Usuários):
+  // obriga a trocar a senha temporária antes de liberar o app.
+  if(usuarioAtual.senha_temporaria && !PAPEIS_GESTAO.includes(usuarioAtual.papel)){ definirTema('escuro'); loadPrimeiroAcessoMotorista(); return; }
   if(usuarioAtual.papel === 'motorista'){ definirTema('escuro'); loadShellMotorista(); return; }
   if(usuarioAtual.papel === 'mecanico'){ definirTema('escuro'); loadShellMecanico(); return; }
 
   definirTema('escritorio');
   loadEscritorio();
-}
-
-// O app do mecânico (chamados de oficina + frota) chega na etapa 3.
-function loadShellMecanico(){
-  const primeiroNome = esc((usuarioAtual.nome || '').split(' ')[0]);
-  app.innerHTML = `
-    <div class="m-app" style="padding-bottom:0;">
-      <div class="app-header"><div class="row">
-        <div><h2>Oficina</h2><div class="sub">${primeiroNome} · Mecânico</div></div>
-        <div class="avatar">${esc(iniciais(usuarioAtual.nome))}</div>
-      </div></div>
-      <div class="m-content">
-        <div class="card em-breve-box">
-          <div class="ic-grande">${ic('wrench', 34)}</div>
-          <div class="card-dark-title">Área do mecânico em construção</div>
-          <div class="card-dark-sub">Em breve você vai ver e atualizar aqui os chamados de manutenção abertos pelos motoristas.</div>
-        </div>
-        <button class="btn btn-outline" id="btnSair">${ic('logout', 16)} Sair</button>
-      </div>
-    </div>`;
-  document.getElementById('btnSair').addEventListener('click', doLogout);
 }
 
 // Primeiro acesso de um motorista cadastrado automaticamente (login criado

@@ -7,7 +7,7 @@ const SECOES_ESCRITORIO = [
   { k:'motoristas',    l:'Motoristas',    i:'user',    meta:() => 'Documentação e situação de todos os motoristas' },
   { k:'veiculos',      l:'Veículos',      i:'truck',   meta:() => 'Conjuntos e documentação da frota' },
   { k:'abastecimento', l:'Abastecimento', i:'fuel',    meta:() => 'Consumo médio e litros por veículo' },
-  { k:'oficina',       l:'Oficina',       i:'wrench',  meta:() => 'Chamados de manutenção reportados pelos motoristas' },
+  { k:'oficina',       l:'Oficina',       i:'wrench',  meta:() => 'Chamados de manutenção — motoristas, mecânico e oficinas externas' },
   { k:'jornadas',      l:'Jornadas',      i:'clock',   meta:() => 'Registro de horas de condução e paradas' },
   { k:'checklists',    l:'Checklists',    i:'checksq', meta:() => 'Inspeções pré-viagem enviadas pelos motoristas' },
   { k:'documentos',    l:'Documentos',    i:'doc',     meta:() => 'Repositório central de documentos' },
@@ -375,30 +375,7 @@ async function secaoAbastecimento(el){
     registros.map(a => [fmtDataHora(a.data), a.veiculo ? a.veiculo.placa : '', a.motorista ? a.motorista.nome : '', a.km, a.odometro_bomba ?? '', String(a.litros).replace('.', ','), a.media_calculada ? Number(a.media_calculada).toFixed(2).replace('.', ',') : ''])));
 }
 
-// ---------------------------------------------------------------------
-// OFICINA (a abertura de chamados pelo motorista chega na etapa 3)
-// ---------------------------------------------------------------------
-const ROTULO_URGENCIA = { baixa:'Baixa', media:'Média', alta:'Alta — não roda' };
-const COR_URGENCIA = { baixa:'green', media:'amber', alta:'red' };
-const ROTULO_CHAMADO = { aberto:'Aberto', em_andamento:'Em andamento', concluido:'Concluído' };
-const COR_CHAMADO = { aberto:'red', em_andamento:'blue', concluido:'green' };
-
-async function secaoOficina(el){
-  const chamados = await consultar(sb.from('chamado_manutencao')
-    .select('id, criado_em, categoria, urgencia, descricao, status, observacao_reparo, motorista:motorista_id(nome), veiculo:veiculo_id(placa)')
-    .order('criado_em', { ascending:false }));
-  const abertos = chamados.filter(c => c.status === 'aberto').length;
-  const andamento = chamados.filter(c => c.status === 'em_andamento').length;
-  const urgentes = chamados.filter(c => c.urgencia === 'alta' && c.status !== 'concluido').length;
-  el.innerHTML = `
-    <div class="kpi-row tres">
-      ${kpi(abertos, 'Chamados abertos')}${kpi(andamento, 'Em andamento')}${kpi(urgentes, 'Urgentes (não roda)', '', urgentes ? 'vermelho' : '')}
-    </div>
-    ${painel('Chamados de manutenção',
-      chamados.length ? tabela(['Data', 'Placa', 'Motorista', 'Categoria', 'Descrição', 'Urgência', 'Status'],
-        chamados.map(c => `<tr><td class="sub">${fmtData(c.criado_em)}</td><td class="mono">${esc(c.veiculo ? c.veiculo.placa : '—')}</td><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td>${esc(c.categoria)}</td><td>${esc(c.descricao || '')}${c.observacao_reparo ? `<div class="sub">Oficina: ${esc(c.observacao_reparo)}</div>` : ''}</td><td>${badge(COR_URGENCIA[c.urgencia], ROTULO_URGENCIA[c.urgencia])}</td><td>${badge(COR_CHAMADO[c.status], ROTULO_CHAMADO[c.status])}</td></tr>`))
-        : vazio('Nenhum chamado ainda. Em breve os motoristas vão abrir chamados pelo app (categoria, urgência, descrição e foto), e o mecânico acompanha por aqui.'))}`;
-}
+// (a seção OFICINA fica em js/oficina.js, junto com o app do mecânico)
 
 // ---------------------------------------------------------------------
 // JORNADAS
@@ -491,10 +468,12 @@ async function secaoUsuarios(el){
   const ordem = { admin_transportadora:0, gestor:1, mecanico:2, motorista:3, admin_mover_ia:4 };
   const lista = [...usuarios].sort((a, b) => (ordem[a.papel] ?? 9) - (ordem[b.papel] ?? 9) || a.nome.localeCompare(b.nome));
   el.innerHTML = `
-    <div class="o-banner">${ic('users', 18)}<div class="txt"><b>Convidar usuários do escritório e mecânicos</b>O convite por e-mail chega numa próxima etapa. Motoristas são cadastrados automaticamente ao enviar a CNH em Documentos.</div></div>
+    <div class="o-banner">${ic('users', 18)}<div class="txt"><b>Quem cadastra quem</b>Motoristas são cadastrados automaticamente ao enviar a CNH em Documentos. Mecânicos, pelo botão ao lado. O convite de usuários do escritório (por e-mail) chega numa próxima etapa.</div></div>
     ${painel(`Usuários (${usuarios.length})`,
       tabela(['Nome', 'Login / e-mail', 'Papel', 'Situação'],
-        lista.map(u => `<tr><td>${nomeCelula(u.nome)}</td><td class="mono">${esc(loginDoEmail(u.email))}</td><td>${esc(papelLabel[u.papel] || u.papel)}</td><td>${!u.ativo ? badge('grey', 'Inativo') : u.senha_temporaria ? badge('amber', 'Aguardando 1º acesso') : badge('green', 'Ativo')}</td></tr>`)))}`;
+        lista.map(u => `<tr><td>${nomeCelula(u.nome)}</td><td class="mono">${esc(loginDoEmail(u.email))}</td><td>${esc(papelLabel[u.papel] || u.papel)}</td><td>${!u.ativo ? badge('grey', 'Inativo') : u.senha_temporaria ? badge('amber', 'Aguardando 1º acesso') : badge('green', 'Ativo')}</td></tr>`)),
+      `<button class="btn btn-primary btn-sm" id="btnNovoMecanico">${ic('wrench', 15)} Cadastrar mecânico</button>`)}`;
+  document.getElementById('btnNovoMecanico').addEventListener('click', abrirCadastroMecanico);
 }
 
 // ---------------------------------------------------------------------

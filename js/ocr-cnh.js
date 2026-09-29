@@ -230,7 +230,8 @@ function confirmarDadosNovoMotorista(nome, cpf){
 // (a chave de acesso total do banco nunca fica no app — só dentro dessa
 // função, que roda no Supabase). Precisa dela publicada lá antes de
 // funcionar (ver instruções no arquivo da função).
-async function criarMotoristaAutomatico(nome, cpf){
+// papel: 'motorista' (padrão, pela CNH) ou 'mecanico' (cadastrado em Usuários)
+async function criarMotoristaAutomatico(nome, cpf, papel = 'motorista'){
   try{
     const { data: sessaoAtual } = await sb.auth.getSession();
     const token = sessaoAtual && sessaoAtual.session ? sessaoAtual.session.access_token : null;
@@ -238,7 +239,7 @@ async function criarMotoristaAutomatico(nome, cpf){
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/criar-motorista-automatico`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ nome, cpf })
+      body: JSON.stringify({ nome, cpf, papel })
     });
     const dados = await resp.json();
     if(!resp.ok) return { error: (dados && dados.error) || 'Erro ao cadastrar motorista.' };
@@ -251,20 +252,20 @@ async function criarMotoristaAutomatico(nome, cpf){
 // Mostra o login e a senha temporária gerados — fica na tela até o Thiago
 // confirmar que anotou, porque essa é a única vez que a senha aparece (não
 // tem e-mail de verdade pra reenviar depois).
-function mostrarCredenciaisNovoMotorista(info){
+function mostrarCredenciaisNovoMotorista(info, titulo, explicacao){
   return new Promise((resolve) => {
     const modalHtml = `
       <div id="credModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
         <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:420px; width:100%;">
-          <h3 style="margin-top:0;">Motorista novo cadastrado</h3>
-          <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema — criei o cadastro dele e um login temporário. Anote e repasse pra ele: no primeiro acesso, vai pedir pra confirmar o CPF e trocar a senha.</div>
+          <h3 style="margin-top:0;">${esc(titulo || 'Motorista novo cadastrado')}</h3>
+          <div class="l2" style="margin-bottom:14px;">${esc(explicacao || 'Não encontrei esse motorista no sistema — criei o cadastro e um login temporário. Anote e repasse: no primeiro acesso, o app pede para confirmar o CPF e trocar a senha.')}</div>
           <div class="card">
             <div class="l1">Login</div>
-            <div class="l2" style="font-size:17px; color:var(--text-primary); font-weight:700;">${info.login}</div>
+            <div class="l2" style="font-size:17px; color:var(--text-primary); font-weight:700;">${esc(info.login)}</div>
           </div>
           <div class="card">
             <div class="l1">Senha temporária</div>
-            <div class="l2" style="font-size:17px; color:var(--text-primary); font-weight:700;">${info.senhaTemporaria}</div>
+            <div class="l2" style="font-size:17px; color:var(--text-primary); font-weight:700; font-family:var(--font-mono);">${esc(info.senhaTemporaria)}</div>
           </div>
           <button id="btnEntendiCredenciais" style="margin-top:10px; width:100%;">Entendi, anotei</button>
         </div>

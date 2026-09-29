@@ -184,8 +184,8 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [x] Checklist pré-viagem real — motorista preenche os 22 itens (Atende / Não atende / N/A) no celular, salva de verdade no banco; escritório vê os checklists recebidos no Painel, com contagem de irregularidades por envio. **Testado ponta a ponta**: Carlos enviou do celular, apareceu no painel do Thiago com a irregularidade sinalizada
 - [ ] Viagem atual (dados + documentos vinculados) — **código pronto, aguardando teste**: escritório cria a viagem no Painel (motorista, origem, destino, CT-e, MDF-e); motorista vê a viagem atual na tela dele e pode finalizar. (Documentos vinculados por enquanto são só os números de CT-e/MDF-e digitados — anexo de arquivo por viagem fica para quando a integração com o Bsoft estiver pronta)
 - [ ] Registro de abastecimento (placa, km do veículo, odômetro da bomba, litros, motorista) e cálculo automático de consumo médio — **código pronto, aguardando teste**: motorista registra km e litros na tela dele; sistema calcula o consumo médio (km/l) comparando com o abastecimento anterior do mesmo veículo; escritório vê os últimos abastecimentos de toda a frota no Painel
-- [ ] Módulo de Oficina/Manutenção: motorista abre chamado (categoria, urgência, descrição, foto); acompanhamento de status (aberto/andamento/concluído)
-- [ ] Login e telas do **mecânico interno**: papel de acesso restrito no mesmo app (só Oficina + listagem de frota — placas, conjuntos, motoristas), com campo de observação do conserto e anexo de fotos, sem acesso a documentos ou dados pessoais
+- [x] Módulo de Oficina/Manutenção: motorista abre chamado (categoria, urgência, descrição, foto); acompanhamento de status (aberto/andamento/concluído) — 29/09, aguardando teste real
+- [x] Login e telas do **mecânico interno**: papel de acesso restrito no mesmo app (só Oficina + listagem de frota — placas, conjuntos, motoristas), com campo de observação do conserto e anexo de fotos, sem acesso a documentos ou dados pessoais — 29/09, aguardando teste real
 
 ### Atualização 29/09 — sessão no Claude Code
 - [x] OCR da CNH corrigido para o modelo antigo (DENATRAN) + conferência do CPF pelos dígitos + tela de conferência quando a leitura é incerta. Testado com a CNH real da Mirian
@@ -196,14 +196,15 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [x] **Regras de acesso por papel** (LGPD): motorista só vê o que é dele (jornadas, abastecimentos, CPF/CNH), mecânico sem documentos, gestão vê tudo. Testado simulando cada usuário
 - [x] **Etapa 1 da reconstrução conforme o protótipo**: escritório com menu lateral e as 13 seções do protótipo (dados reais; Oficina, Capacitações, Agenda e Usuários só leitura por enquanto; Integração "em breve"); app do motorista no visual do protótipo (abas, medidor de direção contínua de 5h30, linha do tempo da jornada, documentos em abas Meus/Veículo/Empresa)
 - [x] Status dos documentos agora é calculado pela validade (vencido / vence em 30 dias / em dia), não mais marcado à mão
-- Próximas etapas combinadas: 2) completar Bloco 4 (cadastros e edição pelo painel: vincular conjunto, editar empresa etc.) · 3) Oficina + app do mecânico · 4) agenda, capacitações, notificações, convite de usuários
+- [x] **Etapa 3 — Oficina + app do mecânico** (feita antes da etapa 2, por escolha do Thiago): motorista abre chamado (veículo, categoria, urgência, descrição, foto) e acompanha; app do mecânico (Chamados: iniciar reparo, observação, foto do reparo, concluir · Frota: placas, conjuntos, motoristas, sem documentos); seção Oficina do escritório com as mesmas ações (oficina terceirizada), abrir chamado e exportar planilha; cadastro de mecânico em Usuários (login criado sozinho). Fotos reduzidas no celular antes de enviar, em bucket privado `oficina`. Migração `supabase/migrations/20260929_02_oficina.sql`
+- Próximas etapas combinadas: 2) completar Bloco 4 (cadastros e edição pelo painel: vincular conjunto, editar empresa etc.) · 4) agenda, capacitações, notificações, convite de usuários do escritório
 
 ### Bloco 4 — Painel do escritório
 - [x] Dashboard com KPIs e alertas (29/09 — motoristas, conjuntos, checklists irregulares, documentos vencendo, horas de condução da semana)
 - [x] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos (29/09 — consulta, detalhes e exportação para Excel; falta cadastrar/editar pelo painel)
 - [ ] Agenda de compromissos (revisões, exames, treinamentos)
 - [ ] Relatório de consumo médio por veículo e por motorista (comparativo, evolução no tempo, alerta de consumo fora do padrão)
-- [ ] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação
+- [x] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação (29/09)
 
 ### Bloco 5 — Integração Bsoft *(API confirmada ✅ — pode andar em paralelo aos blocos acima)*
 - [ ] Autenticação com a API do Bsoft

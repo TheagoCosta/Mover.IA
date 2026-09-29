@@ -93,6 +93,10 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const nome: string = (body?.nome || '').trim();
     const cpf: string | null = body?.cpf || null;
+    // Também cria login de mecânico (cadastrado pelo escritório em Usuários).
+    // Mesmo esquema de login interno do motorista (nome.sobrenome).
+    const papel: string = body?.papel || 'motorista';
+    if (!['motorista', 'mecanico'].includes(papel)) return jsonResponse({ error: 'Papel inválido.' }, 400);
     if (!nome || nome.length < 5) return jsonResponse({ error: 'Nome inválido.' }, 400);
 
     const { loginBase } = gerarLoginUnico(nome);
@@ -127,7 +131,7 @@ Deno.serve(async (req: Request) => {
     const { error: erroUsuario } = await admin.from('usuario').insert({
       id: novoAuthUser.user.id,
       transportadora_id: chamador.transportadora_id,
-      papel: 'motorista',
+      papel,
       nome,
       email,
       senha_temporaria: true,
@@ -138,7 +142,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: 'Erro ao criar o perfil do motorista: ' + erroUsuario.message }, 400);
     }
 
-    if (cpf) {
+    if (cpf && papel === 'motorista') {
       await admin.from('motorista_perfil').insert({ usuario_id: novoAuthUser.user.id, cpf });
     }
 

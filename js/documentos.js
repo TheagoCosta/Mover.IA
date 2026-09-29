@@ -461,7 +461,7 @@ function mostrarStatusOcr(mostrar, mensagem){
 
 function mostrarToast(mensagem){
   const el = document.createElement('div');
-  el.style.cssText = 'position:fixed; left:16px; right:16px; bottom:20px; background:#3fb27f; color:#0d1f16; font-weight:700; font-size:13.5px; padding:14px 16px; border-radius:12px; z-index:70; text-align:center; box-shadow:0 6px 20px rgba(0,0,0,.35);';
+  el.style.cssText = 'position:fixed; left:16px; right:16px; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); max-width:480px; margin:0 auto; background:#3fb27f; color:#0d1f16; font-weight:700; font-size:13.5px; padding:14px 16px; border-radius:12px; z-index:70; text-align:center; box-shadow:0 6px 20px rgba(0,0,0,.35);';
   el.textContent = mensagem;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3200);

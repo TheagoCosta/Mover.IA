@@ -158,7 +158,7 @@ async function loadShellMotorista(){
   const subtelas = {
     jornadaPausa: loadJornadaPausa, jornadaEncerrar: loadJornadaEncerrar, abastecimento: loadAbastecimentoMotorista,
     documentos: loadDocumentosMotorista, historicoJornada: loadHistoricoJornadas, historicoJornadaDetalhe: loadHistoricoJornadaDetalhe,
-    conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista,
+    conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista, oficina: loadOficinaMotorista,
   };
   if(subtelas[motoristaScreen]) return subtelas[motoristaScreen]();
   if(motoristaScreen.startsWith('emBreve:')) return loadEmBreveMotorista(motoristaScreen.slice(8));
@@ -207,10 +207,12 @@ function cardMedidorConducao(jornada){
 async function loadAbaInicio(){
   const conjunto = await carregarMeuConjunto();
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
-  const [jornada, viagem, alertas, checklistHoje, { data: ultimoAbast }] = await Promise.all([
+  const [jornada, viagem, alertas, checklistHoje, { data: ultimoAbast }, { data: meusChamados }] = await Promise.all([
     carregarJornadaAtiva(), carregarViagemAtual(), carregarAlertasMotorista(veiculoIds), carregarChecklistDeHoje(),
     sb.from('abastecimento').select('media_calculada').eq('motorista_id', session.user.id).not('media_calculada', 'is', null).order('data', { ascending:false }).limit(1),
+    sb.from('chamado_manutencao').select('status').eq('motorista_id', session.user.id).neq('status', 'concluido'),
   ]);
+  const chamadosAbertos = (meusChamados || []).length;
   const primeiroNome = (usuarioAtual.nome || '').split(' ')[0];
   const cavalo = placaCavalo(conjunto);
   const sub = cavalo ? `${cavalo} · ${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : ''}` : (usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '');
@@ -233,7 +235,7 @@ async function loadAbaInicio(){
         ${tile('tab:viagem', 'truck', 'Viagem atual', viagem ? `${viagem.origem || '?'} → ${viagem.destino || '?'}` : 'Nenhuma')}
         ${tile('documentos', 'doc', 'Documentos', alertas.length ? `${alertas.length} pendência${alertas.length > 1 ? 's' : ''}` : 'Tudo em dia')}
         ${tile('abastecimento', 'fuel', 'Abastecimento', media ? `${media} (último)` : 'Registrar')}
-        ${tile('emBreve:oficina', 'wrench', 'Oficina', 'Em breve', true)}
+        ${tile('oficina', 'wrench', 'Oficina', chamadosAbertos ? `${chamadosAbertos} em aberto` : 'Avisar um problema')}
         ${tile('emBreve:capacitacoes', 'award', 'Capacitações', 'Em breve', true)}
         ${tile('emBreve:agendamentos', 'cal', 'Agendamentos', 'Em breve', true)}
       </div>`,
@@ -605,7 +607,7 @@ function loadAbaMais(){
     { ir:'conjunto', l:'Meu conjunto', i:'truck', m:'Cavalo, carretas e dolly' },
     { ir:'abastecimento', l:'Abastecimentos', i:'fuel', m:'Registrar e ver o consumo médio' },
     { ir:'historicoJornada', l:'Jornadas anteriores', i:'clock', m:'Linha do tempo e assinaturas' },
-    { ir:'emBreve:oficina', l:'Oficina / Manutenção', i:'wrench', m:'Em breve' },
+    { ir:'oficina', l:'Oficina / Manutenção', i:'wrench', m:'Avisar um problema e acompanhar o conserto' },
     { ir:'emBreve:capacitacoes', l:'Capacitações', i:'award', m:'Em breve' },
     { ir:'emBreve:agendamentos', l:'Agendamentos', i:'cal', m:'Em breve' },
     { ir:'perfil', l:'Meu perfil', i:'user', m:usuarioAtual.nome },
