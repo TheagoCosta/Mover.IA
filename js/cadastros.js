@@ -283,6 +283,10 @@ function abrirEditarConjunto(c, { veiculos, conjuntos, motoristas }){
         <select id="ecMotorista"><option value="">Sem motorista</option>
           ${motoristas.map(m => { const outro = conjuntos.find(x => x.motorista_id === m.id && (!c || x.id !== c.id)); return `<option value="${m.id}" ${c && c.motorista_id === m.id ? 'selected' : ''}>${esc(m.nome)}${outro ? ' (sai do conjunto ' + esc(cavaloDoConjunto(outro)) + ')' : ''}</option>`; }).join('')}
         </select></div>
+      ${novo && !veiculos.some(v => v.tipo === 'cavalo' && v.ativo && !ocupados[v.id]) ? `
+        <div class="o-banner" style="margin:0;">${ic('alert', 18)}<div class="txt"><b>Todos os cavalos já estão em algum conjunto</b>
+          Para entregar um conjunto que já existe a um motorista, feche esta janela e clique no conjunto na lista (ou no motorista, em Motoristas).
+          Para montar um conjunto novo, cadastre o cavalo antes em "Cadastrar veículo" ou desfaça um conjunto antigo.</div></div>` : ''}
       <div class="o-form-grid">${POSICOES_CONJUNTO.map(selectPosicao).join('')}</div>
       <div class="l2">Só aparecem veículos ativos que não estão em outro conjunto. Para cadastrar um veículo novo, feche esta janela e use "Cadastrar veículo".</div>
       <div class="err" id="ecErro"></div>
