@@ -18,11 +18,11 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 ## 2. Arquitetura
 
 - **Frontend sem build:** `index.html` + `css/app.css` + `js/*.js` (scripts clássicos, todas as funções globais — um arquivo chama funções dos outros). Bibliotecas por CDN: supabase-js 2, jsQR, pdf.js 3.11.174, tesseract.js 5.1.1. Fontes Oswald/Inter/JetBrains Mono (Google Fonts).
-- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20260930a`) para os celulares baixarem a versão nova.
+- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20260930b`) para os celulares baixarem a versão nova.
 - **Backend:** Supabase `otllslhjbyjtktxyvezy` (Postgres + Auth + Storage + Edge Functions). O Claude acessa pelo **conector oficial do Supabase** (MCP) — o Thiago conecta em Configurações → Conectores do app do Claude. Com ele o Claude lê o banco, aplica migrações e publica funções.
 - **Hospedagem:** GitHub `TheagoCosta/Mover.IA`, branch `main` → **GitHub Pages: https://theagocosta.github.io/Mover.IA/** (maiúsculas importam; `/mover-ia/` dá 404). O Netlify antigo está pausado/abandonado.
 - **Publicação:** o Claude faz o commit local; o **Thiago clica em "Push origin" no GitHub Desktop** (o git do terminal não tem as credenciais dele). Depois de ~2 min o site atualiza.
-- **Git no Windows:** não há git no PATH; usar o git que vem com o GitHub Desktop (`%LOCALAPPDATA%\GitHubDesktop\app-*\resources\app\git\cmd\git.exe`) com `core.longpaths=true`. Node.js é necessário para os testes (instalar o Node LTS, ou usar um node.exe portátil).
+- **Git no Windows:** não há git no PATH; usar o git que vem com o GitHub Desktop (`%LOCALAPPDATA%\GitHubDesktop\app-*\resources\app\git\cmd\git.exe`) com `core.longpaths=true`. Node.js é necessário para os testes (instalar o Node LTS, ou usar um node.exe portátil). No computador pessoal: projeto em `C:\Mover.IA\Mover.IA`, Node em `C:\Mover.IA` (no PATH); arquivos locais que não vão para o GitHub ficam em `.Inativos/` (ignorada via `.git/info/exclude`).
 
 ### Arquivos
 | Arquivo | Conteúdo |
@@ -53,7 +53,7 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 - Papéis (`papel_usuario`): `motorista`, `mecanico`, `gestor` (escritório), `admin_transportadora`, `admin_mover_ia`.
 - Funções auxiliares (security definer): `minha_transportadora()`, `meu_papel()`, `eh_gestao()` (todas exigem usuário **ativo**), `meus_veiculos()`, `marcar_senha_trocada()`, `confirmar_agendamento()`, `marcar_notificacoes_lidas()`, `notificar()`/`ids_por_papel()` (só para gatilhos).
 - **Motorista** só vê/grava o que é dele (jornadas, checklists, abastecimentos, viagem, perfil com CPF) + documentos dele, do conjunto e da empresa. Só grava abastecimento **externo** (interno só pela função). **Mecânico**: oficina + frota, sem documentos. **Gestão**: tudo da transportadora; edita só nome/telefone de usuários (papel e e-mail travados) e dados da empresa (CNPJ e plano travados).
-- **Notificações** são criadas só por gatilhos do banco: chamado novo/status, viagem nova, agendamento novo, capacitação nova, checklist com irregularidade.
+- **Notificações** são criadas só pelo banco: gatilhos (chamado novo/status, viagem nova, agendamento novo, capacitação nova, checklist com irregularidade) e o **aviso diário de vencimentos** — `aviso_diario_vencimentos()`, agendada no pg_cron (`aviso-diario-vencimentos`, 10:00 UTC = 7h Brasília); marcos de 30/15/7/3/1/0 dias e semanal por 2 meses depois de vencido; tabela `aviso_diario_execucao` garante uma rodada por dia. Para testar, chamar com uma data (`aviso_diario_vencimentos('2026-11-08')`) dentro do bloco que se desfaz.
 - Buckets privados: `documentos` (documentos e certificados de capacitação) e `oficina` (fotos dos chamados), pasta raiz = `transportadora_id`.
 - **Como testar segurança sem sujar o banco:** bloco `do $$ ... $$` que simula o usuário com `set_config('request.jwt.claims', ...)` + `set local role authenticated`, faz os testes e termina com `raise exception 'RESULTADO ...'` (desfaz tudo). Alterações diretas em dados reais via SQL são bloqueadas pelo modo automático do Claude Code — nesses casos, pedir ao Thiago ou resolver pelo próprio app.
 
@@ -75,7 +75,7 @@ Etapas concluídas e **testadas pelo Thiago com contas reais**: OCR da CNH (mode
 
 1. **Integração Bsoft** (Bloco 5): viagens, CT-e e MDF-e automáticos (API confirmada, só consulta periódica). Precisa das credenciais da API com o Thiago.
 2. **Notificação no celular com a tela desligada** (push / PWA).
-3. **Aviso diário automático** no sino de documentos/capacitações vencendo (tarefa agendada no servidor).
+3. ~~Aviso diário automático no sino~~ — feito em 30/09.
 4. **Piloto com mais motoristas** (cadastrar os demais pela CNH e acompanhar o uso) — Fase 4/5 do plano.
 5. Pendências de LGPD do plano (política de privacidade, retenção de documentos).
 

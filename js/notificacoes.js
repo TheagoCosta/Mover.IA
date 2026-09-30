@@ -1,12 +1,13 @@
 // MOVER.IA — Notificações (o sino).
 // As notificações são criadas sozinhas pelo banco (gatilhos): chamado novo
 // ou atualizado na oficina, viagem nova, agendamento novo, capacitação
-// registrada e checklist com irregularidade. Aqui só mostramos e marcamos
-// como lidas (função marcar_notificacoes_lidas).
+// registrada e checklist com irregularidade — e, todo dia às 7h, os avisos
+// de documentos/capacitações vencendo (função aviso_diario_vencimentos,
+// agendada no banco). Aqui só mostramos e marcamos como lidas.
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
 
-const ICONE_NOTIFICACAO = { oficina:'wrench', viagem:'truck', agenda:'cal', capacitacao:'award', checklist:'checksq' };
+const ICONE_NOTIFICACAO = { oficina:'wrench', viagem:'truck', agenda:'cal', capacitacao:'award', checklist:'checksq', vencimento:'alert' };
 
 async function carregarNotificacoes(limite = 40){
   const { data } = await sb.from('notificacao').select('id, tipo, titulo, mensagem, destino, lida_em, criado_em')
