@@ -1,0 +1,8 @@
+# gerado pelo ambiente de testes (node ferramentas/teste/montar.js)
+ferramentas/teste/teste.html
+
+# nunca versionar documentos, transcrições ou segredos (repositório público)
+*.pdf
+*.zip
+.env
+conversas/

@@ -156,7 +156,7 @@ Sugiro quebrar em sprints de 2 semanas. Ordem sugerida (cada bloco depende do an
 - [x] Frota real cadastrada (6 conjuntos completos: cavalo → carreta → dolly → carreta) e checklist padrão com os 22 itens reais da ChavesLog — script `mover-ia-schema-03-frota-e-checklist.sql`
 - [x] Bug de recursão nas regras de segurança corrigido (`mover-ia-schema-04-fix-recursao.sql`)
 - [x] **Primeira tela real funcionando ponta a ponta** — login autenticado (Supabase Auth) → banco de dados real (com as regras de acesso por transportadora aplicadas) → tela mostrando frota e checklist reais da ChavesLog. Testado e aprovado no computador e no celular (`mover-ia-real.html`, hospedado via Netlify)
-- [x] **Primeiro login de motorista real criado e testado** (Carlos Roberto Alves) — tela própria do motorista, diferente da do escritório: mostra "Meu conjunto" (GKH-1B12 → FIJ-7F46 → FQQ-1I56 → GJO-5C04, na ordem certa) e o checklist padrão. Confirma que o controle de acesso por papel está funcionando (motorista não vê as abas do escritório)
+- [x] **Primeiro login de motorista real criado e testado** (primeiro motorista do piloto) — tela própria do motorista, diferente da do escritório: mostra "Meu conjunto" (GKH-1B12 → FIJ-7F46 → FQQ-1I56 → GJO-5C04, na ordem certa) e o checklist padrão. Confirma que o controle de acesso por papel está funcionando (motorista não vê as abas do escritório)
 - [ ] Repetir o cadastro de login para os outros 5 motoristas quando formos colocar mais gente pra testar
 - [ ] Construir o restante das telas (Blocos 2 a 6) conectadas a este mesmo banco
 
