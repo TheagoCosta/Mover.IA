@@ -155,6 +155,11 @@ button:disabled{opacity:.55; cursor:default;}
 .tab{flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-secondary); cursor:pointer; font-size:10.5px; font-weight:600; background:none; border:none; padding:0; border-radius:0;}
 .tab.active{color:var(--line-yellow);}
 .tab.travada{opacity:.4;}
+.sino{position:relative; background:transparent; border:none; padding:6px; color:#c7cbd1; display:inline-flex; align-items:center; justify-content:center; border-radius:10px; cursor:pointer;}
+.sino:hover{background:rgba(255,255,255,.06);}
+.sino-badge{position:absolute; top:0; right:0; background:var(--signal-red); color:#fff; font-size:9.5px; font-weight:800; border-radius:8px; padding:1px 4px; line-height:1.35; min-width:15px; text-align:center;}
+body.tema-escritorio .sino{color:var(--ink-700); border:1px solid var(--paper-200); background:#fff; padding:7px;}
+body.tema-escritorio .sino:hover{background:var(--paper-50);}
 
 .doc-tabs{display:flex; gap:6px; margin-bottom:14px; background:var(--asphalt-800); padding:4px; border-radius:10px;}
 .doc-tabs button{flex:1; border:none; background:transparent; color:var(--text-secondary); padding:8px; border-radius:8px; font-size:12.5px; font-weight:600;}

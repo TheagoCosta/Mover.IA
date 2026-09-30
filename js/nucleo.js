@@ -128,7 +128,8 @@ async function loadShell(){
 
   // Login criado automaticamente (motorista pela CNH, mecânico em Usuários):
   // obriga a trocar a senha temporária antes de liberar o app.
-  if(usuarioAtual.senha_temporaria && !PAPEIS_GESTAO.includes(usuarioAtual.papel)){ definirTema('escuro'); loadPrimeiroAcessoMotorista(); return; }
+  // Qualquer login com senha temporária (motorista, mecânico ou escritório) troca a senha antes de entrar
+  if(usuarioAtual.senha_temporaria){ definirTema('escuro'); loadPrimeiroAcessoMotorista(); return; }
   if(usuarioAtual.papel === 'motorista'){ definirTema('escuro'); loadShellMotorista(); return; }
   if(usuarioAtual.papel === 'mecanico'){ definirTema('escuro'); loadShellMecanico(); return; }
 

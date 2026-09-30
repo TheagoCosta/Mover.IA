@@ -55,6 +55,25 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json();
     const acao: string = body?.acao;
+
+    // Cadastro de usuário do escritório (papel gestor): login = e-mail real
+    // da pessoa + senha temporária (troca no 1º acesso). Só o administrador.
+    if (acao === 'criar_escritorio') {
+      if (!['admin_transportadora', 'admin_mover_ia'].includes(chamador.papel)) return jsonResponse({ error: 'Só o administrador cadastra usuários do escritório.' }, 403);
+      const nome = String(body?.nome || '').trim().replace(/\s+/g, ' ');
+      const email = String(body?.email || '').trim().toLowerCase();
+      if (nome.split(' ').length < 2) return jsonResponse({ error: 'Informe nome e sobrenome.' }, 400);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@motoristas.moveria.app')) return jsonResponse({ error: 'E-mail inválido.' }, 400);
+      const { data: existe } = await admin.from('usuario').select('id').eq('email', email).limit(1);
+      if (existe && existe.length) return jsonResponse({ error: 'Já existe um usuário com esse e-mail.' }, 400);
+      const senhaTemporaria = gerarSenhaTemporaria();
+      const { data: novo, error: erroCriar } = await admin.auth.admin.createUser({ email, password: senhaTemporaria, email_confirm: true, user_metadata: { nome } });
+      if (erroCriar || !novo?.user) return jsonResponse({ error: 'Erro ao criar login: ' + (erroCriar?.message || 'desconhecido') }, 400);
+      const { error: erroPerfil } = await admin.from('usuario').insert({ id: novo.user.id, transportadora_id: chamador.transportadora_id, papel: 'gestor', nome, email, senha_temporaria: true });
+      if (erroPerfil) { await admin.auth.admin.deleteUser(novo.user.id); return jsonResponse({ error: 'Erro ao criar o perfil: ' + erroPerfil.message }, 400); }
+      return jsonResponse({ usuarioId: novo.user.id, login: email, senhaTemporaria });
+    }
+
     const usuarioId: string = body?.usuario_id;
     if (!usuarioId) return jsonResponse({ error: 'Usuário não informado.' }, 400);
     if (usuarioId === chamador.id) return jsonResponse({ error: 'Você não pode fazer isso com o seu próprio usuário.' }, 400);

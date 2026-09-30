@@ -45,6 +45,7 @@ function loadEscritorio(){
           <div><h2>${secao.l}</h2><div class="meta">${esc(secao.meta())}</div></div>
           <div class="office-user">
             <div class="nome">${esc(usuarioAtual.nome)}<span>${esc(papelLabel[usuarioAtual.papel] || usuarioAtual.papel)}</span></div>
+            ${botaoSino('btnSinoEscritorio', 0)}
             <div class="av">${esc(iniciais(usuarioAtual.nome))}</div>
             <button class="btn btn-outline btn-sm" id="btnSair" title="Sair">${ic('logout', 15)}<span>Sair</span></button>
           </div>
@@ -54,6 +55,11 @@ function loadEscritorio(){
     </div>`;
 
   document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnSinoEscritorio').addEventListener('click', () => abrirNotificacoesJanela((destino) => {
+    const secao = { agendamentos:'agenda', capacitacoes:'capacitacoes', 'tab:viagem':'painel' }[destino] || destino;
+    if(SECOES_ESCRITORIO.some(s => s.k === secao)){ screen = secao; loadEscritorio(); }
+  }));
+  atualizarSinos();
   document.querySelectorAll('[data-secao]').forEach(b => b.addEventListener('click', () => {
     screen = b.dataset.secao;
     documentosSubtela = 'lista';
@@ -124,11 +130,13 @@ function piorStatus(docs){
 // ---------------------------------------------------------------------
 async function secaoPainel(el){
   const seteDiasAtras = new Date(Date.now() - 7 * 86400000);
-  const [usuarios, veiculos, conjuntos, docs, checklists, jornadas, viagens] = await Promise.all([
+  const limiteAgenda = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const [usuarios, veiculos, conjuntos, docs, checklists, jornadas, viagens, agenda] = await Promise.all([
     qUsuarios(), qVeiculos(), qConjuntos(), qDocumentos(),
     consultar(sb.from('checklist').select('id, criado_em, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))').order('criado_em', { ascending:false }).limit(30)),
     consultar(sb.from('jornada').select('id, inicio, fim, status, motorista_id, jornada_evento(tipo, criado_em)').gte('inicio', new Date(inicioDoDia(seteDiasAtras)).toISOString())),
     consultar(sb.from('viagem').select('id, origem, destino, cte_numero, mdfe_numero, criado_em, motorista:motorista_id(nome)').eq('status', 'em_andamento').order('criado_em', { ascending:false })),
+    consultar(sb.from('agendamento').select(CAMPOS_AGENDA).eq('status', 'pendente').lte('data_prevista', limiteAgenda).order('data_prevista').order('hora', { nullsFirst:true })),
   ]);
 
   const motoristas = usuarios.filter(u => u.papel === 'motorista' && u.ativo);
@@ -178,6 +186,11 @@ async function secaoPainel(el){
         viagens.map(v => `<tr><td>${esc(v.motorista ? v.motorista.nome : '—')}</td><td>${esc(v.origem || '?')} → ${esc(v.destino || '?')}</td><td class="mono">${esc(v.cte_numero || '—')}</td><td class="mono">${esc(v.mdfe_numero || '—')}</td><td class="sub">${fmtDataHora(v.criado_em)}</td></tr>`))
         : vazio('Nenhuma viagem em andamento.'),
       `<button class="btn btn-primary btn-sm" id="btnNovaViagem">${ic('plus', 15)} Nova viagem</button>`)}
+    ${painel('Próximos compromissos (7 dias)',
+      agenda.length ? tabela(['Data', 'Compromisso', 'Motorista / veículo', 'Situação'],
+        agenda.slice(0, 8).map(a => { const [cor, txt] = situacaoAgenda(a); return `<tr class="clickable" data-ir="agenda"><td class="mono">${dataHoraAgenda(a)}</td><td>${esc(a.tipo)}</td><td>${esc([a.motorista && a.motorista.nome, a.veiculo && a.veiculo.placa].filter(Boolean).join(' · ') || 'Toda a equipe')}</td><td>${badge(cor, txt)}</td></tr>`; }))
+        : vazio('Nenhum compromisso nos próximos 7 dias.'),
+      `<button class="btn btn-outline btn-sm" data-ir="agenda">Abrir agenda</button>`)}
     ${painel('Checklists recentes',
       checklists.length ? tabela(['Motorista', 'Conjunto', 'Data', 'Irregularidades', 'Status'],
         checklists.slice(0, 6).map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
@@ -383,24 +396,7 @@ async function abrirDetalheChecklist(checklist){
     ${ordenados.map(i => { const [cor, txt] = rotulo[resposta[i.id]] || ['grey', resposta[i.id]]; return `<div class="timeline-item"><div class="hora">${i.ordem}.</div><div style="flex:1;">${esc(i.descricao)}${i.padrao_esperado ? `<div class="l2">${esc(i.padrao_esperado)}</div>` : ''}</div><div>${badge(cor, txt)}</div></div>`; }).join('') || '<div class="l2">Sem respostas.</div>'}`);
 }
 
-// ---------------------------------------------------------------------
-// CAPACITAÇÕES e AGENDA (cadastro chega na etapa 4)
-// ---------------------------------------------------------------------
-async function secaoCapacitacoes(el){
-  const lista = await consultar(sb.from('capacitacao').select('id, tipo, data_realizacao, validade, motorista:motorista_id(nome)').order('validade'));
-  el.innerHTML = painel('Capacitações e certificações',
-    lista.length ? tabela(['Motorista', 'Treinamento', 'Realizado em', 'Validade', 'Status'],
-      lista.map(c => `<tr><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td>${esc(c.tipo)}</td><td>${fmtData(c.data_realizacao)}</td><td>${fmtData(c.validade)}</td><td>${badgeDoc({ validade:c.validade, status:'ok' })}</td></tr>`))
-      : vazio('Nenhuma capacitação cadastrada ainda. O cadastro de treinamentos (MOPP, direção defensiva etc.) chega numa próxima etapa.'));
-}
-
-async function secaoAgenda(el){
-  const lista = await consultar(sb.from('agendamento').select('id, tipo, data_prevista, status, observacao, motorista:motorista_id(nome), veiculo:veiculo_id(placa)').order('data_prevista'));
-  el.innerHTML = painel('Próximos agendamentos',
-    lista.length ? tabela(['Data', 'Compromisso', 'Responsável', 'Status'],
-      lista.map(a => `<tr><td>${fmtData(a.data_prevista)}</td><td>${esc(a.tipo)}${a.observacao ? `<div class="sub">${esc(a.observacao)}</div>` : ''}</td><td>${esc([a.motorista && a.motorista.nome, a.veiculo && a.veiculo.placa].filter(Boolean).join(' · ') || 'Toda a equipe')}</td><td>${badge(a.status === 'concluido' ? 'green' : 'amber', a.status === 'concluido' ? 'Concluído' : 'Pendente')}</td></tr>`))
-      : vazio('Nenhum agendamento ainda. O cadastro de revisões, exames e compromissos chega numa próxima etapa.'));
-}
+// (as seções AGENDA e CAPACITAÇÕES ficam em js/agenda.js e js/capacitacoes.js)
 
 // ---------------------------------------------------------------------
 // INTEGRAÇÃO (Bloco 5 do plano)

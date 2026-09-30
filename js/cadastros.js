@@ -397,12 +397,15 @@ async function secaoUsuarios(el){
   const ordem = { admin_transportadora:0, gestor:1, mecanico:2, motorista:3, admin_mover_ia:4 };
   const lista = [...usuarios].sort((a, b) => (b.ativo - a.ativo) || (ordem[a.papel] ?? 9) - (ordem[b.papel] ?? 9) || a.nome.localeCompare(b.nome));
   el.innerHTML = `
-    <div class="o-banner">${ic('users', 18)}<div class="txt"><b>Quem cadastra quem</b>Motoristas são cadastrados automaticamente ao enviar a CNH em Documentos. Mecânicos, pelo botão ao lado. Clique em alguém para editar, gerar nova senha ou desativar. O convite de usuários do escritório (por e-mail) chega numa próxima etapa.</div></div>
+    <div class="o-banner">${ic('users', 18)}<div class="txt"><b>Quem cadastra quem</b>Motoristas são cadastrados automaticamente ao enviar a CNH em Documentos. Mecânicos e pessoas do escritório, pelos botões ao lado. Clique em alguém para editar, gerar nova senha ou desativar.</div></div>
     ${painel(`Usuários (${usuarios.filter(u => u.ativo).length} ativos)`,
       tabela(['Nome', 'Login / e-mail', 'Papel', 'Situação'],
         lista.map(u => `<tr class="clickable" data-usuario="${u.id}" style="${u.ativo ? '' : 'opacity:.55;'}"><td>${nomeCelula(u.nome)}</td><td class="mono">${esc(loginDoEmail(u.email))}</td><td>${esc(papelLabel[u.papel] || u.papel)}</td><td>${!u.ativo ? badge('grey', 'Desativado') : u.senha_temporaria ? badge('amber', 'Aguardando 1º acesso') : badge('green', 'Ativo')}</td></tr>`)),
-      `<button class="btn btn-primary btn-sm" id="btnNovoMecanico">${ic('wrench', 15)} Cadastrar mecânico</button>`)}`;
+      `${['admin_transportadora', 'admin_mover_ia'].includes(usuarioAtual.papel) ? `<button class="btn btn-outline btn-sm" id="btnNovoEscritorio">${ic('users', 15)} Cadastrar usuário do escritório</button>` : ''}
+       <button class="btn btn-primary btn-sm" id="btnNovoMecanico">${ic('wrench', 15)} Cadastrar mecânico</button>`)}`;
   document.getElementById('btnNovoMecanico').addEventListener('click', abrirCadastroMecanico);
+  const bEsc = document.getElementById('btnNovoEscritorio');
+  if(bEsc) bEsc.addEventListener('click', () => abrirCadastroEscritorio(usuarios));
   el.querySelectorAll('[data-usuario]').forEach(tr => tr.addEventListener('click', () => abrirEditarUsuario(usuarios.find(u => u.id === tr.dataset.usuario))));
 }
 
@@ -504,5 +507,37 @@ function abrirEditarDocumento(d, nomeReferente){
     fecharModal();
     mostrarToast('✅ Documento excluído');
     loadDocumentos();
+  });
+}
+
+// Cadastro de usuário do escritório (papel "Escritório"/gestor) — só o administrador.
+// O login é o e-mail da pessoa; a senha temporária aparece na tela e ela troca no 1º acesso.
+function abrirCadastroEscritorio(usuarios){
+  const plano = PLANOS[(usuarioAtual.transportadora && usuarioAtual.transportadora.plano) || 'Essencial'] || PLANOS.Essencial;
+  const emUso = usuarios.filter(u => u.ativo && u.papel !== 'motorista' && u.papel !== 'admin_mover_ia').length;
+  abrirModal('Cadastrar usuário do escritório', `
+    <form id="formNovoEscritorio">
+      <div class="l2">A pessoa entra no painel com o <b>e-mail</b> e a senha temporária que vai aparecer na tela, e troca a senha no primeiro acesso. Ela vê e edita tudo da transportadora, menos cadastrar outros usuários do escritório.</div>
+      ${emUso >= plano.escritorio ? `<div class="o-banner" style="margin:0;">${ic('alert', 18)}<div class="txt"><b>Franquia do plano atingida</b>Seu plano inclui ${plano.escritorio} usuários de escritório (${emUso} em uso, contando mecânicos). Um usuário a mais entra como adicional na mensalidade.</div></div>` : ''}
+      ${campoTexto('neNome', 'Nome completo', '', 'required minlength="5" placeholder="ex: Ana Paula Souza"')}
+      ${campoTexto('neEmail', 'E-mail (será o login)', '', 'required inputmode="email" autocapitalize="none" placeholder="ex: ana@chaveslog.com.br"')}
+      <div class="err" id="neErro"></div>
+      <button type="submit">Cadastrar</button>
+    </form>`);
+  document.getElementById('formNovoEscritorio').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const erro = document.getElementById('neErro');
+    const nome = document.getElementById('neNome').value.trim().replace(/\s+/g, ' ');
+    const email = document.getElementById('neEmail').value.trim().toLowerCase();
+    if(nome.split(' ').length < 2){ erro.textContent = 'Digite nome e sobrenome.'; return; }
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ erro.textContent = 'E-mail inválido.'; return; }
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Cadastrando...';
+    const r = await chamarFuncaoServidor('gerenciar-usuario', { acao: 'criar_escritorio', nome, email });
+    if(r.error){ erro.textContent = r.error; btn.disabled = false; btn.textContent = 'Cadastrar'; return; }
+    fecharModal();
+    await mostrarCredenciaisNovoMotorista(r.dados, 'Usuário do escritório cadastrado',
+      `Anote e repasse para ${nome.split(' ')[0]}. O acesso é pelo mesmo endereço do app, com o e-mail e esta senha temporária; no primeiro acesso, o app pede para criar uma senha nova.`);
+    loadEscritorio();
   });
 }

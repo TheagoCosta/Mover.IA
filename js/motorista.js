@@ -93,6 +93,8 @@ async function carregarAlertasMotorista(veiculoIds){
       .eq('referente_a', 'veiculo').in('referente_id', veiculoIds);
     (docsVeiculo||[]).filter(d => statusDocumento(d) !== 'ok').forEach(d => alertas.push({ ...d, origem: 'Veículo do conjunto' }));
   }
+  const { data: caps } = await sb.from('capacitacao').select('id, tipo, validade').eq('motorista_id', session.user.id).not('validade', 'is', null);
+  (caps||[]).filter(c => statusDocumento({ validade: c.validade }) !== 'ok').forEach(c => alertas.push({ ...c, status:'ok', origem: 'Capacitação', destino: 'capacitacoes' }));
   return alertas.sort((a, b) => PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)]);
 }
 
@@ -169,6 +171,8 @@ function montarTelaMotorista({ header, conteudo, tab, voltarPara = 'home' }){
     motoristaScreen = 'home'; motoristaTab = b.dataset.tab; loadShellMotorista(); window.scrollTo(0, 0);
   }));
   document.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => irParaMotorista(b.dataset.ir)));
+  const sino = document.getElementById('btnSinoMotorista');
+  if(sino) sino.addEventListener('click', () => irParaMotorista('notificacoes'));
   const voltar = document.getElementById('btnVoltar');
   if(voltar) voltar.addEventListener('click', () => irParaMotorista(voltarPara));
 }
@@ -198,6 +202,7 @@ async function loadShellMotorista(){
     jornadaPausa: loadJornadaPausa, jornadaEncerrar: loadJornadaEncerrar, abastecimento: loadAbastecimentoMotorista,
     documentos: loadDocumentosMotorista, historicoJornada: loadHistoricoJornadas, historicoJornadaDetalhe: loadHistoricoJornadaDetalhe,
     conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista, oficina: loadOficinaMotorista,
+    agendamentos: loadAgendamentosMotorista, capacitacoes: loadCapacitacoesMotorista, notificacoes: loadNotificacoesMotorista,
   };
   if(subtelas[motoristaScreen]) return subtelas[motoristaScreen]();
   if(motoristaScreen.startsWith('emBreve:')) return loadEmBreveMotorista(motoristaScreen.slice(8));
@@ -252,6 +257,8 @@ async function loadAbaInicio(){
     sb.from('chamado_manutencao').select('status').eq('motorista_id', session.user.id).neq('status', 'concluido'),
   ]);
   const chamadosAbertos = (meusChamados || []).length;
+  const [naoLidas, agendamentos] = await Promise.all([contarNaoLidas(), carregarAgendamentosMotorista()]);
+  const proximoAg = agendamentos[0];
   const primeiroNome = (usuarioAtual.nome || '').split(' ')[0];
   const cavalo = placaCavalo(conjunto);
   const sub = cavalo ? `${cavalo} · ${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : ''}` : (usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '');
@@ -264,11 +271,12 @@ async function loadAbaInicio(){
 
   montarTelaMotorista({
     tab: 'inicio',
-    header: headerPrincipal(`${saudacaoHorario()}, ${primeiroNome}`, sub, `<div class="avatar" data-ir="perfil" style="cursor:pointer;">${esc(iniciais(usuarioAtual.nome))}</div>`),
+    header: headerPrincipal(`${saudacaoHorario()}, ${primeiroNome}`, sub,
+      `<div style="display:flex; align-items:center; gap:8px;">${botaoSino('btnSinoMotorista', naoLidas)}<div class="avatar" data-ir="perfil" style="cursor:pointer;">${esc(iniciais(usuarioAtual.nome))}</div></div>`),
     conteudo: `
       ${excedeu ? `<div class="alert-card vencido">${ic('alert', 18)}<div class="txt"><b>Hora de parar</b><span>Você passou de 5h30 dirigindo sem parar. Faça uma parada assim que for seguro.</span></div></div>` : ''}
       ${avisoChecklist ? `<div class="alert-card" data-ir="tab:checklist" style="cursor:pointer;">${ic('checksq', 18)}<div class="txt"><b>Checklist vence às ${fmtHora(travaChecklist.venceEm)}</b><span>Faça um novo antes disso para o app não travar.</span></div></div>` : ''}
-      ${alertas.map(a => `<div class="alert-card ${statusDocumento(a) === 'vencido' ? 'vencido' : ''} clickable" data-ir="documentos" style="cursor:pointer;">${ic('alert', 18)}<div class="txt"><b>${esc(a.tipo)} — ${ROTULO_STATUS_DOC[statusDocumento(a)]}</b><span>${esc(a.origem)} · ${esc(textoVencimento(a))}</span></div></div>`).join('')}
+      ${alertas.map(a => `<div class="alert-card ${statusDocumento(a) === 'vencido' ? 'vencido' : ''} clickable" data-ir="${a.destino || 'documentos'}" style="cursor:pointer;">${ic('alert', 18)}<div class="txt"><b>${esc(a.tipo)} — ${ROTULO_STATUS_DOC[statusDocumento(a)]}</b><span>${esc(a.origem)} · ${esc(textoVencimento(a))}</span></div></div>`).join('')}
       <div class="section-label">Jornada de hoje</div>
       ${cardJornadaResumo(jornada)}
       <div class="section-label">Acesso rápido</div>
@@ -278,8 +286,8 @@ async function loadAbaInicio(){
         ${tile('documentos', 'doc', 'Documentos', alertas.length ? `${alertas.length} pendência${alertas.length > 1 ? 's' : ''}` : 'Tudo em dia')}
         ${tile('abastecimento', 'fuel', 'Abastecimento', media ? `${media} (último)` : 'Registrar')}
         ${tile('oficina', 'wrench', 'Oficina', chamadosAbertos ? `${chamadosAbertos} em aberto` : 'Avisar um problema')}
-        ${tile('emBreve:capacitacoes', 'award', 'Capacitações', 'Em breve', true)}
-        ${tile('emBreve:agendamentos', 'cal', 'Agendamentos', 'Em breve', true)}
+        ${tile('agendamentos', 'cal', 'Agendamentos', proximoAg ? `${agendamentos.length} próximo${agendamentos.length > 1 ? 's' : ''} · ${fmtDataCurta(proximoAg.data_prevista)}` : 'Nenhum marcado')}
+        ${tile('capacitacoes', 'award', 'Capacitações', alertas.some(a => a.origem === 'Capacitação') ? 'Renovação pendente' : 'Meus treinamentos')}
       </div>`,
   });
 }
@@ -654,8 +662,9 @@ function loadAbaMais(){
     { ir:'abastecimento', l:'Abastecimentos', i:'fuel', m:'Registrar e ver o consumo médio' },
     { ir:'historicoJornada', l:'Jornadas anteriores', i:'clock', m:'Linha do tempo e assinaturas' },
     { ir:'oficina', l:'Oficina / Manutenção', i:'wrench', m:'Avisar um problema e acompanhar o conserto' },
-    { ir:'emBreve:capacitacoes', l:'Capacitações', i:'award', m:'Em breve' },
-    { ir:'emBreve:agendamentos', l:'Agendamentos', i:'cal', m:'Em breve' },
+    { ir:'agendamentos', l:'Agendamentos', i:'cal', m:'Revisões, exames e compromissos' },
+    { ir:'capacitacoes', l:'Capacitações', i:'award', m:'Treinamentos e certificados' },
+    { ir:'notificacoes', l:'Notificações', i:'bell', m:'Avisos do escritório e da oficina' },
     { ir:'perfil', l:'Meu perfil', i:'user', m:usuarioAtual.nome },
   ];
   montarTelaMotorista({

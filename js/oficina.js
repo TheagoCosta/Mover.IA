@@ -184,10 +184,15 @@ function montarTelaMecanico({ header, conteudo }){
   document.querySelectorAll('[data-tab-mec]').forEach(b => b.addEventListener('click', () => { mecanicoTab = b.dataset.tabMec; loadShellMecanico(); window.scrollTo(0, 0); }));
   const sair = document.getElementById('btnSairMec');
   if(sair) sair.addEventListener('click', () => { if(confirm('Sair deste aparelho?')) doLogout(); });
+  const sino = document.getElementById('btnSinoMecanico');
+  if(sino){
+    sino.addEventListener('click', () => abrirNotificacoesJanela(() => { mecanicoTab = 'chamados'; mecanicoFiltro = 'pendentes'; loadShellMecanico(); }));
+    atualizarSinos();
+  }
 }
 
 function headerMecanico(titulo, sub){
-  return headerPrincipal(titulo, sub, `<button class="back-btn" id="btnSairMec" title="Sair" style="width:auto; height:auto; padding:8px 10px; border-radius:9px; background:var(--asphalt-800); border:1px solid var(--asphalt-700); color:var(--text-secondary);">${ic('logout', 16)}</button>`);
+  return headerPrincipal(titulo, sub, `<div style="display:flex; align-items:center; gap:6px;">${botaoSino('btnSinoMecanico', 0)}<button class="back-btn" id="btnSairMec" title="Sair" style="width:auto; height:auto; padding:8px 10px; border-radius:9px; background:var(--asphalt-800); border:1px solid var(--asphalt-700); color:var(--text-secondary);">${ic('logout', 16)}</button></div>`);
 }
 
 async function loadShellMecanico(){

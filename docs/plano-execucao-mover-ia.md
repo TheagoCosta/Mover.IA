@@ -202,12 +202,13 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [x] **Veículos com filtro** por cavalos, 1ª carretas, 2ª carretas, todas as carretas e dollys, busca por placa e coluna de posição no conjunto
 - [x] **Preço por litro no abastecimento externo** (diesel e Arla, total calculado; escritório vê gasto em postos) e **média do Arla separada** da média do diesel (a do diesel continua principal). Migração `20260929_05_abastecimento_precos_media_arla.sql`
 - [x] **Checklist obrigatório a cada 24h**: vencido (ou nunca feito) → app do motorista trava na aba Checklist até enviar um novo; com jornada aberta a aba Jornada continua liberada (registro de paradas não pode travar); motorista sem conjunto não trava; aviso 2h antes de vencer; escritório vê em Motoristas quem está com o checklist em dia ou vencido. (Trava feita no app; o prazo de 24h é a constante VALIDADE_CHECKLIST_HORAS em js/motorista.js)
-- Próxima etapa combinada: 4) agenda, capacitações, notificações, convite de usuários do escritório
+- [x] **Etapa 4 (30/09)**: **Agenda** (escritório marca/edita/conclui/cancela revisões, exames e compromissos; motorista vê os dele e dos veículos do conjunto e confirma "estou ciente"; painel mostra os próximos 7 dias e atrasados) · **Capacitações** (cadastro com instituição, carga horária, validade e certificado; motorista vê as dele; alerta quando vence em até 30 dias) · **Notificações** (sino para motorista, mecânico e escritório; criadas automaticamente pelo banco: chamado novo/atualizado, viagem nova, agendamento novo, capacitação registrada, checklist com irregularidade) · **Cadastro de usuário do escritório** pelo administrador (login = e-mail, senha temporária, troca no 1º acesso). Migração `20260930_01_agenda_capacitacoes_notificacoes.sql`; função `gerenciar-usuario` v2. Segurança testada no banco real
+- Próximos passos possíveis: Bloco 5 (integração Bsoft), notificações no celular com a tela desligada (push), aviso automático de documentos/capacitações vencendo no sino, testes com mais motoristas (Fase 4)
 
 ### Bloco 4 — Painel do escritório
 - [x] Dashboard com KPIs e alertas (29/09 — motoristas, conjuntos, checklists irregulares, documentos vencendo, horas de condução da semana)
 - [x] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos (29/09 — consulta, detalhes, exportação para Excel, cadastro e edição)
-- [ ] Agenda de compromissos (revisões, exames, treinamentos)
+- [x] Agenda de compromissos (revisões, exames, treinamentos) — 30/09
 - [ ] Relatório de consumo médio por veículo e por motorista (comparativo, evolução no tempo, alerta de consumo fora do padrão)
 - [x] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação (29/09)
 
