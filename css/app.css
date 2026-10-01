@@ -35,6 +35,13 @@ html,body{min-height:100%;}
 body{margin:0; background:var(--asphalt-900); color:var(--text-primary); font-family:var(--font-body); -webkit-font-smoothing:antialiased;}
 body.tema-escritorio{background:var(--paper-100); color:var(--ink-900);}
 h1,h2{font-family:var(--font-title); letter-spacing:.01em; margin:0;}
+
+/* barra de "carregando" no topo (ver mostrarCarregando em ui.js) */
+body.carregando::before{content:''; position:fixed; top:0; left:0; right:0; height:3px; z-index:200;
+  background:linear-gradient(90deg, transparent 0, var(--line-yellow) 30%, var(--line-yellow) 70%, transparent 100%);
+  background-size:50% 100%; background-repeat:no-repeat; animation:barra-carregando 1s linear infinite;}
+body.carregando .m-content{opacity:.6; transition:opacity .15s;}
+@keyframes barra-carregando{from{background-position:-50% 0;} to{background-position:150% 0;}}
 img{max-width:100%;}
 
 /* ---------- formulários e botões (base) ---------- */

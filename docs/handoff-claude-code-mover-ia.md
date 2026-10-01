@@ -17,8 +17,8 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 
 ## 2. Arquitetura
 
-- **Frontend sem build:** `index.html` + `css/app.css` + `js/*.js` (scripts clássicos, todas as funções globais — um arquivo chama funções dos outros). Bibliotecas por CDN: supabase-js 2, jsQR, pdf.js 3.11.174, tesseract.js 5.1.1. Fontes Oswald/Inter/JetBrains Mono (Google Fonts).
-- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20260930b`) para os celulares baixarem a versão nova.
+- **Frontend sem build:** `index.html` + `css/app.css` + `js/*.js` (scripts clássicos, todas as funções globais — um arquivo chama funções dos outros). Bibliotecas por CDN: supabase-js 2.117.2 (versão fixa, no `index.html`); jsQR, pdf.js 3.11.174 e tesseract.js 5.1.1 são **baixados só quando usados** (`carregarBiblioteca()` / `usarPdfJs()` em `js/ui.js`) — não voltar a colocá-los no `<head>`, isso deixava o celular lento. Fontes Oswald/Inter/JetBrains Mono (Google Fonts).
+- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261001a`) para os celulares baixarem a versão nova.
 - **Backend:** Supabase `otllslhjbyjtktxyvezy` (Postgres + Auth + Storage + Edge Functions). O Claude acessa pelo **conector oficial do Supabase** (MCP) — o Thiago conecta em Configurações → Conectores do app do Claude. Com ele o Claude lê o banco, aplica migrações e publica funções.
 - **Hospedagem:** GitHub `TheagoCosta/Mover.IA`, branch `main` → **GitHub Pages: https://theagocosta.github.io/Mover.IA/** (maiúsculas importam; `/mover-ia/` dá 404). O Netlify antigo está pausado/abandonado.
 - **Publicação:** o Claude faz o commit local; o **Thiago clica em "Push origin" no GitHub Desktop** (o git do terminal não tem as credenciais dele). Depois de ~2 min o site atualiza.

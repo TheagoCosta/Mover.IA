@@ -11,11 +11,12 @@
 // CNH, e renderiza numa resolução bem alta pra não perder os números
 // pequenos (CPF, nº de registro) nem o texto em vermelho do cartão.
 async function ocrArquivo(file){
-  if(typeof Tesseract === 'undefined') return '';
   let worker = null;
   try{
+    await carregarBiblioteca('ocr');
     let fonteImagem = file;
     if(file.type === 'application/pdf'){
+      await usarPdfJs();
       const buffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
       const pagina = await pdf.getPage(1);

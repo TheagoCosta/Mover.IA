@@ -83,17 +83,15 @@ async function carregarViagemAtual(){
 // (status calculado pela validade — ver statusDocumento em ui.js)
 async function carregarAlertasMotorista(veiculoIds){
   const alertas = [];
-  const { data: docsMotorista } = await sb.from('documento')
-    .select('id, tipo, status, validade')
-    .eq('referente_a', 'motorista').eq('referente_id', session.user.id);
+  const [{ data: docsMotorista }, { data: docsVeiculo }, { data: caps }] = await Promise.all([
+    sb.from('documento').select('id, tipo, status, validade').eq('referente_a', 'motorista').eq('referente_id', session.user.id),
+    veiculoIds && veiculoIds.length
+      ? sb.from('documento').select('id, tipo, status, validade, referente_id').eq('referente_a', 'veiculo').in('referente_id', veiculoIds)
+      : Promise.resolve({ data: [] }),
+    sb.from('capacitacao').select('id, tipo, validade').eq('motorista_id', session.user.id).not('validade', 'is', null),
+  ]);
   (docsMotorista||[]).filter(d => statusDocumento(d) !== 'ok').forEach(d => alertas.push({ ...d, origem: 'Seu documento' }));
-  if(veiculoIds && veiculoIds.length){
-    const { data: docsVeiculo } = await sb.from('documento')
-      .select('id, tipo, status, validade, referente_id')
-      .eq('referente_a', 'veiculo').in('referente_id', veiculoIds);
-    (docsVeiculo||[]).filter(d => statusDocumento(d) !== 'ok').forEach(d => alertas.push({ ...d, origem: 'Veículo do conjunto' }));
-  }
-  const { data: caps } = await sb.from('capacitacao').select('id, tipo, validade').eq('motorista_id', session.user.id).not('validade', 'is', null);
+  (docsVeiculo||[]).filter(d => statusDocumento(d) !== 'ok').forEach(d => alertas.push({ ...d, origem: 'Veículo do conjunto' }));
   (caps||[]).filter(c => statusDocumento({ validade: c.validade }) !== 'ok').forEach(c => alertas.push({ ...c, status:'ok', origem: 'Capacitação', destino: 'capacitacoes' }));
   return alertas.sort((a, b) => PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)]);
 }
@@ -108,6 +106,12 @@ async function carregarAlertasMotorista(veiculoIds){
 // ---------------------------------------------------------------------
 const VALIDADE_CHECKLIST_HORAS = 24;
 let travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false };
+// A situação do checklist é conferida no banco no máximo 1 vez por minuto
+// (antes era a cada toque, o que deixava a navegação lenta). Enviar
+// checklist e abrir/encerrar jornada forçam uma nova conferência.
+const TRAVA_CHECKLIST_CACHE_MS = 60000;
+let travaVerificadaEm = 0;
+function invalidarTravaChecklist(){ travaVerificadaEm = 0; }
 
 async function carregarUltimoChecklist(){
   const { data } = await sb.from('checklist').select('id, criado_em')
@@ -117,6 +121,11 @@ async function carregarUltimoChecklist(){
 }
 
 async function atualizarTravaChecklist(){
+  if(Date.now() - travaVerificadaEm < TRAVA_CHECKLIST_CACHE_MS){
+    if(travaChecklist.exigido) travaChecklist.travado = !travaChecklist.venceEm || travaChecklist.venceEm <= new Date();
+    return travaChecklist;
+  }
+  travaVerificadaEm = Date.now();
   const conjunto = await carregarMeuConjunto();
   if(!conjunto){ travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false }; return travaChecklist; }
   const [ultimo, { data: aberta }] = await Promise.all([
@@ -168,6 +177,7 @@ function montarTelaMotorista({ header, conteudo, tab, voltarPara = 'home' }){
     </div>`;
   document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
     if(b.classList.contains('travada')){ mostrarToast('🔒 Faça o checklist do veículo para liberar o app'); return; }
+    document.querySelectorAll('[data-tab]').forEach(o => o.classList.toggle('active', o === b));  // resposta imediata ao toque
     motoristaScreen = 'home'; motoristaTab = b.dataset.tab; loadShellMotorista(); window.scrollTo(0, 0);
   }));
   document.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => irParaMotorista(b.dataset.ir)));
@@ -188,6 +198,12 @@ function irParaMotorista(destino){
 // Roteamento
 // ---------------------------------------------------------------------
 async function loadShellMotorista(){
+  mostrarCarregando();
+  try{ await abrirTelaMotorista(); }
+  finally{ esconderCarregando(); }
+}
+
+async function abrirTelaMotorista(){
   // nomes antigos de telas, mantidos por compatibilidade
   if(motoristaScreen === 'checklist'){ motoristaScreen = 'home'; motoristaTab = 'checklist'; }
   if(motoristaScreen === 'documentosMotorista'){ motoristaScreen = 'documentos'; docAbaMotorista = 'meus'; }
@@ -251,13 +267,13 @@ function cardMedidorConducao(jornada){
 async function loadAbaInicio(){
   const conjunto = await carregarMeuConjunto();
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
-  const [jornada, viagem, alertas, { data: ultimoAbast }, { data: meusChamados }] = await Promise.all([
+  const [jornada, viagem, alertas, { data: ultimoAbast }, { data: meusChamados }, naoLidas, agendamentos] = await Promise.all([
     carregarJornadaAtiva(), carregarViagemAtual(), carregarAlertasMotorista(veiculoIds),
     sb.from('abastecimento').select('media_calculada').eq('motorista_id', session.user.id).not('media_calculada', 'is', null).order('data', { ascending:false }).limit(1),
     sb.from('chamado_manutencao').select('status').eq('motorista_id', session.user.id).neq('status', 'concluido'),
+    contarNaoLidas(), carregarAgendamentosMotorista(),
   ]);
   const chamadosAbertos = (meusChamados || []).length;
-  const [naoLidas, agendamentos] = await Promise.all([contarNaoLidas(), carregarAgendamentosMotorista()]);
   const proximoAg = agendamentos[0];
   const primeiroNome = (usuarioAtual.nome || '').split(' ')[0];
   const cavalo = placaCavalo(conjunto);
@@ -368,6 +384,7 @@ async function iniciarJornada(){
   }).select('id').single();
   if(error){ alert('Erro ao iniciar jornada: ' + error.message); loadShellMotorista(); return; }
   await sb.from('jornada_evento').insert({ jornada_id: data.id, tipo: 'inicio' });
+  invalidarTravaChecklist();
   loadShellMotorista();
 }
 
@@ -472,6 +489,7 @@ async function confirmarEncerramento(canvas){
   }).eq('id', jornadaEmEdicaoId);
   if(error){ alert('Erro ao encerrar jornada: ' + error.message); btn.disabled = false; btn.textContent = 'Assinar e encerrar jornada'; return; }
   await sb.from('jornada_evento').insert({ jornada_id: jornadaEmEdicaoId, tipo: 'fim', observacao: obs || null });
+  invalidarTravaChecklist();
 
   mostrarToast('✅ Jornada encerrada');
   irParaMotorista('tab:jornada');
@@ -609,6 +627,7 @@ async function enviarChecklist(){
   const irregulares = respostas.filter(r => r.resposta === 'bad').length;
   mostrarToast(irregulares ? `✅ Checklist enviado — ${irregulares} irregularidade${irregulares > 1 ? 's' : ''} avisada${irregulares > 1 ? 's' : ''} ao escritório` : '✅ Checklist enviado ao escritório');
   chkAnswers = {};
+  invalidarTravaChecklist();
   irParaMotorista('tab:inicio');
 }
 

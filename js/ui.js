@@ -3,6 +3,46 @@
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
 
+// ---------- bibliotecas pesadas, baixadas só quando usadas ----------
+// Leitor de PDF, de QR Code e OCR somam ~630 KB que a maioria das telas
+// nunca usa — carregar tudo na abertura deixava o app lento no celular.
+const BIBLIOTECAS = {
+  pdf: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js',
+  qr:  'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
+  ocr: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
+};
+const bibliotecasCarregando = {};
+function carregarBiblioteca(nome){
+  if(!bibliotecasCarregando[nome]) bibliotecasCarregando[nome] = new Promise((ok, falha) => {
+    const s = document.createElement('script');
+    s.src = BIBLIOTECAS[nome];
+    s.onload = ok;
+    s.onerror = () => { delete bibliotecasCarregando[nome]; s.remove(); falha(new Error('Não consegui baixar um componente do app. Confira a internet e tente de novo.')); };
+    document.head.appendChild(s);
+  });
+  return bibliotecasCarregando[nome];
+}
+async function usarPdfJs(){
+  await carregarBiblioteca('pdf');
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  }
+  return pdfjsLib;
+}
+
+// ---------- barra de "carregando" no topo ----------
+// Aparece só se a tela demorar mais que um instante, para o toque nunca
+// parecer ignorado.
+let timerCarregando = null;
+function mostrarCarregando(){
+  clearTimeout(timerCarregando);
+  timerCarregando = setTimeout(() => document.body.classList.add('carregando'), 120);
+}
+function esconderCarregando(){
+  clearTimeout(timerCarregando);
+  document.body.classList.remove('carregando');
+}
+
 // Ícones (mesmos desenhos do protótipo). ic('truck', 18)
 function ic(nome, tamanho = 18, cor = 'currentColor'){
   const p = {

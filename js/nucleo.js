@@ -83,6 +83,7 @@ async function doLogout(){
   session = null;
   usuarioAtual = null;
   meuConjunto = null;
+  invalidarTravaChecklist();
   motoristaScreen = 'home';
   motoristaTab = 'inicio';
   chkAnswers = {};

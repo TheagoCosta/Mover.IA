@@ -41,6 +41,9 @@ async function abrirScannerQR(docId, onSalvo){
     fecharScanner();
     return;
   }
+  try{ await carregarBiblioteca('qr'); }
+  catch(e){ alert(e.message); fecharScanner(); return; }
+  if(!ativo) return;  // cancelou enquanto baixava
   video.srcObject = qrStreamAtivo;
 
   function tick(){
@@ -296,10 +299,7 @@ async function anexarArquivo(docId, file, onDone){
 }
 
 async function extrairTextoPdf(file){
-  if(typeof pdfjsLib === 'undefined') return '';
-  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-  }
+  try{ await usarPdfJs(); } catch(e){ return ''; }
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   let texto = '';
