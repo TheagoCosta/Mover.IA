@@ -156,11 +156,16 @@ async function avancarChamado(chamado, observacao){
 // ---------------------------------------------------------------------
 let novoChamado = { categoria: null, urgencia: null };
 
+async function buscarChamadosMotorista(){
+  const { data } = await sb.from('chamado_manutencao').select(CAMPOS_CHAMADO)
+    .eq('motorista_id', session.user.id).order('criado_em', { ascending:false }).limit(30);
+  return data || [];
+}
+
 async function loadOficinaMotorista(){
   const conjunto = await carregarMeuConjunto();
   const veiculos = veiculosDoConjunto(conjunto);
-  const { data: chamados } = await sb.from('chamado_manutencao').select(CAMPOS_CHAMADO)
-    .eq('motorista_id', session.user.id).order('criado_em', { ascending:false }).limit(30);
+  const chamados = await dadosTela('oficina', buscarChamadosMotorista, () => { if(motoristaScreen === 'oficina') loadOficinaMotorista(); });
   novoChamado = { categoria: null, urgencia: null };
 
   montarTelaMotorista({
@@ -272,6 +277,7 @@ function headerMecanico(titulo, sub){
 }
 
 async function loadShellMecanico(){
+  navegacaoTela++;
   const inicio = performance.now();
   mostrarCarregando();
   try{ await abrirTelaMecanico(); }
@@ -282,8 +288,12 @@ async function abrirTelaMecanico(){
   if(mecanicoTab === 'frota') return loadFrotaMecanico();
   if(mecanicoTab === 'agenda') return loadAgendaMecanico();
 
-  const { data: chamados, error } = await sb.from('chamado_manutencao').select(CAMPOS_CHAMADO).order('criado_em', { ascending:false }).limit(200);
+  const { data: chamados, error } = await dadosTela('mec_chamados', async () => {
+    const { data, error } = await sb.from('chamado_manutencao').select(CAMPOS_CHAMADO).order('criado_em', { ascending:false }).limit(200);
+    return { data: data || [], error: error ? { message: error.message } : null };
+  }, () => { if(mecanicoTab === 'chamados') abrirTelaMecanico(); });
   const lista = chamados || [];
+  setTimeout(() => preCarregarTela('mec_agenda', buscarAgendaMecanico), 400);
   const pendentes = lista.filter(c => c.status !== 'concluido')
     .sort((a, b) => (b.urgencia === 'alta') - (a.urgencia === 'alta') || (a.status === 'aberto' ? 0 : 1) - (b.status === 'aberto' ? 0 : 1) || new Date(a.criado_em) - new Date(b.criado_em));
   const concluidos = lista.filter(c => c.status === 'concluido');
@@ -371,11 +381,14 @@ function cardChamadoMecanico(c){
 }
 
 async function loadFrotaMecanico(){
-  const [{ data: conjuntos }, { data: chamados }, { data: veiculos }] = await Promise.all([
-    sb.from('conjunto').select('id, ativo, motorista:motorista_id(nome), conjunto_item(ordem, veiculo_id, veiculo:veiculo_id(placa, tipo, modelo))'),
-    sb.from('chamado_manutencao').select('veiculo_id, status').neq('status', 'concluido'),
-    sb.from('veiculo').select('id, placa, tipo, modelo').order('placa'),
-  ]);
+  const [{ data: conjuntos }, { data: chamados }, { data: veiculos }] = await dadosTela('mec_frota', async () => {
+    const r = await Promise.all([
+      sb.from('conjunto').select('id, ativo, motorista:motorista_id(nome), conjunto_item(ordem, veiculo_id, veiculo:veiculo_id(placa, tipo, modelo))'),
+      sb.from('chamado_manutencao').select('veiculo_id, status').neq('status', 'concluido'),
+      sb.from('veiculo').select('id, placa, tipo, modelo').order('placa'),
+    ]);
+    return r.map(x => ({ data: x.data || [] }));
+  }, () => { if(mecanicoTab === 'frota') abrirTelaMecanico(); });
   const abertosPorVeiculo = {};
   (chamados || []).forEach(c => { if(c.veiculo_id) abertosPorVeiculo[c.veiculo_id] = (abertosPorVeiculo[c.veiculo_id] || 0) + 1; });
   const noConjunto = new Set();

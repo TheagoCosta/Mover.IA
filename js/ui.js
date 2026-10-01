@@ -71,6 +71,53 @@ if(/[?&]atualizar=/.test(location.search)){   // acabou de atualizar: limpa o en
 }
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') conferirVersaoNova(); });
 
+// ---------- dados das telas guardados na memória ----------
+// No iPhone cada ida ao servidor custa ~0,5 s. Então cada tela guarda os
+// dados que já carregou: ao voltar nela, aparece NA HORA e se atualiza por
+// trás (só redesenha se algo mudou e a pessoa não estiver digitando).
+// Qualquer gravação no servidor descarta tudo (ver medirServidor abaixo),
+// para nunca mostrar dado velho depois de uma ação.
+const cacheTelas = {};
+let navegacaoTela = 0;   // muda a cada troca de tela (a atualização por trás só redesenha a tela certa)
+let versaoDados = 0;     // muda a cada gravação (resposta que saiu antes dela é descartada)
+function limparCacheTelas(){ versaoDados++; for(const k in cacheTelas) delete cacheTelas[k]; }
+function guardarTela(chave, dados){ cacheTelas[chave] = { dados, em: Date.now() }; }
+const copiaDados = (d) => d === undefined ? d : JSON.parse(JSON.stringify(d));
+function usuarioMexendo(){
+  const ativo = document.activeElement;
+  if(ativo && /^(INPUT|TEXTAREA|SELECT)$/.test(ativo.tagName)) return true;
+  if(typeof chkAnswers !== 'undefined' && Object.keys(chkAnswers).length) return true;
+  if(document.querySelector('#chCategorias .active, #chUrgencias .active')) return true;
+  const resumo = document.getElementById('chMidiasResumo');
+  if(resumo && resumo.textContent.trim()) return true;
+  return [...document.querySelectorAll('#app textarea, #app input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=hidden])')].some(c => c.value);
+}
+async function dadosTela(chave, buscar, redesenhar){
+  const guardado = cacheTelas[chave];
+  if(!guardado){
+    const versao = versaoDados, dados = await buscar();
+    if(versao === versaoDados) guardarTela(chave, dados);
+    return copiaDados(dados);
+  }
+  if(Date.now() - guardado.em > 4000){
+    const minhaTela = navegacaoTela, versao = versaoDados;
+    guardado.em = Date.now();   // não dispara outra atualização enquanto esta não volta
+    buscar().then((novos) => {
+      if(versao !== versaoDados) return;
+      const mudou = JSON.stringify(novos) !== JSON.stringify(guardado.dados);
+      guardarTela(chave, novos);
+      if(mudou && minhaTela === navegacaoTela && !usuarioMexendo()) redesenhar();
+    }).catch(() => { /* sem internet: fica com o que tem */ });
+  }
+  return copiaDados(guardado.dados);
+}
+// busca em segundo plano (para a primeira visita à tela já ser instantânea)
+function preCarregarTela(chave, buscar){
+  if(cacheTelas[chave]) return;
+  const versao = versaoDados;
+  buscar().then((d) => { if(versao === versaoDados && !cacheTelas[chave]) guardarTela(chave, d); }).catch(() => {});
+}
+
 // ---------- medidor de velocidade (aparece no Perfil do motorista) ----------
 // Guarda quanto tempo o servidor demora para responder e quanto cada tela
 // leva para abrir — para descobrir onde está a demora em cada celular.
@@ -80,9 +127,16 @@ const medidas = { servidor: [], telas: [], prontoEm: null, cacheEm: null };
   window.fetch = async (...args) => {
     const url = String(args[0] && args[0].url || args[0]);
     if(!url.includes('.supabase.co/')) return original(...args);
+    // gravação (tudo que não é leitura, exceto a consulta do Início, login e links de arquivo) → descarta as telas guardadas
+    const metodo = String((args[1] && args[1].method) || (args[0] && args[0].method) || 'GET').toUpperCase();
+    const grava = metodo !== 'GET' && metodo !== 'HEAD' && !/\/rpc\/inicio_motorista|\/auth\/v1\/|\/object\/sign\//.test(url);
+    if(grava) limparCacheTelas();
     const inicio = performance.now();
     try{ return await original(...args); }
-    finally{ medidas.servidor.push(Math.round(performance.now() - inicio)); if(medidas.servidor.length > 40) medidas.servidor.shift(); }
+    finally{
+      if(grava) limparCacheTelas();
+      medidas.servidor.push(Math.round(performance.now() - inicio)); if(medidas.servidor.length > 40) medidas.servidor.shift();
+    }
   };
 })();
 function registrarTela(ms){

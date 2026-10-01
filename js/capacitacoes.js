@@ -145,8 +145,10 @@ function abrirEditarCapacitacao(c, motoristas, el){
 // MOTORISTA
 // ---------------------------------------------------------------------
 async function loadCapacitacoesMotorista(){
-  const { data } = await sb.from('capacitacao').select(CAMPOS_CAPACITACAO).eq('motorista_id', session.user.id).order('validade', { nullsFirst:false });
-  const lista = data || [];
+  const lista = await dadosTela('capacitacoes', async () => {
+    const { data } = await sb.from('capacitacao').select(CAMPOS_CAPACITACAO).eq('motorista_id', session.user.id).order('validade', { nullsFirst:false });
+    return data || [];
+  }, () => { if(motoristaScreen === 'capacitacoes') loadCapacitacoesMotorista(); });
   montarTelaMotorista({
     header: headerVoltar('Capacitações'),
     conteudo: lista.length ? `<div class="card lista">${lista.map(c => `

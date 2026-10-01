@@ -284,7 +284,7 @@ function conteudoAgendaCelular(lista, podeConfirmar, textoVazio){
 
 async function loadAgendamentosMotorista(listaPronta){
   if(!listaPronta){ diaAgenda = null; mesAgenda = null; }  // entrou agora: mês atual, sem filtro
-  const lista = listaPronta || await carregarAgendamentosMotorista();
+  const lista = listaPronta || await dadosTela('agendamentos', carregarAgendamentosMotorista, () => { if(motoristaScreen === 'agendamentos') loadAgendamentosMotorista(); });
   montarTelaMotorista({
     header: headerVoltar('Agendamentos'),
     conteudo: conteudoAgendaCelular(lista, true, 'Revisões, exames, folgas e outros compromissos marcados pelo escritório aparecem aqui.'),
@@ -299,13 +299,17 @@ async function loadAgendamentosMotorista(listaPronta){
   }));
 }
 
+async function buscarAgendaMecanico(){
+  // a regra de acesso do banco já limita aos agendamentos de veículos
+  const { data } = await sb.from('agendamento').select(CAMPOS_AGENDA).eq('status', 'pendente').order('data_prevista').order('hora', { nullsFirst:true });
+  return data || [];
+}
+
 async function loadAgendaMecanico(listaPronta){
   let lista = listaPronta;
   if(!lista){
     diaAgenda = null; mesAgenda = null;
-    // a regra de acesso do banco já limita aos agendamentos de veículos
-    const { data } = await sb.from('agendamento').select(CAMPOS_AGENDA).eq('status', 'pendente').order('data_prevista').order('hora', { nullsFirst:true });
-    lista = data || [];
+    lista = await dadosTela('mec_agenda', buscarAgendaMecanico, () => { if(mecanicoTab === 'agenda') loadAgendaMecanico(); });
   }
   montarTelaMecanico({
     header: headerMecanico('Agenda', 'Revisões e serviços marcados na frota'),

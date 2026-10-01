@@ -26,13 +26,16 @@ async function loadAbastecimentoMotorista(){
   const conjunto = await carregarMeuConjunto();
   const cavalo = veiculosDoConjunto(conjunto).find(ci => ci.ordem === 1) || veiculosDoConjunto(conjunto).find(ci => ci.veiculo.tipo === 'cavalo');
 
-  const [{ data: historico }, { data: ultimoDoVeiculo }, { data: ultimoArla }] = await Promise.all([
-    sb.from('abastecimento')
-      .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
-      .eq('motorista_id', session.user.id).order('data', { ascending: false }).limit(15),
-    cavalo ? sb.from('abastecimento').select('km, data').eq('veiculo_id', cavalo.veiculo_id).order('data', { ascending: false }).limit(1) : Promise.resolve({ data: [] }),
-    cavalo ? sb.from('abastecimento').select('km').eq('veiculo_id', cavalo.veiculo_id).gt('arla_litros', 0).order('data', { ascending: false }).limit(1) : Promise.resolve({ data: [] }),
-  ]);
+  const [{ data: historico }, { data: ultimoDoVeiculo }, { data: ultimoArla }] = await dadosTela('abastecimento', async () => {
+    const r = await Promise.all([
+      sb.from('abastecimento')
+        .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
+        .eq('motorista_id', session.user.id).order('data', { ascending: false }).limit(15),
+      cavalo ? sb.from('abastecimento').select('km, data').eq('veiculo_id', cavalo.veiculo_id).order('data', { ascending: false }).limit(1) : Promise.resolve({ data: [] }),
+      cavalo ? sb.from('abastecimento').select('km').eq('veiculo_id', cavalo.veiculo_id).gt('arla_litros', 0).order('data', { ascending: false }).limit(1) : Promise.resolve({ data: [] }),
+    ]);
+    return r.map(x => ({ data: x.data || [] }));
+  }, () => { if(motoristaScreen === 'abastecimento') loadAbastecimentoMotorista(); });
   const ultimoKm = ultimoDoVeiculo && ultimoDoVeiculo[0] ? Number(ultimoDoVeiculo[0].km) : null;
   const ultimoKmArla = ultimoArla && ultimoArla[0] ? Number(ultimoArla[0].km) : null;
   const media = mediaDe(historico, 'media_calculada');

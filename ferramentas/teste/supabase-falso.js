@@ -104,6 +104,7 @@
   }
   const gravacao = (tabela, tipo) => (dados) => {
     window.__chamadas.push({ tabela, tipo, dados });
+    if(window.limparCacheTelas) window.limparCacheTelas();   // igual ao app real: gravou, descarta as telas guardadas
     const r = { data: { id:'novo' }, error: null };
     const p = { select(){ return p; }, single(){ return Promise.resolve(r); }, eq(){ return p; }, then(ok, e){ return Promise.resolve(r).then(ok, e); } };
     return p;

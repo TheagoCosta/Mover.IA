@@ -48,7 +48,7 @@ function itemNotificacao(n){
 
 // ---------- Motorista: tela própria ----------
 async function loadNotificacoesMotorista(){
-  const lista = await carregarNotificacoes();
+  const lista = await dadosTela('notificacoes', () => carregarNotificacoes(), () => { if(motoristaScreen === 'notificacoes') loadNotificacoesMotorista(); });
   montarTelaMotorista({
     header: headerVoltar('Notificações'),
     conteudo: cartaoAvisosCelular() + (lista.length ? `<div class="card lista">${lista.map(itemNotificacao).join('')}</div>`

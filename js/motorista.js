@@ -51,15 +51,16 @@ function placaCavalo(conjunto){
 
 // Jornada aberta (ativa ou pausada) com todos os eventos, pra calcular o
 // tempo de condução e mostrar a linha do tempo.
-async function carregarJornadaAtiva(){
+async function buscarJornadaAberta(){
   const { data } = await sb.from('jornada')
     .select('id, inicio, status, jornada_evento(tipo, motivo, observacao, criado_em)')
     .eq('motorista_id', session.user.id)
     .neq('status', 'encerrada')
     .order('inicio', { ascending: false })
     .limit(1);
-  return prepararJornada((data && data[0]) || null);
+  return (data && data[0]) || null;
 }
+async function carregarJornadaAtiva(){ return prepararJornada(await buscarJornadaAberta()); }
 // ordena os eventos e calcula parada atual e tempo de condução
 function prepararJornada(jornada){
   if(jornada){
@@ -197,6 +198,7 @@ function irParaMotorista(destino){
 // Roteamento
 // ---------------------------------------------------------------------
 async function loadShellMotorista(){
+  navegacaoTela++;
   const inicio = performance.now();
   mostrarCarregando();
   try{ await abrirTelaMotorista(); }
@@ -318,13 +320,29 @@ function aplicarDadosInicio(d, recentes){
   if(recentes) travaVerificadaEm = Date.now();
 }
 
-async function loadAbaInicio(){
+async function buscarInicio(){
   const { data, error } = await sb.rpc('inicio_motorista');
   const dados = !error && data && typeof data === 'object' ? data : await carregarInicioPorPartes();
+  // as telas Jornada, Viagem e Agendamentos já ficam prontas com o que veio aqui
+  guardarTela('jornada', dados.jornada || null);
+  guardarTela('viagem', dados.viagem || null);
+  guardarTela('agendamentos', dados.agendamentos || []);
   aplicarDadosInicio(dados, true);
   salvarCacheInicio(dados);
+  return dados;
+}
+
+async function loadAbaInicio(){
+  const dados = await dadosTela('inicio', buscarInicio, () => { if(motoristaScreen === 'home' && motoristaTab === 'inicio') loadAbaInicio(); });
+  aplicarDadosInicio(dados, false);
   if(travaChecklist.travado){ motoristaTab = 'checklist'; return loadChecklistMotorista(); }
   desenharInicio(dados);
+  // deixa as próximas telas prontas em segundo plano
+  setTimeout(() => {
+    preCarregarTela('checklist_itens', buscarItensChecklist);
+    preCarregarTela('oficina', buscarChamadosMotorista);
+    preCarregarTela('documentos', buscarDocumentosMotorista);
+  }, 400);
 }
 
 // Abertura do app: mostra o Início guardado enquanto confere a sessão e busca os dados novos
@@ -396,7 +414,7 @@ function saudacaoHorario(){
 // Aba JORNADA
 // ---------------------------------------------------------------------
 async function loadAbaJornada(){
-  const jornada = await carregarJornadaAtiva();
+  const jornada = prepararJornada(await dadosTela('jornada', buscarJornadaAberta, () => { if(motoristaScreen === 'home' && motoristaTab === 'jornada') loadAbaJornada(); }));
   let principal;
   if(!jornada){
     principal = `
@@ -546,12 +564,15 @@ async function confirmarEncerramento(assinaturaBase64){
 }
 
 async function loadHistoricoJornadas(){
-  const { data: jornadas, error } = await sb.from('jornada')
-    .select('id, inicio, fim, jornada_evento(tipo, criado_em)')
-    .eq('motorista_id', session.user.id)
-    .eq('status', 'encerrada')
-    .order('inicio', { ascending: false })
-    .limit(30);
+  const { data: jornadas, error } = await dadosTela('historico', async () => {
+    const { data, error } = await sb.from('jornada')
+      .select('id, inicio, fim, jornada_evento(tipo, criado_em)')
+      .eq('motorista_id', session.user.id)
+      .eq('status', 'encerrada')
+      .order('inicio', { ascending: false })
+      .limit(30);
+    return { data: data || [], error: error ? { message: error.message } : null };
+  }, () => { if(motoristaScreen === 'historicoJornada') loadHistoricoJornadas(); });
 
   montarTelaMotorista({
     voltarPara: 'tab:jornada',
@@ -603,9 +624,14 @@ function formatarDuracao(inicioIso, fimIso){
 // ---------------------------------------------------------------------
 // Aba CHECKLIST
 // ---------------------------------------------------------------------
+async function buscarItensChecklist(){
+  const { data } = await sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').eq('ativo', true).order('ordem');
+  return data || [];
+}
+
 async function loadChecklistMotorista(){
   const conjunto = await carregarMeuConjunto();
-  const { data: itens } = await sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').eq('ativo', true).order('ordem');
+  const itens = await dadosTela('checklist_itens', buscarItensChecklist, () => { if(motoristaScreen === 'home' && motoristaTab === 'checklist') loadChecklistMotorista(); });
   const total = (itens||[]).length;
   const respondidos = () => (itens||[]).filter(it => chkAnswers[it.id]).length;
   const veiculos = veiculosDoConjunto(conjunto);
@@ -708,7 +734,7 @@ async function enviarChecklist(assinaturaBase64){
 // Aba VIAGEM
 // ---------------------------------------------------------------------
 async function loadAbaViagem(){
-  const viagem = await carregarViagemAtual();
+  const viagem = await dadosTela('viagem', carregarViagemAtual, () => { if(motoristaScreen === 'home' && motoristaTab === 'viagem') loadAbaViagem(); });
   const docItem = (nome, numero) => `
     <div class="list-item"><div class="li-ic">${ic('doc', 16)}</div>
       <div class="li-body"><div class="li-title">${nome}</div><div class="li-sub">${numero ? 'nº ' + esc(numero) : 'Número não informado pelo escritório'}</div></div>
@@ -779,17 +805,24 @@ function loadAbaMais(){
   if(instalar) instalar.addEventListener('click', instalarApp);
 }
 
-async function loadDocumentosMotorista(){
+async function buscarDocumentosMotorista(){
   const conjunto = await carregarMeuConjunto();
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
-  const placaPorVeiculo = {};
-  veiculosDoConjunto(conjunto).forEach(ci => { placaPorVeiculo[ci.veiculo_id] = ci.veiculo.placa; });
   const campos = 'id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id';
   const [meus, veic, emp] = await Promise.all([
     sb.from('documento').select(campos).eq('referente_a', 'motorista').eq('referente_id', session.user.id).order('tipo'),
     veiculoIds.length ? sb.from('documento').select(campos).eq('referente_a', 'veiculo').in('referente_id', veiculoIds).order('tipo') : Promise.resolve({ data: [] }),
     sb.from('documento').select(campos).eq('referente_a', 'empresa').order('tipo'),
   ]);
+  return { meus: { data: meus.data || [] }, veic: { data: veic.data || [] }, emp: { data: emp.data || [] } };
+}
+
+async function loadDocumentosMotorista(){
+  const conjunto = await carregarMeuConjunto();
+  const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
+  const placaPorVeiculo = {};
+  veiculosDoConjunto(conjunto).forEach(ci => { placaPorVeiculo[ci.veiculo_id] = ci.veiculo.placa; });
+  const { meus, veic, emp } = await dadosTela('documentos', buscarDocumentosMotorista, () => { if(motoristaScreen === 'documentos') loadDocumentosMotorista(); });
   const listas = {
     meus: { docs: meus.data || [], vazio: 'Nenhum documento seu cadastrado ainda — peça ao escritório para cadastrar.', sub: () => '', editar: true },
     veiculo: { docs: veic.data || [], vazio: veiculoIds.length ? 'Nenhum documento dos veículos do seu conjunto ainda.' : 'Você ainda não tem um conjunto vinculado.', sub: (d) => placaPorVeiculo[d.referente_id] || '', editar: true },
