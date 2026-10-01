@@ -580,7 +580,9 @@ async function loadChecklistMotorista(){
         <div class="li-sub">Conjunto: ${veiculos.length ? veiculos.map(v => `<b style="color:var(--text-primary);">${esc(v.veiculo.placa)}</b> (${esc((tipoLabelGlobal[v.veiculo.tipo] || v.veiculo.tipo).toLowerCase())})`).join(' → ') : 'nenhum vinculado'}</div>
       </div>
       <div class="progress-track" style="margin-bottom:6px;"><div class="progress-fill" id="chkProgressFill" style="width:${total ? respondidos() / total * 100 : 0}%"></div></div>
-      <div class="li-sub" id="chkProgressLbl" style="margin-bottom:6px;">${respondidos()}/${total} itens respondidos</div>
+      <div class="li-sub" id="chkProgressLbl" style="margin-bottom:10px;">${respondidos()}/${total} itens respondidos</div>
+      <button class="btn btn-outline" id="btnChkTudoAtende" style="margin-bottom:12px;" ${total && respondidos() === total ? 'disabled' : ''}>${ic('check', 16)} Tudo atende</button>
+      <div class="li-sub" style="margin:-6px 0 12px; text-align:center;">Marca "Atende" em todos os itens ainda sem resposta — depois toque só no que não atende.</div>
       <div class="card" style="padding:4px 16px;">
         ${(itens||[]).map(it => `
           <div class="chk-item">
@@ -596,17 +598,27 @@ async function loadChecklistMotorista(){
   });
 
   // Marca a resposta na própria tela (sem recarregar tudo, pra não perder a rolagem)
+  const atualizarProgresso = () => {
+    const n = respondidos();
+    document.getElementById('chkProgressFill').style.width = (total ? n / total * 100 : 0) + '%';
+    document.getElementById('chkProgressLbl').textContent = `${n}/${total} itens respondidos`;
+    const enviar = document.getElementById('btnEnviarChecklist');
+    enviar.disabled = n < total;
+    enviar.textContent = `Enviar checklist (${n}/${total})`;
+    document.getElementById('btnChkTudoAtende').disabled = n === total;
+  };
+  const marcar = (row, valor) => {
+    chkAnswers[row.dataset.item] = valor;
+    row.querySelectorAll('.ans-btn').forEach(b => b.classList.toggle('active', b.dataset.val === valor));
+  };
   document.querySelectorAll('.answer-row').forEach(row => {
-    row.querySelectorAll('.ans-btn').forEach(btn => btn.addEventListener('click', () => {
-      chkAnswers[row.dataset.item] = btn.dataset.val;
-      row.querySelectorAll('.ans-btn').forEach(b => b.classList.toggle('active', b === btn));
-      const n = respondidos();
-      document.getElementById('chkProgressFill').style.width = (total ? n / total * 100 : 0) + '%';
-      document.getElementById('chkProgressLbl').textContent = `${n}/${total} itens respondidos`;
-      const enviar = document.getElementById('btnEnviarChecklist');
-      enviar.disabled = n < total;
-      enviar.textContent = `Enviar checklist (${n}/${total})`;
-    }));
+    row.querySelectorAll('.ans-btn').forEach(btn => btn.addEventListener('click', () => { marcar(row, btn.dataset.val); atualizarProgresso(); }));
+  });
+  // "Tudo atende": só preenche o que ainda está sem resposta (não apaga um "Não atende" já marcado)
+  document.getElementById('btnChkTudoAtende').addEventListener('click', () => {
+    document.querySelectorAll('.answer-row').forEach(row => { if(!chkAnswers[row.dataset.item]) marcar(row, 'ok'); });
+    atualizarProgresso();
+    mostrarToast('✅ Tudo marcado como "Atende" — toque no que não atende, se houver');
   });
   document.getElementById('btnEnviarChecklist').addEventListener('click', enviarChecklist);
 }

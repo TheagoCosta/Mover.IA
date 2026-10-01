@@ -1,6 +1,7 @@
 // MOVER.IA — Oficina / Manutenção: chamados abertos pelo motorista, app do
 // mecânico (Chamados + Frota) e a seção Oficina do painel do escritório.
-// Fotos ficam no bucket privado "oficina" (<transportadora>/<chamado>/<arquivo>).
+// Fotos e vídeos (vários por chamado, tabela chamado_midia) ficam no bucket
+// privado "oficina" (<transportadora>/<chamado>/<arquivo>).
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
 
@@ -9,7 +10,7 @@ const ROTULO_URGENCIA = { baixa:'Baixa', media:'Média', alta:'Alta — não rod
 const COR_URGENCIA = { baixa:'green', media:'amber', alta:'red' };
 const ROTULO_CHAMADO = { aberto:'Aberto', em_andamento:'Em andamento', concluido:'Concluído' };
 const COR_CHAMADO = { aberto:'red', em_andamento:'blue', concluido:'green' };
-const CAMPOS_CHAMADO = 'id, criado_em, atualizado_em, concluido_em, categoria, urgencia, descricao, status, observacao_reparo, foto_url, foto_reparo_url, motorista_id, veiculo_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa, modelo), responsavel:responsavel_id(nome)';
+const CAMPOS_CHAMADO = 'id, criado_em, atualizado_em, concluido_em, categoria, urgencia, descricao, status, observacao_reparo, foto_url, foto_reparo_url, motorista_id, veiculo_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa, modelo), responsavel:responsavel_id(nome), midias:chamado_midia(id, momento, tipo, caminho, criado_em)';
 
 let mecanicoTab = 'chamados';
 let mecanicoFiltro = 'pendentes';
@@ -38,23 +39,101 @@ function comprimirImagem(arquivo, maxLado = 1600, qualidade = 0.82){
   });
 }
 
-// Sobe a foto e grava o caminho no chamado (campo foto_url ou foto_reparo_url)
-async function enviarFotoChamado(chamadoId, arquivo, campo){
-  const blob = await comprimirImagem(arquivo);
-  const ext = blob.type === 'image/jpeg' ? 'jpg' : (arquivo.name.split('.').pop() || 'jpg').toLowerCase();
-  const caminho = `${usuarioAtual.transportadora_id}/${chamadoId}/${campo === 'foto_url' ? 'problema' : 'reparo'}_${Date.now()}.${ext}`;
-  const { error: erroUp } = await sb.storage.from('oficina').upload(caminho, blob, { contentType: blob.type || 'image/jpeg' });
-  if(erroUp) return { error: erroUp.message };
-  const { error } = await sb.from('chamado_manutencao').update({ [campo]: caminho, atualizado_em: new Date().toISOString() }).eq('id', chamadoId);
-  if(error) return { error: error.message };
-  return { caminho };
+// ---------------------------------------------------------------------
+// Fotos e vídeos do chamado (tabela chamado_midia; momento = 'problema'
+// quando abre o chamado, 'reparo' quando a oficina atualiza). Chamados
+// antigos têm uma foto só, nos campos foto_url / foto_reparo_url — elas
+// aparecem junto com as novas.
+// ---------------------------------------------------------------------
+const MAX_ARQUIVOS_CHAMADO = 10;
+const MAX_VIDEO_MB = 50;   // limite por arquivo do plano grátis do Supabase
+function ehVideo(arquivo){ return /^video\//.test(arquivo.type || '') || /\.(mp4|mov|webm|3gp|m4v)$/i.test(arquivo.name || ''); }
+function resumoMidias(lista){
+  const v = lista.filter(m => m.tipo === 'video' || (m instanceof File && ehVideo(m))).length, f = lista.length - v;
+  return [f && `${f} foto${f > 1 ? 's' : ''}`, v && `${v} vídeo${v > 1 ? 's' : ''}`].filter(Boolean).join(' e ');
+}
+// confere antes de enviar; devolve a mensagem de erro (ou null se está tudo certo)
+function conferirMidias(lista){
+  if(lista.length > MAX_ARQUIVOS_CHAMADO) return `Escolha no máximo ${MAX_ARQUIVOS_CHAMADO} arquivos por vez.`;
+  const naoMidia = lista.find(a => !ehVideo(a) && !/^image\//.test(a.type || ''));
+  if(naoMidia) return `"${naoMidia.name}" não é foto nem vídeo.`;
+  const grande = lista.find(a => ehVideo(a) && a.size > MAX_VIDEO_MB * 1048576);
+  if(grande) return `O vídeo "${grande.name}" tem ${Math.round(grande.size / 1048576)} MB — o limite é ${MAX_VIDEO_MB} MB. Grave um vídeo mais curto (até uns 30 segundos).`;
+  return null;
 }
 
-async function verFotoChamado(caminho, titulo = 'Foto'){
-  if(!caminho) return;
-  const { data, error } = await sb.storage.from('oficina').createSignedUrl(caminho, 300);
-  if(error){ alert('Não consegui abrir a foto: ' + error.message); return; }
-  abrirModal(titulo, `<img src="${data.signedUrl}" alt="${esc(titulo)}" style="width:100%; border-radius:10px; display:block;">`);
+// Sobe os arquivos um por um (fotos reduzidas antes; vídeos como estão)
+async function enviarMidiasChamado(chamadoId, arquivos, momento, aoProgresso){
+  const erros = [];
+  for(let i = 0; i < arquivos.length; i++){
+    if(aoProgresso) aoProgresso(i + 1, arquivos.length);
+    const arquivo = arquivos[i], video = ehVideo(arquivo);
+    const blob = video ? arquivo : await comprimirImagem(arquivo);
+    const extOriginal = ((arquivo.name || '').split('.').pop() || '').toLowerCase();
+    const ext = video ? (extOriginal || 'mp4') : (blob.type === 'image/jpeg' ? 'jpg' : (extOriginal || 'jpg'));
+    const caminho = `${usuarioAtual.transportadora_id}/${chamadoId}/${momento}_${Date.now()}_${i}.${ext}`;
+    const { error: erroUp } = await sb.storage.from('oficina').upload(caminho, blob, { contentType: blob.type || (video ? 'video/mp4' : 'image/jpeg') });
+    if(erroUp){ erros.push(`${arquivo.name || 'arquivo ' + (i + 1)}: ${erroUp.message}`); continue; }
+    const { error } = await sb.from('chamado_midia').insert({ transportadora_id: usuarioAtual.transportadora_id, chamado_id: chamadoId, momento, tipo: video ? 'video' : 'foto', caminho });
+    if(error) erros.push(`${arquivo.name || 'arquivo ' + (i + 1)}: ${error.message}`);
+  }
+  return erros;
+}
+
+function midiasDoChamado(c, momento){
+  const lista = (c.midias || []).filter(m => m.momento === momento).sort((a, b) => String(a.criado_em || '').localeCompare(String(b.criado_em || '')));
+  const antiga = momento === 'problema' ? c.foto_url : c.foto_reparo_url;
+  if(antiga && !lista.some(m => m.caminho === antiga)) lista.unshift({ caminho: antiga, tipo: 'foto', momento });
+  return lista;
+}
+function botaoMidias(c, momento, classe = 'btn-small'){
+  const lista = midiasDoChamado(c, momento);
+  if(!lista.length) return '';
+  return `<button type="button" class="${classe}" data-midias="${c.id}" data-momento="${momento}">${ic('eye', 14)} ${momento === 'problema' ? 'Problema' : 'Reparo'}: ${resumoMidias(lista)}</button>`;
+}
+function ligarBotoesMidias(raiz, chamados){
+  raiz.querySelectorAll('[data-midias]').forEach(b => b.addEventListener('click', () => {
+    const c = chamados.find(x => x.id === b.dataset.midias);
+    if(c) verMidiasChamado(c, b.dataset.momento);
+  }));
+}
+async function verMidiasChamado(c, momento){
+  const lista = midiasDoChamado(c, momento);
+  if(!lista.length) return;
+  const { data, error } = await sb.storage.from('oficina').createSignedUrls(lista.map(m => m.caminho), 600);
+  if(error){ alert('Não consegui abrir: ' + error.message); return; }
+  abrirModal(`${momento === 'problema' ? 'Problema' : 'Reparo'} — ${c.veiculo ? c.veiculo.placa + ' · ' : ''}${c.categoria}`, `
+    <div class="galeria-midias">${lista.map((m, i) => {
+      const url = data[i] && data[i].signedUrl;
+      if(!url) return '<div class="l2">Arquivo indisponível.</div>';
+      return m.tipo === 'video'
+        ? `<video src="${url}" controls playsinline preload="metadata"></video>`
+        : `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Foto ${i + 1}" loading="lazy"></a>`;
+    }).join('')}</div>`);
+}
+
+// Campo "escolher fotos/vídeos" que vai juntando os arquivos (dá para tirar
+// uma foto, depois outra...). Devolve uma função que entrega a lista atual.
+function campoMidias(idInput, idResumo, textoBotao){
+  let escolhidos = [];
+  const input = document.getElementById(idInput), resumo = document.getElementById(idResumo);
+  const mostrar = () => {
+    resumo.innerHTML = escolhidos.length
+      ? `${ic('check', 13)} ${resumoMidias(escolhidos)} pronto${escolhidos.length > 1 ? 's' : ''} para enviar · <a href="#" data-limpar-midias>remover</a>`
+      : '';
+    const limpar = resumo.querySelector('[data-limpar-midias]');
+    if(limpar) limpar.addEventListener('click', (e) => { e.preventDefault(); escolhidos = []; mostrar(); });
+    const rot = input.closest('label') && input.closest('label').querySelector('span');
+    if(rot) rot.textContent = escolhidos.length ? 'Adicionar mais fotos ou vídeos' : textoBotao;
+  };
+  input.addEventListener('change', () => {
+    const novos = [...escolhidos, ...input.files];
+    input.value = '';
+    const erro = conferirMidias(novos);
+    if(erro){ alert(erro); return; }
+    escolhidos = novos; mostrar();
+  });
+  return () => escolhidos;
 }
 
 // ---------------------------------------------------------------------
@@ -100,8 +179,9 @@ async function loadOficinaMotorista(){
             <button class="ans-btn ans-bad" type="button" data-urg="alta">Alta — não roda</button>
           </div></div>
         <div class="field-row"><label>Descreva o problema</label><textarea id="chDescricao" class="m-textarea" rows="3" placeholder="ex: barulho estranho ao frear, luz do painel acesa..."></textarea></div>
-        <label class="btn btn-outline" style="margin-bottom:10px; cursor:pointer;">${ic('cam', 16)} <span id="chFotoRotulo">Tirar ou anexar foto (opcional)</span>
-          <input type="file" id="chFoto" accept="image/*" capture="environment" style="display:none;"></label>
+        <label class="btn btn-outline" style="margin-bottom:6px; cursor:pointer;">${ic('cam', 16)} <span>Fotos ou vídeos do problema (opcional)</span>
+          <input type="file" id="chMidias" accept="image/*,video/*" multiple style="display:none;"></label>
+        <div class="li-sub" id="chMidiasResumo" style="margin-bottom:10px;"></div>
         <div class="err" id="chErro"></div>
         <button class="btn btn-primary" id="btnEnviarChamado" ${veiculos.length ? '' : 'disabled'}>${ic('wrench', 16)} Enviar para a oficina</button>
       </div>
@@ -112,11 +192,9 @@ async function loadOficinaMotorista(){
   const marcar = (grupo, attr, valor) => document.querySelectorAll(`#${grupo} [${attr}]`).forEach(b => b.classList.toggle('active', b.getAttribute(attr) === valor));
   document.querySelectorAll('[data-cat]').forEach(b => b.addEventListener('click', () => { novoChamado.categoria = b.dataset.cat; marcar('chCategorias', 'data-cat', b.dataset.cat); }));
   document.querySelectorAll('[data-urg]').forEach(b => b.addEventListener('click', () => { novoChamado.urgencia = b.dataset.urg; marcar('chUrgencias', 'data-urg', b.dataset.urg); }));
-  document.getElementById('chFoto').addEventListener('change', (e) => {
-    document.getElementById('chFotoRotulo').textContent = e.target.files[0] ? 'Foto anexada ✓ (toque para trocar)' : 'Tirar ou anexar foto (opcional)';
-  });
-  document.getElementById('btnEnviarChamado').addEventListener('click', enviarChamadoMotorista);
-  document.querySelectorAll('[data-foto]').forEach(b => b.addEventListener('click', () => verFotoChamado(b.dataset.foto, b.dataset.titulo)));
+  const midiasEscolhidas = campoMidias('chMidias', 'chMidiasResumo', 'Fotos ou vídeos do problema (opcional)');
+  document.getElementById('btnEnviarChamado').addEventListener('click', () => enviarChamadoMotorista(midiasEscolhidas()));
+  ligarBotoesMidias(app, chamados || []);
 }
 
 function itemChamadoMotorista(c){
@@ -130,18 +208,14 @@ function itemChamadoMotorista(c){
       <div class="li-sub" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">${fmtDataHora(c.criado_em)} ${pillStatus(COR_URGENCIA[c.urgencia], ROTULO_URGENCIA[c.urgencia])}</div>
       ${c.observacao_reparo ? `<div class="li-sub" style="color:var(--line-yellow);">Oficina: ${esc(c.observacao_reparo)}</div>` : ''}
       ${c.status === 'concluido' && c.concluido_em ? `<div class="li-sub">Concluído em ${fmtDataHora(c.concluido_em)}${c.responsavel ? ' por ' + esc(c.responsavel.nome) : ''}</div>` : ''}
-      ${(c.foto_url || c.foto_reparo_url) ? `<div class="li-acoes">
-        ${c.foto_url ? `<button class="btn-small" data-foto="${esc(c.foto_url)}" data-titulo="Foto do problema">${ic('eye', 14)} Foto do problema</button>` : ''}
-        ${c.foto_reparo_url ? `<button class="btn-small" data-foto="${esc(c.foto_reparo_url)}" data-titulo="Foto do reparo">${ic('eye', 14)} Foto do reparo</button>` : ''}
-      </div>` : ''}
+      ${botaoMidias(c, 'problema') || botaoMidias(c, 'reparo') ? `<div class="li-acoes">${botaoMidias(c, 'problema')}${botaoMidias(c, 'reparo')}</div>` : ''}
     </div>`;
 }
 
-async function enviarChamadoMotorista(){
+async function enviarChamadoMotorista(midias){
   const erro = document.getElementById('chErro');
   const descricao = document.getElementById('chDescricao').value.trim();
   const veiculoId = document.getElementById('chVeiculo').value;
-  const foto = document.getElementById('chFoto').files[0];
   if(!novoChamado.categoria || !novoChamado.urgencia || !descricao){ erro.textContent = 'Escolha a categoria, a urgência e descreva o problema.'; return; }
   erro.textContent = '';
   const btn = document.getElementById('btnEnviarChamado');
@@ -158,10 +232,9 @@ async function enviarChamadoMotorista(){
   }).select('id').single();
   if(error){ erro.textContent = 'Não consegui enviar: ' + error.message; btn.disabled = false; btn.textContent = 'Enviar para a oficina'; return; }
 
-  if(foto){
-    btn.textContent = 'Enviando foto...';
-    const r = await enviarFotoChamado(data.id, foto, 'foto_url');
-    if(r.error) alert('O chamado foi enviado, mas a foto não subiu: ' + r.error);
+  if(midias.length){
+    const erros = await enviarMidiasChamado(data.id, midias, 'problema', (i, total) => { btn.textContent = `Enviando arquivo ${i} de ${total}...`; });
+    if(erros.length) alert('O chamado foi enviado, mas alguns arquivos não subiram:\n' + erros.join('\n'));
   }
   mostrarToast(novoChamado.urgencia === 'alta' ? '🚨 Chamado urgente enviado para a oficina' : '✅ Chamado enviado para a oficina');
   loadOficinaMotorista();
@@ -170,7 +243,7 @@ async function enviarChamadoMotorista(){
 // ---------------------------------------------------------------------
 // APP DO MECÂNICO
 // ---------------------------------------------------------------------
-const ABAS_MECANICO = [ { k:'chamados', l:'Chamados', i:'wrench' }, { k:'frota', l:'Frota', i:'truck' } ];
+const ABAS_MECANICO = [ { k:'chamados', l:'Chamados', i:'wrench' }, { k:'agenda', l:'Agenda', i:'cal' }, { k:'frota', l:'Frota', i:'truck' } ];
 
 function montarTelaMecanico({ header, conteudo }){
   app.innerHTML = `
@@ -181,7 +254,10 @@ function montarTelaMecanico({ header, conteudo }){
         ${ABAS_MECANICO.map(a => `<button class="tab ${mecanicoTab === a.k ? 'active' : ''}" data-tab-mec="${a.k}">${ic(a.i, 20)}<span>${a.l}</span></button>`).join('')}
       </nav>
     </div>`;
-  document.querySelectorAll('[data-tab-mec]').forEach(b => b.addEventListener('click', () => { mecanicoTab = b.dataset.tabMec; loadShellMecanico(); window.scrollTo(0, 0); }));
+  document.querySelectorAll('[data-tab-mec]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-tab-mec]').forEach(o => o.classList.toggle('active', o === b));  // resposta imediata ao toque
+    mecanicoTab = b.dataset.tabMec; loadShellMecanico(); window.scrollTo(0, 0);
+  }));
   const sair = document.getElementById('btnSairMec');
   if(sair) sair.addEventListener('click', () => { if(confirm('Sair deste aparelho?')) doLogout(); });
   const sino = document.getElementById('btnSinoMecanico');
@@ -196,7 +272,14 @@ function headerMecanico(titulo, sub){
 }
 
 async function loadShellMecanico(){
+  mostrarCarregando();
+  try{ await abrirTelaMecanico(); }
+  finally{ esconderCarregando(); }
+}
+
+async function abrirTelaMecanico(){
   if(mecanicoTab === 'frota') return loadFrotaMecanico();
+  if(mecanicoTab === 'agenda') return loadAgendaMecanico();
 
   const { data: chamados, error } = await sb.from('chamado_manutencao').select(CAMPOS_CHAMADO).order('criado_em', { ascending:false }).limit(200);
   const lista = chamados || [];
@@ -210,6 +293,7 @@ async function loadShellMecanico(){
     header: headerMecanico('Oficina', `${(usuarioAtual.nome || '').split(' ')[0]} · ${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : ''}`),
     conteudo: `
       ${error ? `<div class="status">Erro ao carregar chamados: ${esc(error.message)}</div>` : ''}
+      ${cartaoAvisosCelular()}
       <div class="grid2" style="margin-bottom:14px;">
         <div class="card" style="text-align:center; padding:14px; margin:0;"><div class="gauge-val" style="margin-top:0; font-size:22px; color:${n('aberto') ? 'var(--signal-red)' : 'var(--text-primary)'};">${n('aberto')}</div><div class="gauge-lbl">Abertos</div></div>
         <div class="card" style="text-align:center; padding:14px; margin:0;"><div class="gauge-val" style="margin-top:0; font-size:22px;">${n('em_andamento')}</div><div class="gauge-lbl">Em andamento</div></div>
@@ -221,16 +305,19 @@ async function loadShellMecanico(){
       ${visiveis.length ? visiveis.map(cardChamadoMecanico).join('') : `<div class="card em-breve-box"><div class="ic-grande">${ic('check', 32)}</div><div class="card-dark-title">${mecanicoFiltro === 'pendentes' ? 'Nenhum chamado pendente' : 'Nenhum chamado concluído ainda'}</div><div class="card-dark-sub">${mecanicoFiltro === 'pendentes' ? 'Quando um motorista registrar um problema, ele aparece aqui.' : ''}</div></div>`}`,
   });
 
+  ligarCartaoAvisos();
   document.querySelectorAll('[data-filtro-mec]').forEach(b => b.addEventListener('click', () => { mecanicoFiltro = b.dataset.filtroMec; loadShellMecanico(); }));
-  document.querySelectorAll('[data-foto]').forEach(b => b.addEventListener('click', () => verFotoChamado(b.dataset.foto, b.dataset.titulo)));
-  document.querySelectorAll('[data-foto-reparo]').forEach(inp => inp.addEventListener('change', async (e) => {
-    const arquivo = e.target.files[0];
-    if(!arquivo) return;
-    const rotulo = inp.closest('label');
-    rotulo.querySelector('span').textContent = 'Enviando...';
-    const r = await enviarFotoChamado(inp.dataset.fotoReparo, arquivo, 'foto_reparo_url');
-    if(r.error){ alert('Não consegui enviar a foto: ' + r.error); rotulo.querySelector('span').textContent = 'Foto do reparo'; return; }
-    mostrarToast('📷 Foto do reparo anexada');
+  ligarBotoesMidias(app, lista);
+  document.querySelectorAll('[data-midias-reparo]').forEach(inp => inp.addEventListener('change', async () => {
+    const arquivos = [...inp.files];
+    inp.value = '';
+    if(!arquivos.length) return;
+    const erro = conferirMidias(arquivos);
+    if(erro){ alert(erro); return; }
+    const rotulo = inp.closest('label').querySelector('span');
+    const erros = await enviarMidiasChamado(inp.dataset.midiasReparo, arquivos, 'reparo', (i, total) => { rotulo.textContent = `Enviando ${i} de ${total}...`; });
+    if(erros.length) alert('Alguns arquivos não subiram:\n' + erros.join('\n'));
+    else mostrarToast(`📷 ${resumoMidias(arquivos)} do reparo anexado${arquivos.length > 1 ? 's' : ''}`);
     loadShellMecanico();
   }));
   document.querySelectorAll('[data-avancar]').forEach(b => b.addEventListener('click', async () => {
@@ -261,24 +348,24 @@ function cardChamadoMecanico(c){
       <div class="li-sub" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         ${fmtDataHora(c.criado_em)} · ${esc(c.motorista ? c.motorista.nome : 'Aberto pelo escritório')} ${pillStatus(COR_URGENCIA[c.urgencia], ROTULO_URGENCIA[c.urgencia])}
       </div>
-      ${c.foto_url ? `<button class="btn-small" style="margin-bottom:10px;" data-foto="${esc(c.foto_url)}" data-titulo="Foto do problema">${ic('eye', 14)} Ver foto do problema</button>` : ''}
+      ${botaoMidias(c, 'problema') ? `<div style="margin-bottom:10px;">${botaoMidias(c, 'problema')}</div>` : ''}
       ${pendente ? `
         <div class="field-row" style="margin-bottom:8px;"><label>Observação do conserto</label>
           <textarea id="obs_${c.id}" class="m-textarea" rows="2" style="min-height:60px;" placeholder="ex: peça pedida, previsão de conclusão...">${esc(c.observacao_reparo || '')}</textarea></div>
         <div class="grid2">
-          <label class="btn btn-outline btn-sm" style="width:100%; cursor:pointer;">${ic('cam', 14)} <span>${c.foto_reparo_url ? 'Trocar foto' : 'Foto do reparo'}</span>
-            <input type="file" accept="image/*" capture="environment" data-foto-reparo="${c.id}" style="display:none;"></label>
+          <label class="btn btn-outline btn-sm" style="width:100%; cursor:pointer;">${ic('cam', 14)} <span>Fotos / vídeos do reparo</span>
+            <input type="file" accept="image/*,video/*" multiple data-midias-reparo="${c.id}" style="display:none;"></label>
           <button class="btn ${c.status === 'aberto' ? 'btn-outline' : 'btn-primary'} btn-sm" style="width:100%;" data-avancar="${c.id}">${c.status === 'aberto' ? `${ic('wrench', 14)} Iniciar reparo` : `${ic('check', 14)} Concluir`}</button>
         </div>
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
           ${c.status === 'em_andamento' ? `<button class="btn-small" data-salvar-obs="${c.id}">Salvar observação</button>` : ''}
-          ${c.foto_reparo_url ? `<button class="btn-small" data-foto="${esc(c.foto_reparo_url)}" data-titulo="Foto do reparo">${ic('eye', 14)} Ver foto do reparo</button>` : ''}
+          ${botaoMidias(c, 'reparo')}
         </div>
         ${c.responsavel ? `<div class="li-sub" style="margin-top:8px;">Em reparo por ${esc(c.responsavel.nome)}</div>` : ''}`
       : `
         ${c.observacao_reparo ? `<div class="li-sub" style="color:var(--line-yellow);">Obs: ${esc(c.observacao_reparo)}</div>` : ''}
         <div class="li-sub" style="margin-top:4px;">Concluído em ${fmtDataHora(c.concluido_em)}${c.responsavel ? ' por ' + esc(c.responsavel.nome) : ''}</div>
-        ${c.foto_reparo_url ? `<button class="btn-small" style="margin-top:8px;" data-foto="${esc(c.foto_reparo_url)}" data-titulo="Foto do reparo">${ic('eye', 14)} Ver foto do reparo</button>` : ''}`}
+        ${botaoMidias(c, 'reparo') ? `<div style="margin-top:8px;">${botaoMidias(c, 'reparo')}</div>` : ''}`}
     </div>`;
 }
 
@@ -344,8 +431,8 @@ async function secaoOficina(el){
           <td>${badge(COR_URGENCIA[c.urgencia], ROTULO_URGENCIA[c.urgencia])}</td>
           <td>${badge(COR_CHAMADO[c.status], ROTULO_CHAMADO[c.status])}${c.concluido_em ? `<div class="sub">${fmtData(c.concluido_em)}</div>` : ''}</td>
           <td><div class="o-acoes">
-            ${c.foto_url ? `<button class="o-dl-btn" data-foto="${esc(c.foto_url)}" data-titulo="Foto do problema" title="Foto do problema">${ic('cam', 15)}</button>` : ''}
-            ${c.foto_reparo_url ? `<button class="o-dl-btn" data-foto="${esc(c.foto_reparo_url)}" data-titulo="Foto do reparo" title="Foto do reparo">${ic('eye', 15)}</button>` : ''}
+            ${botaoMidias(c, 'problema', 'btn btn-outline btn-sm')}
+            ${botaoMidias(c, 'reparo', 'btn btn-outline btn-sm')}
             ${c.status !== 'concluido' ? `<button class="btn btn-outline btn-sm" data-atualizar="${c.id}">${c.status === 'aberto' ? 'Iniciar' : 'Concluir'}</button>` : ''}
           </div></td></tr>`))
         : vazio(oficinaFiltroEscritorio === 'pendentes' ? 'Nenhum chamado pendente.' : 'Nenhum chamado por aqui.'),
@@ -353,7 +440,7 @@ async function secaoOficina(el){
 
   el.querySelectorAll('[data-ir]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = a.dataset.ir; loadEscritorio(); }));
   el.querySelectorAll('[data-filtro-of]').forEach(b => b.addEventListener('click', () => { oficinaFiltroEscritorio = b.dataset.filtroOf; secaoOficina(el); }));
-  el.querySelectorAll('[data-foto]').forEach(b => b.addEventListener('click', () => verFotoChamado(b.dataset.foto, b.dataset.titulo)));
+  ligarBotoesMidias(el, chamados);
   el.querySelectorAll('[data-atualizar]').forEach(b => b.addEventListener('click', () => abrirAtualizacaoChamado(chamados.find(c => c.id === b.dataset.atualizar), el)));
   document.getElementById('btnAbrirChamado').addEventListener('click', () => abrirNovoChamadoEscritorio(veiculos, usuarios.filter(u => u.papel === 'motorista' && u.ativo), el));
   const csv = document.getElementById('btnCsvOficina');
@@ -370,17 +457,19 @@ function abrirAtualizacaoChamado(chamado, el){
     <form id="formAtualizarChamado">
       <div class="field-row" style="margin:0;"><label>Observação do conserto</label>
         <textarea id="atObs" rows="3" placeholder="${concluir ? 'O que foi feito? (peça trocada, oficina, valor...)' : 'ex: enviado para a oficina X, previsão...'}">${esc(chamado.observacao_reparo || '')}</textarea></div>
-      <div class="field-row" style="margin:0;"><label>Foto do reparo (opcional)</label><input type="file" id="atFoto" accept="image/*"></div>
+      <div class="field-row" style="margin:0;"><label>Fotos ou vídeos do reparo (opcional, até ${MAX_ARQUIVOS_CHAMADO})</label><input type="file" id="atMidias" accept="image/*,video/*" multiple></div>
       <button type="submit">${concluir ? 'Concluir chamado' : 'Iniciar reparo'}</button>
     </form>`);
   document.getElementById('formAtualizarChamado').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
+    const arquivos = [...document.getElementById('atMidias').files];
+    const erro = conferirMidias(arquivos);
+    if(erro){ alert(erro); return; }
     btn.disabled = true; btn.textContent = 'Salvando...';
-    const foto = document.getElementById('atFoto').files[0];
-    if(foto){
-      const r = await enviarFotoChamado(chamado.id, foto, 'foto_reparo_url');
-      if(r.error) alert('Não consegui enviar a foto: ' + r.error);
+    if(arquivos.length){
+      const erros = await enviarMidiasChamado(chamado.id, arquivos, 'reparo', (i, total) => { btn.textContent = `Enviando arquivo ${i} de ${total}...`; });
+      if(erros.length) alert('Alguns arquivos não subiram:\n' + erros.join('\n'));
     }
     if(await avancarChamado(chamado, document.getElementById('atObs').value.trim())){ fecharModal(); secaoOficina(el); }
     else { btn.disabled = false; btn.textContent = concluir ? 'Concluir chamado' : 'Iniciar reparo'; }
@@ -401,12 +490,15 @@ function abrirNovoChamadoEscritorio(veiculos, motoristas, el){
           <select id="ncUrgencia" required><option value="baixa">Baixa</option><option value="media" selected>Média</option><option value="alta">Alta — não roda</option></select></div>
       </div>
       <div class="field-row" style="margin:0;"><label>Descrição</label><textarea id="ncDescricao" rows="3" required></textarea></div>
-      <div class="field-row" style="margin:0;"><label>Foto (opcional)</label><input type="file" id="ncFoto" accept="image/*"></div>
+      <div class="field-row" style="margin:0;"><label>Fotos ou vídeos (opcional, até ${MAX_ARQUIVOS_CHAMADO})</label><input type="file" id="ncMidias" accept="image/*,video/*" multiple></div>
       <button type="submit">Abrir chamado</button>
     </form>`);
   document.getElementById('formNovoChamado').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
+    const arquivos = [...document.getElementById('ncMidias').files];
+    const erroMidia = conferirMidias(arquivos);
+    if(erroMidia){ alert(erroMidia); return; }
     btn.disabled = true; btn.textContent = 'Salvando...';
     const { data, error } = await sb.from('chamado_manutencao').insert({
       transportadora_id: usuarioAtual.transportadora_id,
@@ -418,8 +510,10 @@ function abrirNovoChamadoEscritorio(veiculos, motoristas, el){
       descricao: document.getElementById('ncDescricao').value.trim(),
     }).select('id').single();
     if(error){ alert('Não consegui abrir o chamado: ' + error.message); btn.disabled = false; btn.textContent = 'Abrir chamado'; return; }
-    const foto = document.getElementById('ncFoto').files[0];
-    if(foto){ const r = await enviarFotoChamado(data.id, foto, 'foto_url'); if(r.error) alert('Chamado aberto, mas a foto não subiu: ' + r.error); }
+    if(arquivos.length){
+      const erros = await enviarMidiasChamado(data.id, arquivos, 'problema', (i, total) => { btn.textContent = `Enviando arquivo ${i} de ${total}...`; });
+      if(erros.length) alert('Chamado aberto, mas alguns arquivos não subiram:\n' + erros.join('\n'));
+    }
     fecharModal();
     mostrarToast('✅ Chamado aberto');
     secaoOficina(el);

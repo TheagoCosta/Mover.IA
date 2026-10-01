@@ -58,7 +58,8 @@
       { id:'a2', data:iso(5000), tipo:null, km:214330, litros:190, odometro_bomba:null, media_calculada:null, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12' }, confirmado:null },
     ],
     chamado_manutencao: [
-      { id:'ch1', criado_em:iso(90), atualizado_em:iso(90), concluido_em:null, categoria:'Freios', urgencia:'alta', descricao:'Pedal de freio baixo', status:'aberto', observacao_reparo:null, foto_url:'t1/ch1/problema.jpg', foto_reparo_url:null, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12', modelo:'Scania R450' }, responsavel:null },
+      { id:'ch1', criado_em:iso(90), atualizado_em:iso(90), concluido_em:null, categoria:'Freios', urgencia:'alta', descricao:'Pedal de freio baixo', status:'aberto', observacao_reparo:null, foto_url:'t1/ch1/problema.jpg', foto_reparo_url:null, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12', modelo:'Scania R450' }, responsavel:null,
+        midias:[{ id:'m1', momento:'problema', tipo:'foto', caminho:'t1/ch1/p2.jpg', criado_em:iso(89) }, { id:'m2', momento:'problema', tipo:'video', caminho:'t1/ch1/p3.mp4', criado_em:iso(88) }] },
       { id:'ch2', criado_em:iso(2000), atualizado_em:iso(600), concluido_em:null, categoria:'Elétrica', urgencia:'media', descricao:'Luz de ré queimada', status:'em_andamento', observacao_reparo:'Lâmpada pedida', foto_url:null, foto_reparo_url:null, motorista_id:'u-car', veiculo_id:'v2', motorista:{ nome:U.car.nome }, veiculo:{ placa:'FIJ-7F46', modelo:'Randon' }, responsavel:{ nome:'João Mecânico Teste' } },
       { id:'ch3', criado_em:iso(9000), atualizado_em:iso(8000), concluido_em:iso(8000), categoria:'Pneus', urgencia:'baixa', descricao:'Calibragem', status:'concluido', observacao_reparo:'Calibrado', foto_url:null, foto_reparo_url:'t1/ch3/reparo.jpg', motorista_id:null, veiculo_id:'v5', motorista:null, veiculo:{ placa:'GBW-8C41', modelo:'Volvo' }, responsavel:{ nome:'João Mecânico Teste' } },
     ],
@@ -73,6 +74,7 @@
       { id:'ag1', tipo:'Revisão preventiva', data_prevista:dia(3), hora:'08:00:00', local:'Oficina Central', status:'pendente', observacao:null, ciente_em:null, concluido_em:null, motorista_id:null, veiculo_id:'v1', motorista:null, veiculo:{ placa:'GKH-1B12' } },
       { id:'ag2', tipo:'Exame toxicológico', data_prevista:dia(-2), hora:null, local:'Clínica LabSaúde', status:'pendente', observacao:'Levar documento', ciente_em:iso(3000), concluido_em:null, motorista_id:'u-car', veiculo_id:null, motorista:{ nome:U.car.nome }, veiculo:null },
       { id:'ag3', tipo:'Troca de óleo', data_prevista:dia(-20), hora:null, local:null, status:'concluido', observacao:null, ciente_em:null, concluido_em:iso(20000), motorista_id:null, veiculo_id:'v5', motorista:null, veiculo:{ placa:'GBW-8C41' } },
+      { id:'ag4', tipo:'Folga', data_prevista:dia(5), data_fim:dia(8), hora:null, local:null, status:'pendente', observacao:'Retorna na segunda', ciente_em:null, concluido_em:null, motorista_id:'u-car', veiculo_id:null, motorista:{ nome:U.car.nome }, veiculo:null },
     ], calendario_licenciamento: [], motorista_perfil: [],
   };
 
@@ -113,7 +115,7 @@
     },
     from: (t) => Object.assign(consulta(t), { insert: gravacao(t, 'insert'), update: gravacao(t, 'update'), upsert: gravacao(t, 'upsert'), delete: () => gravacao(t, 'delete')('(filtro)') }),
     rpc: async () => ({ error: null }),
-    storage: { from: (b) => ({ remove: async (l) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'remove', dados:l }); return { error:null }; }, upload: async (caminho) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'upload', dados:caminho }); return { error:null }; }, createSignedUrl: async () => ({ data:{ signedUrl:'/app/img/logo.png' }, error:null }) }) },
+    storage: { from: (b) => ({ remove: async (l) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'remove', dados:l }); return { error:null }; }, upload: async (caminho) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'upload', dados:caminho }); return { error:null }; }, createSignedUrl: async () => ({ data:{ signedUrl:'/app/img/logo.png' }, error:null }), createSignedUrls: async (l) => ({ data: l.map(c => ({ path:c, signedUrl: /\.mp4$/.test(c) ? '/app/teste-video.mp4' : '/app/img/logo.png' })), error:null }) }) },
   };
   window.supabase = { createClient: () => cliente };
   // Funções de servidor: responde localmente, nunca chama o Supabase real
