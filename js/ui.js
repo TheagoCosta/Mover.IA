@@ -74,7 +74,7 @@ document.addEventListener('visibilitychange', () => { if(document.visibilityStat
 // ---------- medidor de velocidade (aparece no Perfil do motorista) ----------
 // Guarda quanto tempo o servidor demora para responder e quanto cada tela
 // leva para abrir — para descobrir onde está a demora em cada celular.
-const medidas = { servidor: [], telas: [], prontoEm: null };
+const medidas = { servidor: [], telas: [], prontoEm: null, cacheEm: null };
 (function medirServidor(){
   const original = window.fetch.bind(window);
   window.fetch = async (...args) => {
@@ -95,7 +95,8 @@ function resumoVelocidade(){
   const ms = (v) => v === null || v === undefined ? '—' : (v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + ' s' : v + ' ms');
   return [
     ['Página carregada', ms(nav ? Math.round(nav.domContentLoadedEventEnd) : null)],
-    ['App pronto (1ª tela)', ms(medidas.prontoEm)],
+    ['Início na tela (dados guardados)', ms(medidas.cacheEm)],
+    ['App pronto (dados novos)', ms(medidas.prontoEm)],
     ['Servidor — média', `${ms(media(medidas.servidor))} (${medidas.servidor.length} consultas)`],
     ['Servidor — mais lenta', ms(medidas.servidor.length ? Math.max(...medidas.servidor) : null)],
     ['Troca de tela — média', ms(media(medidas.telas.slice(1)))],

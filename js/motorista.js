@@ -58,7 +58,10 @@ async function carregarJornadaAtiva(){
     .neq('status', 'encerrada')
     .order('inicio', { ascending: false })
     .limit(1);
-  const jornada = (data && data[0]) || null;
+  return prepararJornada((data && data[0]) || null);
+}
+// ordena os eventos e calcula parada atual e tempo de condução
+function prepararJornada(jornada){
   if(jornada){
     jornada.eventos = [...(jornada.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
     const ultimaPausa = [...jornada.eventos].reverse().find(e => e.tipo === 'pausa');
@@ -81,15 +84,8 @@ async function carregarViagemAtual(){
 
 // Documentos do motorista e do conjunto que estão vencidos ou vencendo
 // (status calculado pela validade — ver statusDocumento em ui.js)
-async function carregarAlertasMotorista(veiculoIds){
+function montarAlertas(docsMotorista, docsVeiculo, caps){
   const alertas = [];
-  const [{ data: docsMotorista }, { data: docsVeiculo }, { data: caps }] = await Promise.all([
-    sb.from('documento').select('id, tipo, status, validade').eq('referente_a', 'motorista').eq('referente_id', session.user.id),
-    veiculoIds && veiculoIds.length
-      ? sb.from('documento').select('id, tipo, status, validade, referente_id').eq('referente_a', 'veiculo').in('referente_id', veiculoIds)
-      : Promise.resolve({ data: [] }),
-    sb.from('capacitacao').select('id, tipo, validade').eq('motorista_id', session.user.id).not('validade', 'is', null),
-  ]);
   (docsMotorista||[]).filter(d => statusDocumento(d) !== 'ok').forEach(d => alertas.push({ ...d, origem: 'Seu documento' }));
   (docsVeiculo||[]).filter(d => statusDocumento(d) !== 'ok').forEach(d => alertas.push({ ...d, origem: 'Veículo do conjunto' }));
   (caps||[]).filter(c => statusDocumento({ validade: c.validade }) !== 'ok').forEach(c => alertas.push({ ...c, status:'ok', origem: 'Capacitação', destino: 'capacitacoes' }));
@@ -127,14 +123,17 @@ async function atualizarTravaChecklist(){
   }
   travaVerificadaEm = Date.now();
   const conjunto = await carregarMeuConjunto();
-  if(!conjunto){ travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false }; return travaChecklist; }
+  if(!conjunto) return definirTrava(null, null, false);
   const [ultimo, { data: aberta }] = await Promise.all([
     carregarUltimoChecklist(),
     sb.from('jornada').select('id').eq('motorista_id', session.user.id).neq('status', 'encerrada').limit(1),
   ]);
+  return definirTrava(conjunto, ultimo, !!(aberta && aberta.length));
+}
+function definirTrava(conjunto, ultimo, jornadaAberta){
+  if(!conjunto) return (travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false });
   const venceEm = ultimo ? new Date(new Date(ultimo.criado_em).getTime() + VALIDADE_CHECKLIST_HORAS * 3600000) : null;
-  travaChecklist = { exigido:true, ultimo, venceEm, travado: !venceEm || venceEm <= new Date(), jornadaAberta: !!(aberta && aberta.length) };
-  return travaChecklist;
+  return (travaChecklist = { exigido:true, ultimo, venceEm, travado: !venceEm || venceEm <= new Date(), jornadaAberta });
 }
 
 function liberadoComChecklistVencido(tela, aba){
@@ -210,17 +209,20 @@ async function abrirTelaMotorista(){
   if(motoristaScreen === 'documentosMotorista'){ motoristaScreen = 'documentos'; docAbaMotorista = 'meus'; }
   if(motoristaScreen === 'documentosConjunto'){ motoristaScreen = 'documentos'; docAbaMotorista = 'veiculo'; }
 
-  await atualizarTravaChecklist();
-  if(travaChecklist.travado && !liberadoComChecklistVencido(motoristaScreen, motoristaTab)){
-    motoristaScreen = 'home'; motoristaTab = 'checklist';
-  }
-
   const subtelas = {
     jornadaPausa: loadJornadaPausa, jornadaEncerrar: loadJornadaEncerrar, abastecimento: loadAbastecimentoMotorista,
     documentos: loadDocumentosMotorista, historicoJornada: loadHistoricoJornadas, historicoJornadaDetalhe: loadHistoricoJornadaDetalhe,
     conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista, oficina: loadOficinaMotorista,
     agendamentos: loadAgendamentosMotorista, capacitacoes: loadCapacitacoesMotorista, notificacoes: loadNotificacoesMotorista,
   };
+  // Início: a consulta única já traz a situação do checklist (sem esperar outra ida ao servidor)
+  const vaiParaInicio = !subtelas[motoristaScreen] && !motoristaScreen.startsWith('emBreve:') && !['jornada', 'checklist', 'viagem', 'mais'].includes(motoristaTab);
+  if(vaiParaInicio){ motoristaScreen = 'home'; motoristaTab = 'inicio'; return loadAbaInicio(); }
+
+  await atualizarTravaChecklist();
+  if(travaChecklist.travado && !liberadoComChecklistVencido(motoristaScreen, motoristaTab)){
+    motoristaScreen = 'home'; motoristaTab = 'checklist';
+  }
   if(subtelas[motoristaScreen]) return subtelas[motoristaScreen]();
   if(motoristaScreen.startsWith('emBreve:')) return loadEmBreveMotorista(motoristaScreen.slice(8));
 
@@ -265,21 +267,93 @@ function cardMedidorConducao(jornada){
     </div>`;
 }
 
-async function loadAbaInicio(){
+// ---------------------------------------------------------------------
+// Dados do Início: uma consulta só no servidor (função inicio_motorista).
+// Ficam guardados no aparelho para a próxima abertura já mostrar a tela na
+// hora (e atualizar em seguida). Apagados ao sair da conta.
+// ---------------------------------------------------------------------
+const CHAVE_CACHE_INICIO = 'moveria:inicio';
+function salvarCacheInicio(dados){
+  try{
+    const { _doCache, ...usuario } = usuarioAtual;
+    localStorage.setItem(CHAVE_CACHE_INICIO, JSON.stringify({ usuarioId: session.user.id, usuario, dados, salvoEm: Date.now() }));
+  } catch(e){ /* sem espaço ou modo privado: segue sem guardar */ }
+}
+function lerCacheInicio(){
+  try{
+    const c = JSON.parse(localStorage.getItem(CHAVE_CACHE_INICIO) || 'null');
+    return c && c.usuarioId && c.usuario && c.usuario.papel === 'motorista' && c.dados ? c : null;
+  } catch(e){ return null; }
+}
+function limparCacheInicio(){ try{ localStorage.removeItem(CHAVE_CACHE_INICIO); } catch(e){ /* ignora */ } }
+
+// Plano B (servidor sem a função, ou ambiente de testes): mesmas informações por partes
+async function carregarInicioPorPartes(){
   const conjunto = await carregarMeuConjunto();
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
-  const [jornada, viagem, alertas, { data: ultimoAbast }, { data: meusChamados }, naoLidas, agendamentos] = await Promise.all([
-    carregarJornadaAtiva(), carregarViagemAtual(), carregarAlertasMotorista(veiculoIds),
+  const lista = (r) => (r && r.data) || [];
+  const [ultimo, jornada, viagem, docsMot, docsVeic, caps, abast, chamados, naoLidas, agendamentos] = await Promise.all([
+    carregarUltimoChecklist(),
+    sb.from('jornada').select('id, inicio, status, jornada_evento(tipo, motivo, observacao, criado_em)').eq('motorista_id', session.user.id).neq('status', 'encerrada').order('inicio', { ascending:false }).limit(1),
+    carregarViagemAtual(),
+    sb.from('documento').select('id, tipo, status, validade').eq('referente_a', 'motorista').eq('referente_id', session.user.id),
+    veiculoIds.length ? sb.from('documento').select('id, tipo, status, validade, referente_id').eq('referente_a', 'veiculo').in('referente_id', veiculoIds) : Promise.resolve({ data: [] }),
+    sb.from('capacitacao').select('id, tipo, validade').eq('motorista_id', session.user.id).not('validade', 'is', null),
     sb.from('abastecimento').select('media_calculada').eq('motorista_id', session.user.id).not('media_calculada', 'is', null).order('data', { ascending:false }).limit(1),
     sb.from('chamado_manutencao').select('status').eq('motorista_id', session.user.id).neq('status', 'concluido'),
     contarNaoLidas(), carregarAgendamentosMotorista(),
   ]);
-  const chamadosAbertos = (meusChamados || []).length;
+  return {
+    conjunto: conjunto || null, ultimo_checklist: ultimo, jornada: lista(jornada)[0] || null, viagem,
+    docs_motorista: lista(docsMot), docs_veiculo: lista(docsVeic), capacitacoes: lista(caps),
+    media: lista(abast)[0] ? lista(abast)[0].media_calculada : null, chamados_abertos: lista(chamados).length, nao_lidas: naoLidas, agendamentos,
+  };
+}
+
+// Aplica os dados (conjunto e trava do checklist) — a trava só conta como
+// conferida quando os dados acabaram de vir do servidor
+function aplicarDadosInicio(d, recentes){
+  meuConjunto = d.conjunto || false;
+  definirTrava(meuConjunto, d.ultimo_checklist, !!d.jornada);
+  if(recentes) travaVerificadaEm = Date.now();
+}
+
+async function loadAbaInicio(){
+  const { data, error } = await sb.rpc('inicio_motorista');
+  const dados = !error && data && typeof data === 'object' ? data : await carregarInicioPorPartes();
+  aplicarDadosInicio(dados, true);
+  salvarCacheInicio(dados);
+  if(travaChecklist.travado){ motoristaTab = 'checklist'; return loadChecklistMotorista(); }
+  desenharInicio(dados);
+}
+
+// Abertura do app: mostra o Início guardado enquanto confere a sessão e busca os dados novos
+function abrirInicioDoCache(cache){
+  usuarioAtual = { ...cache.usuario, _doCache: true };
+  session = { user: { id: cache.usuarioId } };
+  aplicarDadosInicio(cache.dados, false);
+  if(travaChecklist.travado || usuarioAtual.senha_temporaria || !usuarioAtual.ativo) return false;
+  definirTema('escuro');
+  motoristaScreen = 'home'; motoristaTab = 'inicio';
+  desenharInicio(cache.dados);
+  medidas.cacheEm = Math.round(performance.now());
+  mostrarCarregando();
+  return true;
+}
+
+function desenharInicio(d){
+  const conjunto = d.conjunto || false;
+  const jornada = prepararJornada(d.jornada ? { ...d.jornada } : null);
+  const viagem = d.viagem;
+  const alertas = montarAlertas(d.docs_motorista, d.docs_veiculo, d.capacitacoes);
+  const chamadosAbertos = Number(d.chamados_abertos) || 0;
+  const naoLidas = Number(d.nao_lidas) || 0;
+  const agendamentos = d.agendamentos || [];
   const proximoAg = agendamentos[0];
   const primeiroNome = (usuarioAtual.nome || '').split(' ')[0];
   const cavalo = placaCavalo(conjunto);
   const sub = cavalo ? `${cavalo} · ${usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : ''}` : (usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '');
-  const media = ultimoAbast && ultimoAbast[0] ? Number(ultimoAbast[0].media_calculada).toFixed(2).replace('.', ',') + ' km/l' : null;
+  const media = d.media !== null && d.media !== undefined ? Number(d.media).toFixed(2).replace('.', ',') + ' km/l' : null;
   const tile = (destino, icone, rotulo, meta, emBreve = false) =>
     `<div class="quick-tile ${emBreve ? 'em-breve' : ''}" data-ir="${destino}">${ic(icone, 20)}<div class="lbl">${rotulo}</div><div class="meta">${esc(meta)}</div></div>`;
   const excedeu = jornada && jornada.status === 'ativa' && jornada.conducao.continuoMin >= LIMITE_CONDUCAO_CONTINUA_MIN;

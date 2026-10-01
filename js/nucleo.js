@@ -19,15 +19,29 @@ function definirTema(tema){
 }
 
 async function init(){
-  app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`;
+  // Motorista que já usou o app neste aparelho: mostra o Início guardado na
+  // hora, enquanto confere a sessão e busca os dados novos (ver motorista.js)
+  const cache = lerCacheInicio();
+  if(!(cache && abrirInicioDoCache(cache))){
+    usuarioAtual = null;
+    app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`;
+  }
   const { data } = await sb.auth.getSession();
   session = data.session;
+  if(!session || (cache && session.user.id !== cache.usuarioId)){
+    usuarioAtual = null;
+    if(!session) limparCacheInicio();
+  }
   render();
 }
 
 function render(){
-  if(!session){ definirTema('escuro'); app.innerHTML = loginScreen(); attachLoginHandlers(); }
-  else { app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`; loadShell(); }
+  if(!session){ esconderCarregando(); definirTema('escuro'); app.innerHTML = loginScreen(); attachLoginHandlers(); }
+  else {
+    // com o Início guardado na tela, não troca por "Carregando..." — ele é atualizado por cima
+    if(!(usuarioAtual && usuarioAtual._doCache)) app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`;
+    loadShell();
+  }
 }
 
 function loginScreen(){
@@ -79,6 +93,7 @@ async function doLogin(e){
 }
 
 async function doLogout(){
+  limparCacheInicio();
   await removerPushDesteAparelho();
   await sb.auth.signOut();
   session = null;
@@ -103,11 +118,28 @@ const papelLabel = { admin_transportadora:'Administrador', gestor:'Escritório',
 const statusLabel = { ok:'Em dia', vence_em_breve:'Vence em breve', vencido:'Vencido' };
 const PAPEIS_GESTAO = ['admin_transportadora', 'gestor', 'admin_mover_ia'];
 
+const CAMPOS_USUARIO_ATUAL = 'nome, papel, ativo, transportadora_id, senha_temporaria, transportadora:transportadora_id ( nome_fantasia, plano )';
+
+// Usuário veio do que estava guardado no aparelho: confere no servidor sem
+// travar a tela; se algo importante mudou (desativado, papel, senha
+// temporária), monta tudo de novo
+async function conferirUsuarioPorTras(){
+  const { data: u } = await sb.from('usuario').select(CAMPOS_USUARIO_ATUAL).eq('id', session.user.id).single();
+  if(!u || !usuarioAtual) return;
+  const mudou = u.ativo !== usuarioAtual.ativo || u.papel !== usuarioAtual.papel || u.senha_temporaria !== usuarioAtual.senha_temporaria;
+  usuarioAtual = u;
+  if(mudou) loadShell();
+}
+
 async function loadShell(){
+  if(usuarioAtual && usuarioAtual._doCache){
+    delete usuarioAtual._doCache;
+    conferirUsuarioPorTras();
+  }
   if(!usuarioAtual){
     const { data: usuario, error: uErr } = await sb
       .from('usuario')
-      .select('nome, papel, ativo, transportadora_id, senha_temporaria, transportadora:transportadora_id ( nome_fantasia, plano )')
+      .select(CAMPOS_USUARIO_ATUAL)
       .eq('id', session.user.id)
       .single();
 
