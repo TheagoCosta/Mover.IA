@@ -1,8 +1,9 @@
 // MOVER.IA — service worker: guarda os arquivos do app no celular para ele
 // abrir rápido (e abrir mesmo com sinal fraco).
-//   • Página (index.html): busca a versão nova na internet primeiro; se não
-//     responder em 4s ou estiver sem sinal, usa a guardada. Assim, quando
-//     publicamos uma versão nova, ela chega na próxima abertura.
+//   • Página (index.html): abre NA HORA com a versão guardada e confere a da
+//     internet por trás. Se mudou (publicamos versão nova), guarda a nova e
+//     avisa o app, que mostra o aviso "Atualizar". Sem nada guardado ainda
+//     (primeira vez), espera a internet.
 //   • Arquivos com ?v= e bibliotecas de versão fixa (CDN, fontes): guardados
 //     de vez — quando o ?v= muda, é outro endereço e baixa o novo. As cópias
 //     de versões antigas são apagadas sozinhas.
@@ -26,8 +27,9 @@ self.addEventListener('fetch', (e) => {
   if(req.method !== 'GET') return;
   const url = new URL(req.url);
   const doApp = url.origin === self.location.origin && url.pathname.startsWith(ESCOPO);
+  if(url.searchParams.has('verificar')) return;   // o app conferindo se há versão nova: sempre da internet
 
-  if(req.mode === 'navigate' && doApp) return e.respondWith(paginaRedePrimeiro(req));
+  if(req.mode === 'navigate' && doApp) return e.respondWith(paginaGuardadaPrimeiro(req, e));
   if((doApp && url.searchParams.has('v')) || CDN_VERSAO_FIXA.some(p => req.url.startsWith(p))) return e.respondWith(cachePrimeiro(req));
   if(doApp && url.pathname !== ESCOPO + 'sw.js') return e.respondWith(guardadoEAtualiza(req));
   // resto: o navegador busca normalmente
@@ -46,6 +48,16 @@ async function guardar(req, resp){
       if(ku.pathname === url.pathname && ku.search !== url.search) await cache.delete(k);
     }
   }
+}
+
+async function paginaGuardadaPrimeiro(req, evento){
+  const url = new URL(req.url);
+  if(url.searchParams.has('atualizar')) return paginaRedePrimeiro(req);   // tocou em "Atualizar" no app
+  const cache = await caches.open(CACHE);
+  const guardada = await cache.match(ESCOPO);
+  const buscarNova = fetch(req).then(async (resp) => { if(resp.ok) await cache.put(ESCOPO, resp.clone()); return resp; });
+  if(guardada){ evento.waitUntil(buscarNova.catch(() => {})); return guardada; }
+  return buscarNova;   // primeira vez: espera a internet
 }
 
 async function paginaRedePrimeiro(req){

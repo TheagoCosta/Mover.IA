@@ -198,9 +198,10 @@ function irParaMotorista(destino){
 // Roteamento
 // ---------------------------------------------------------------------
 async function loadShellMotorista(){
+  const inicio = performance.now();
   mostrarCarregando();
   try{ await abrirTelaMotorista(); }
-  finally{ esconderCarregando(); }
+  finally{ esconderCarregando(); registrarTela(performance.now() - inicio); }
 }
 
 async function abrirTelaMotorista(){
@@ -442,25 +443,19 @@ function loadJornadaEncerrar(){
     conteudo: `
       <div class="section-label">Observação final (opcional)</div>
       <textarea id="encerrarObs" class="m-textarea" rows="3" placeholder="Alguma observação sobre a jornada?"></textarea>
-      <div class="section-label">Assinatura do motorista</div>
-      <div class="card" style="padding:10px;">
-        <canvas id="canvasAssinatura" class="assinatura"></canvas>
-        <button class="btn-small" id="btnLimparAssinatura" style="margin-top:8px;">Limpar assinatura</button>
-      </div>
-      <button class="btn btn-danger" id="btnConfirmarEncerramento" disabled>Assinar e encerrar jornada</button>`,
+      <div class="li-sub" style="margin:10px 0 14px;">Ao tocar no botão, abre a tela para você assinar com o dedo.</div>
+      <button class="btn btn-danger" id="btnConfirmarEncerramento">${ic('check', 16)} Assinar e encerrar jornada</button>`,
   });
-
-  const assinatura = prepararAssinatura(document.getElementById('canvasAssinatura'),
-    (tem) => { document.getElementById('btnConfirmarEncerramento').disabled = !tem; });
-  document.getElementById('btnLimparAssinatura').addEventListener('click', () => assinatura.limpar());
-  document.getElementById('btnConfirmarEncerramento').addEventListener('click', () => confirmarEncerramento(assinatura));
+  document.getElementById('btnConfirmarEncerramento').addEventListener('click', async () => {
+    const assinatura = await pedirAssinatura({ titulo: 'Assinatura — encerrar jornada', texto: `${usuarioAtual.nome} · ${fmtDataHora(new Date())}`, botao: 'Assinar e encerrar' });
+    if(assinatura) confirmarEncerramento(assinatura);
+  });
 }
 
-async function confirmarEncerramento(assinatura){
+async function confirmarEncerramento(assinaturaBase64){
   const btn = document.getElementById('btnConfirmarEncerramento');
   btn.disabled = true; btn.textContent = 'Salvando...';
   const obs = document.getElementById('encerrarObs').value.trim();
-  const assinaturaBase64 = assinatura.imagem();
 
   const { error } = await sb.from('jornada').update({
     status: 'encerrada',
@@ -573,29 +568,20 @@ async function loadChecklistMotorista(){
             </div>
           </div>`).join('')}
       </div>
-      <div class="section-label">Assinatura do motorista</div>
-      <div class="card" style="padding:10px;">
-        <div class="li-sub" style="margin-bottom:8px;">Declaro que fiz a inspeção do conjunto e que as respostas acima são verdadeiras.</div>
-        <canvas id="canvasAssinaturaChk" class="assinatura"></canvas>
-        <button class="btn-small" id="btnLimparAssinaturaChk" style="margin-top:8px;">Limpar assinatura</button>
-      </div>
+      <div class="li-sub" style="margin:4px 0 12px; text-align:center;">Ao enviar, você assina declarando que fez a inspeção e que as respostas são verdadeiras.</div>
       <button class="btn btn-primary" id="btnEnviarChecklist" disabled>Enviar checklist (${respondidos()}/${total})</button>`,
   });
 
   // Marca a resposta na própria tela (sem recarregar tudo, pra não perder a rolagem)
-  let assinatura = null;
   const atualizarProgresso = () => {
     const n = respondidos();
-    const assinado = assinatura && !assinatura.vazia();
     document.getElementById('chkProgressFill').style.width = (total ? n / total * 100 : 0) + '%';
     document.getElementById('chkProgressLbl').textContent = `${n}/${total} itens respondidos`;
     const enviar = document.getElementById('btnEnviarChecklist');
-    enviar.disabled = n < total || !assinado;
-    enviar.textContent = n < total ? `Enviar checklist (${n}/${total})` : assinado ? 'Assinar e enviar checklist' : 'Assine acima para enviar';
+    enviar.disabled = n < total;
+    enviar.textContent = n < total ? `Enviar checklist (${n}/${total})` : '✍️ Assinar e enviar checklist';
     document.getElementById('btnChkTudoAtende').disabled = n === total;
   };
-  assinatura = prepararAssinatura(document.getElementById('canvasAssinaturaChk'), atualizarProgresso);
-  document.getElementById('btnLimparAssinaturaChk').addEventListener('click', () => assinatura.limpar());
   atualizarProgresso();
   const marcar = (row, valor) => {
     chkAnswers[row.dataset.item] = valor;
@@ -610,12 +596,19 @@ async function loadChecklistMotorista(){
     atualizarProgresso();
     mostrarToast('✅ Itens marcados como "Atende" — toque no que não atende, se houver');
   });
-  document.getElementById('btnEnviarChecklist').addEventListener('click', () => enviarChecklist(assinatura));
+  document.getElementById('btnEnviarChecklist').addEventListener('click', async () => {
+    const irregulares = Object.values(chkAnswers).filter(v => v === 'bad').length;
+    const assinatura = await pedirAssinatura({
+      titulo: 'Assinatura — checklist',
+      texto: `Declaro que fiz a inspeção do conjunto e que as respostas são verdadeiras${irregulares ? ` (${irregulares} item${irregulares > 1 ? 's' : ''} não atende${irregulares > 1 ? 'm' : ''})` : ''}.`,
+      botao: 'Assinar e enviar',
+    });
+    if(assinatura) enviarChecklist(assinatura);
+  });
 }
 
-async function enviarChecklist(assinatura){
+async function enviarChecklist(assinaturaBase64){
   const btn = document.getElementById('btnEnviarChecklist');
-  if(!assinatura || assinatura.vazia()){ mostrarToast('✍️ Assine o checklist antes de enviar'); return; }
   btn.disabled = true; btn.textContent = 'Enviando...';
   const conjunto = await carregarMeuConjunto();
   const respostas = Object.keys(chkAnswers).map(itemId => ({ item_id: itemId, resposta: chkAnswers[itemId] }));
@@ -625,7 +618,7 @@ async function enviarChecklist(assinatura){
     motorista_id: session.user.id,
     conjunto_id: conjunto ? conjunto.id : null,
     respostas,
-    assinatura_base64: assinatura.imagem(),
+    assinatura_base64: assinaturaBase64,
     assinado_em: new Date().toISOString(),
   });
 
@@ -785,7 +778,11 @@ function loadPerfilMotorista(){
         <div class="card-dark-sub">${esc(papelLabel[usuarioAtual.papel] || '')} · ${esc(usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '')}</div>
         <div class="card-dark-sub" style="margin-top:6px;">Login: <b style="color:var(--text-primary);">${esc(login)}</b></div>
       </div>
-      <button class="btn btn-outline" id="btnSair">${ic('logout', 16)} Sair deste aparelho</button>`,
+      <button class="btn btn-outline" id="btnSair">${ic('logout', 16)} Sair deste aparelho</button>
+      <div class="section-label" style="margin-top:20px;">Velocidade do app (para o suporte)</div>
+      <div class="card lista" style="font-size:12.5px;">${resumoVelocidade().map(([rotulo, valor]) => `
+        <div class="list-item" style="padding:8px 0;"><div class="li-body"><div class="li-sub">${rotulo}</div></div><b style="font-family:var(--font-mono); font-size:12px;">${esc(valor)}</b></div>`).join('')}</div>
+      <div class="li-sub" style="text-align:center; margin-bottom:10px;">Use o app por alguns minutos e tire um print desta tela para o suporte.</div>`,
   });
   document.getElementById('btnSair').addEventListener('click', doLogout);
 }

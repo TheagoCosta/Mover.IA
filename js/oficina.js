@@ -272,9 +272,10 @@ function headerMecanico(titulo, sub){
 }
 
 async function loadShellMecanico(){
+  const inicio = performance.now();
   mostrarCarregando();
   try{ await abrirTelaMecanico(); }
-  finally{ esconderCarregando(); }
+  finally{ esconderCarregando(); registrarTela(performance.now() - inicio); }
 }
 
 async function abrirTelaMecanico(){

@@ -43,6 +43,67 @@ function esconderCarregando(){
   document.body.classList.remove('carregando');
 }
 
+// ---------- versão nova publicada ----------
+// O service worker abre a versão guardada na hora (rápido); aqui conferimos
+// por trás se publicamos outra e oferecemos "Atualizar".
+const VERSAO_APP = ((document.querySelector('script[src*="js/ui.js?v="]') || {}).src || '').split('v=')[1] || '';
+let ultimaConferenciaVersao = 0;
+async function conferirVersaoNova(){
+  if(!VERSAO_APP || Date.now() - ultimaConferenciaVersao < 10 * 60000) return;
+  ultimaConferenciaVersao = Date.now();
+  try{
+    const html = await fetch('./?verificar=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
+    const publicada = (html.match(/js\/ui\.js\?v=([\w-]+)/) || [])[1];
+    if(publicada && publicada !== VERSAO_APP) mostrarAvisoAtualizacao();
+  } catch(e){ /* sem internet: confere na próxima */ }
+}
+function mostrarAvisoAtualizacao(){
+  if(document.getElementById('avisoAtualizacao')) return;
+  document.body.insertAdjacentHTML('beforeend', `<div class="aviso-atualizacao" id="avisoAtualizacao">
+    <span>${ic('sync', 16)} Nova versão do app disponível</span>
+    <button type="button" class="btn btn-primary btn-sm" id="btnAtualizarApp">Atualizar</button></div>`);
+  document.getElementById('btnAtualizarApp').addEventListener('click', () => { location.href = './?atualizar=' + Date.now(); });
+}
+window.addEventListener('load', () => setTimeout(conferirVersaoNova, 3000));
+if(/[?&]atualizar=/.test(location.search)){   // acabou de atualizar: limpa o endereço
+  const params = new URLSearchParams(location.search); params.delete('atualizar');
+  history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : ''));
+}
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') conferirVersaoNova(); });
+
+// ---------- medidor de velocidade (aparece no Perfil do motorista) ----------
+// Guarda quanto tempo o servidor demora para responder e quanto cada tela
+// leva para abrir — para descobrir onde está a demora em cada celular.
+const medidas = { servidor: [], telas: [], prontoEm: null };
+(function medirServidor(){
+  const original = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const url = String(args[0] && args[0].url || args[0]);
+    if(!url.includes('.supabase.co/')) return original(...args);
+    const inicio = performance.now();
+    try{ return await original(...args); }
+    finally{ medidas.servidor.push(Math.round(performance.now() - inicio)); if(medidas.servidor.length > 40) medidas.servidor.shift(); }
+  };
+})();
+function registrarTela(ms){
+  medidas.telas.push(Math.round(ms)); if(medidas.telas.length > 20) medidas.telas.shift();
+  if(medidas.prontoEm === null) medidas.prontoEm = Math.round(performance.now());
+}
+function resumoVelocidade(){
+  const media = (l) => l.length ? Math.round(l.reduce((a, b) => a + b, 0) / l.length) : null;
+  const nav = performance.getEntriesByType('navigation')[0];
+  const ms = (v) => v === null || v === undefined ? '—' : (v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + ' s' : v + ' ms');
+  return [
+    ['Página carregada', ms(nav ? Math.round(nav.domContentLoadedEventEnd) : null)],
+    ['App pronto (1ª tela)', ms(medidas.prontoEm)],
+    ['Servidor — média', `${ms(media(medidas.servidor))} (${medidas.servidor.length} consultas)`],
+    ['Servidor — mais lenta', ms(medidas.servidor.length ? Math.max(...medidas.servidor) : null)],
+    ['Troca de tela — média', ms(media(medidas.telas.slice(1)))],
+    ['Troca de tela — última', ms(medidas.telas.length > 1 ? medidas.telas[medidas.telas.length - 1] : null)],
+    ['Instalado / versão', `${appInstalado() ? 'sim' : 'não'} · ${VERSAO_APP || '—'}`],
+  ];
+}
+
 // ---------- quadro de assinatura (jornada e checklist) ----------
 // Assina com o dedo/mouse. Na tela o traço é claro (fundo escuro do app);
 // a imagem salva é refeita com tinta escura sobre fundo branco, para ficar
@@ -75,16 +136,63 @@ function prepararAssinatura(canvas, aoMudar){
     vazia: () => !tracos.length,
     limpar(){ tracos.length = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); if(aoMudar) aoMudar(false); },
     imagem(){
-      const w = rect.width, h = rect.height, c = document.createElement('canvas');
+      // recorta só a área assinada (com uma margem), para a imagem não sair cheia de branco
+      const pontos = tracos.flat(), margem = 14;
+      const x0 = Math.max(0, Math.min(...pontos.map(p => p.x)) - margem), y0 = Math.max(0, Math.min(...pontos.map(p => p.y)) - margem);
+      const x1 = Math.min(rect.width, Math.max(...pontos.map(p => p.x)) + margem), y1 = Math.min(rect.height, Math.max(...pontos.map(p => p.y)) + margem);
+      const w = Math.max(x1 - x0, 120), h = Math.max(y1 - y0, 50), c = document.createElement('canvas');
       c.width = Math.round(w * 2); c.height = Math.round(h * 2);
       const x = c.getContext('2d');
       x.scale(2, 2);
       x.fillStyle = '#fff'; x.fillRect(0, 0, w, h);
+      x.translate(-x0, -y0);
       x.strokeStyle = '#14181d'; x.lineWidth = 2.2; x.lineCap = 'round'; x.lineJoin = 'round';
       tracos.forEach(t => { x.beginPath(); x.moveTo(t[0].x, t[0].y); t.forEach(p => x.lineTo(p.x, p.y)); if(t.length === 1) x.lineTo(t[0].x + 0.1, t[0].y); x.stroke(); });
       return c.toDataURL('image/png');
     },
   };
+}
+
+// Abre a assinatura em TELA CHEIA (espaço grande para assinar com o dedo;
+// dá para virar o celular de lado). Devolve a imagem, ou null se cancelar.
+function pedirAssinatura({ titulo = 'Assinatura do motorista', texto = '', botao = 'Confirmar assinatura' } = {}){
+  return new Promise((resolver) => {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="assinatura-tela" id="assinaturaTela" role="dialog" aria-modal="true">
+        <div class="assinatura-topo"><b>${esc(titulo)}</b>${texto ? `<span>${esc(texto)}</span>` : ''}</div>
+        <div class="assinatura-area"><canvas id="assinaturaCanvasTela"></canvas><div class="assinatura-linha">Assine acima da linha · dica: vire o celular de lado para ter mais espaço</div></div>
+        <div class="assinatura-botoes">
+          <button type="button" class="btn btn-outline" id="assCancelar">Cancelar</button>
+          <button type="button" class="btn btn-outline" id="assLimpar">Limpar</button>
+          <button type="button" class="btn btn-primary" id="assConfirmar" disabled>${esc(botao)}</button>
+        </div>
+      </div>`);
+    document.body.classList.add('assinando');
+    const tela = document.getElementById('assinaturaTela');
+    const confirmar = document.getElementById('assConfirmar');
+    let quadro = null;
+    const montar = () => {   // (re)monta o quadro no tamanho atual da tela
+      const antigo = document.getElementById('assinaturaCanvasTela');
+      const novo = antigo.cloneNode(false);
+      antigo.replaceWith(novo);
+      quadro = prepararAssinatura(novo, (tem) => { confirmar.disabled = !tem; });
+      confirmar.disabled = true;
+    };
+    montar();
+    // virou o celular: o quadro muda de tamanho e precisa assinar de novo
+    let timerGiro = null;
+    const aoGirar = () => { clearTimeout(timerGiro); timerGiro = setTimeout(montar, 250); };
+    window.addEventListener('resize', aoGirar);
+    const fechar = (resultado) => {
+      window.removeEventListener('resize', aoGirar);
+      document.body.classList.remove('assinando');
+      tela.remove();
+      resolver(resultado);
+    };
+    document.getElementById('assCancelar').addEventListener('click', () => fechar(null));
+    document.getElementById('assLimpar').addEventListener('click', () => quadro && quadro.limpar());
+    confirmar.addEventListener('click', () => { if(quadro && !quadro.vazia()) fechar(quadro.imagem()); });
+  });
 }
 
 // ---------- instalar o app na tela inicial ----------
