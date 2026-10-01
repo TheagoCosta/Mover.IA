@@ -6,7 +6,7 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const repo = process.argv[2] || path.join(__dirname, '..', '..');
 const porta = Number(process.argv[3]) || 8768;
 const raizes = { app: path.resolve(repo), teste: __dirname };
-const tipos = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png' };
+const tipos = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.webmanifest':'application/manifest+json' };
 http.createServer((req, res) => {
   const partes = decodeURIComponent(req.url.split('?')[0]).split('/').filter(Boolean);
   const raiz = raizes[partes.shift()];

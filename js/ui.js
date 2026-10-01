@@ -43,6 +43,32 @@ function esconderCarregando(){
   document.body.classList.remove('carregando');
 }
 
+// ---------- instalar o app na tela inicial ----------
+// No Android/Chrome o navegador avisa que dá para instalar (guardamos o
+// aviso para o botão "Instalar"); no iPhone só dá pelo menu do Safari.
+let pedidoInstalacao = null;
+window.addEventListener('beforeinstallprompt', (e) => { pedidoInstalacao = e; });
+window.addEventListener('appinstalled', () => { pedidoInstalacao = null; });
+function appInstalado(){ return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }
+async function instalarApp(){
+  if(pedidoInstalacao){
+    try{
+      pedidoInstalacao.prompt();
+      const { outcome } = await pedidoInstalacao.userChoice;
+      pedidoInstalacao = null;
+      if(outcome === 'accepted') mostrarToast('✅ App instalado — procure o ícone MOVER.IA na tela inicial');
+      return;
+    } catch(e){ pedidoInstalacao = null; }
+  }
+  const iphone = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const passos = iphone
+    ? ['Abra este site no <b>Safari</b>.', 'Toque no botão <b>Compartilhar</b> (quadrado com uma seta para cima).', 'Toque em <b>Adicionar à Tela de Início</b> e depois em <b>Adicionar</b>.']
+    : ['Abra este site no <b>Chrome</b>.', 'Toque no menu <b>⋮</b> (canto de cima, à direita).', 'Toque em <b>Instalar app</b> ou <b>Adicionar à tela inicial</b> e confirme.'];
+  abrirModal('Instalar o app', `
+    <ol style="margin:0 0 12px; padding-left:20px; line-height:1.6;">${passos.map(p => `<li>${p}</li>`).join('')}</ol>
+    <div class="l2">Pronto: o ícone do MOVER.IA aparece na tela inicial e o app abre mais rápido, em tela cheia.</div>`);
+}
+
 // Ícones (mesmos desenhos do protótipo). ic('truck', 18)
 function ic(nome, tamanho = 18, cor = 'currentColor'){
   const p = {

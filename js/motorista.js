@@ -689,13 +689,21 @@ function loadAbaMais(){
   montarTelaMotorista({
     tab: 'mais',
     header: headerPrincipal('Mais', usuarioAtual.nome),
-    conteudo: `<div class="card lista">${itens.map(it => `
+    conteudo: `${appInstalado() ? '' : `
+      <div class="card lista"><div class="list-item clickable" id="btnInstalarApp">
+        <div class="li-ic">${ic('download', 16)}</div>
+        <div class="li-body"><div class="li-title">Instalar o app no celular</div><div class="li-sub">Abre mais rápido, direto da tela inicial</div></div>
+        <div class="chev">${ic('chev', 16)}</div>
+      </div></div>`}
+      <div class="card lista">${itens.map(it => `
       <div class="list-item clickable" data-ir="${it.ir}">
         <div class="li-ic">${ic(it.i, 16)}</div>
         <div class="li-body"><div class="li-title">${it.l}</div><div class="li-sub">${esc(it.m)}</div></div>
         <div class="chev">${ic('chev', 16)}</div>
       </div>`).join('')}</div>`,
   });
+  const instalar = document.getElementById('btnInstalarApp');
+  if(instalar) instalar.addEventListener('click', instalarApp);
 }
 
 async function loadDocumentosMotorista(){
