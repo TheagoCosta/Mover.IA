@@ -79,6 +79,7 @@ async function doLogin(e){
 }
 
 async function doLogout(){
+  await removerPushDesteAparelho();
   await sb.auth.signOut();
   session = null;
   usuarioAtual = null;
@@ -131,6 +132,12 @@ async function loadShell(){
   // obriga a trocar a senha temporária antes de liberar o app.
   // Qualquer login com senha temporária (motorista, mecânico ou escritório) troca a senha antes de entrar
   if(usuarioAtual.senha_temporaria){ definirTema('escuro'); loadPrimeiroAcessoMotorista(); return; }
+
+  // Abriu tocando num aviso do celular → vai direto para a tela dele
+  const destino = lerDestinoDaUrl();
+  if(destino) prepararDestino(destino);
+  sincronizarPush();
+
   if(usuarioAtual.papel === 'motorista'){ definirTema('escuro'); loadShellMotorista(); return; }
   if(usuarioAtual.papel === 'mecanico'){ definirTema('escuro'); loadShellMecanico(); return; }
 

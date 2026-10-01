@@ -292,6 +292,7 @@ async function loadAbaInicio(){
     conteudo: `
       ${excedeu ? `<div class="alert-card vencido">${ic('alert', 18)}<div class="txt"><b>Hora de parar</b><span>Você passou de 5h30 dirigindo sem parar. Faça uma parada assim que for seguro.</span></div></div>` : ''}
       ${avisoChecklist ? `<div class="alert-card" data-ir="tab:checklist" style="cursor:pointer;">${ic('checksq', 18)}<div class="txt"><b>Checklist vence às ${fmtHora(travaChecklist.venceEm)}</b><span>Faça um novo antes disso para o app não travar.</span></div></div>` : ''}
+      ${cartaoAvisosCelular()}
       ${alertas.map(a => `<div class="alert-card ${statusDocumento(a) === 'vencido' ? 'vencido' : ''} clickable" data-ir="${a.destino || 'documentos'}" style="cursor:pointer;">${ic('alert', 18)}<div class="txt"><b>${esc(a.tipo)} — ${ROTULO_STATUS_DOC[statusDocumento(a)]}</b><span>${esc(a.origem)} · ${esc(textoVencimento(a))}</span></div></div>`).join('')}
       <div class="section-label">Jornada de hoje</div>
       ${cardJornadaResumo(jornada)}
@@ -306,6 +307,7 @@ async function loadAbaInicio(){
         ${tile('capacitacoes', 'award', 'Capacitações', alertas.some(a => a.origem === 'Capacitação') ? 'Renovação pendente' : 'Meus treinamentos')}
       </div>`,
   });
+  ligarCartaoAvisos();
 }
 
 function saudacaoHorario(){

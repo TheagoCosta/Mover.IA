@@ -8,6 +8,7 @@
 //     de versões antigas são apagadas sozinhas.
 //   • Imagens e manifesto: usa a guardada e atualiza por trás.
 //   • Banco de dados (Supabase) e todo o resto: sempre direto da internet.
+//   • Também recebe os avisos (push) e abre a tela certa ao tocar neles.
 // Mudou este arquivo? Troque o número em CACHE para limpar tudo nos celulares.
 const CACHE = 'moveria-v1';
 const ESCOPO = new URL('./', self.location).pathname;   // /Mover.IA/ no GitHub Pages
@@ -70,6 +71,39 @@ async function cachePrimeiro(req){
   if(podeGuardar(resp)) await guardar(req, resp.clone());
   return resp;
 }
+
+// ---------- avisos no celular (push) ----------
+// O servidor (Edge Function enviar-push) manda {titulo, mensagem, destino}.
+self.addEventListener('push', (e) => {
+  let d = {};
+  try{ d = e.data ? e.data.json() : {}; } catch(err){ d = { titulo: e.data ? e.data.text() : '' }; }
+  e.waitUntil((async () => {
+    await self.registration.showNotification(d.titulo || 'MOVER.IA', {
+      body: d.mensagem || '',
+      icon: ESCOPO + 'img/icone-192.png',
+      tag: d.id || undefined,
+      data: { destino: d.destino || '' },
+    });
+    // app aberto: atualiza o número do sino
+    for(const c of await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) c.postMessage({ tipo: 'nova-notificacao' });
+  })());
+});
+
+// Tocou no aviso: abre o app (ou traz para frente) já na tela certa
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const destino = (e.notification.data && e.notification.data.destino) || '';
+  e.waitUntil((async () => {
+    const abertas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const doApp = abertas.find(c => new URL(c.url).pathname.startsWith(ESCOPO));
+    if(doApp){
+      await doApp.focus();
+      doApp.postMessage({ tipo: 'abrir', destino });
+      return;
+    }
+    await self.clients.openWindow(ESCOPO + (destino ? '?abrir=' + encodeURIComponent(destino) : ''));
+  })());
+});
 
 async function guardadoEAtualiza(req){
   const guardado = await caches.match(req);
