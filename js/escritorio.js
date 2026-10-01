@@ -386,14 +386,23 @@ async function secaoChecklists(el){
 
 async function abrirDetalheChecklist(checklist){
   if(!checklist) return;
-  const itens = await consultar(sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').order('ordem'));
+  // a assinatura (imagem) só é buscada aqui, para não pesar as listas
+  const [itens, { data: assinado }] = await Promise.all([
+    consultar(sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').order('ordem')),
+    sb.from('checklist').select('assinatura_base64, assinado_em').eq('id', checklist.id).maybeSingle(),
+  ]);
   const resposta = Object.fromEntries((checklist.respostas || []).map(r => [r.item_id, r.resposta]));
   const rotulo = { ok:['green', 'Atende'], bad:['red', 'Não atende'], na:['grey', 'N/A'] };
   const respondidos = itens.filter(i => resposta[i.id]);
   const ordenados = [...respondidos.filter(i => resposta[i.id] === 'bad'), ...respondidos.filter(i => resposta[i.id] !== 'bad')];
   abrirModal(`Checklist — ${checklist.motorista ? checklist.motorista.nome : ''}`, `
     <div class="l2" style="margin-bottom:10px;">${fmtDataHora(checklist.criado_em)} · conjunto ${esc(cavaloDoConjunto(checklist.conjunto))}</div>
-    ${ordenados.map(i => { const [cor, txt] = rotulo[resposta[i.id]] || ['grey', resposta[i.id]]; return `<div class="timeline-item"><div class="hora">${i.ordem}.</div><div style="flex:1;">${esc(i.descricao)}${i.padrao_esperado ? `<div class="l2">${esc(i.padrao_esperado)}</div>` : ''}</div><div>${badge(cor, txt)}</div></div>`; }).join('') || '<div class="l2">Sem respostas.</div>'}`);
+    ${ordenados.map(i => { const [cor, txt] = rotulo[resposta[i.id]] || ['grey', resposta[i.id]]; return `<div class="timeline-item"><div class="hora">${i.ordem}.</div><div style="flex:1;">${esc(i.descricao)}${i.padrao_esperado ? `<div class="l2">${esc(i.padrao_esperado)}</div>` : ''}</div><div>${badge(cor, txt)}</div></div>`; }).join('') || '<div class="l2">Sem respostas.</div>'}
+    <div class="section-label">Assinatura do motorista</div>
+    ${assinado && assinado.assinatura_base64
+      ? `<img src="${assinado.assinatura_base64}" alt="Assinatura do motorista" style="width:100%; max-width:420px; background:#fff; border:1px solid var(--border); border-radius:8px; display:block;">
+         <div class="l2">Assinado em ${fmtDataHora(assinado.assinado_em || checklist.criado_em)}</div>`
+      : '<div class="l2">Checklist enviado antes da assinatura existir no app.</div>'}`);
 }
 
 // (as seções AGENDA e CAPACITAÇÕES ficam em js/agenda.js e js/capacitacoes.js)

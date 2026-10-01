@@ -450,38 +450,17 @@ function loadJornadaEncerrar(){
       <button class="btn btn-danger" id="btnConfirmarEncerramento" disabled>Assinar e encerrar jornada</button>`,
   });
 
-  const canvas = document.getElementById('canvasAssinatura');
-  const ctx = canvas.getContext('2d');
-  const rect = canvas.getBoundingClientRect();
-  const escala = window.devicePixelRatio || 1;
-  canvas.width = rect.width * escala;
-  canvas.height = rect.height * escala;
-  ctx.scale(escala, escala);
-  ctx.strokeStyle = '#edeef0';
-  ctx.lineWidth = 2.2;
-  ctx.lineCap = 'round';
-
-  let desenhando = false;
-  const posicao = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
-  canvas.addEventListener('pointerdown', e => {
-    desenhando = true;
-    document.getElementById('btnConfirmarEncerramento').disabled = false;
-    const p = posicao(e); ctx.beginPath(); ctx.moveTo(p.x, p.y);
-  });
-  canvas.addEventListener('pointermove', e => { if(!desenhando) return; const p = posicao(e); ctx.lineTo(p.x, p.y); ctx.stroke(); });
-  window.addEventListener('pointerup', () => { desenhando = false; });
-  document.getElementById('btnLimparAssinatura').addEventListener('click', () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    document.getElementById('btnConfirmarEncerramento').disabled = true;
-  });
-  document.getElementById('btnConfirmarEncerramento').addEventListener('click', () => confirmarEncerramento(canvas));
+  const assinatura = prepararAssinatura(document.getElementById('canvasAssinatura'),
+    (tem) => { document.getElementById('btnConfirmarEncerramento').disabled = !tem; });
+  document.getElementById('btnLimparAssinatura').addEventListener('click', () => assinatura.limpar());
+  document.getElementById('btnConfirmarEncerramento').addEventListener('click', () => confirmarEncerramento(assinatura));
 }
 
-async function confirmarEncerramento(canvas){
+async function confirmarEncerramento(assinatura){
   const btn = document.getElementById('btnConfirmarEncerramento');
   btn.disabled = true; btn.textContent = 'Salvando...';
   const obs = document.getElementById('encerrarObs').value.trim();
-  const assinaturaBase64 = canvas.toDataURL('image/png');
+  const assinaturaBase64 = assinatura.imagem();
 
   const { error } = await sb.from('jornada').update({
     status: 'encerrada',
@@ -581,8 +560,8 @@ async function loadChecklistMotorista(){
       </div>
       <div class="progress-track" style="margin-bottom:6px;"><div class="progress-fill" id="chkProgressFill" style="width:${total ? respondidos() / total * 100 : 0}%"></div></div>
       <div class="li-sub" id="chkProgressLbl" style="margin-bottom:10px;">${respondidos()}/${total} itens respondidos</div>
-      <button class="btn btn-outline" id="btnChkTudoAtende" style="margin-bottom:12px;" ${total && respondidos() === total ? 'disabled' : ''}>${ic('check', 16)} Tudo atende</button>
-      <div class="li-sub" style="margin:-6px 0 12px; text-align:center;">Marca "Atende" em todos os itens ainda sem resposta — depois toque só no que não atende.</div>
+      <button class="btn btn-outline" id="btnChkTudoAtende" style="margin-bottom:12px;" ${total && respondidos() === total ? 'disabled' : ''}>${ic('check', 16)} Marcar todos como Atende</button>
+      <div class="li-sub" style="margin:-6px 0 12px; text-align:center;">Preenche os itens ainda sem resposta — depois toque só no que não atende.</div>
       <div class="card" style="padding:4px 16px;">
         ${(itens||[]).map(it => `
           <div class="chk-item">
@@ -594,19 +573,30 @@ async function loadChecklistMotorista(){
             </div>
           </div>`).join('')}
       </div>
-      <button class="btn btn-primary" id="btnEnviarChecklist" ${respondidos() < total ? 'disabled' : ''}>Enviar checklist (${respondidos()}/${total})</button>`,
+      <div class="section-label">Assinatura do motorista</div>
+      <div class="card" style="padding:10px;">
+        <div class="li-sub" style="margin-bottom:8px;">Declaro que fiz a inspeção do conjunto e que as respostas acima são verdadeiras.</div>
+        <canvas id="canvasAssinaturaChk" class="assinatura"></canvas>
+        <button class="btn-small" id="btnLimparAssinaturaChk" style="margin-top:8px;">Limpar assinatura</button>
+      </div>
+      <button class="btn btn-primary" id="btnEnviarChecklist" disabled>Enviar checklist (${respondidos()}/${total})</button>`,
   });
 
   // Marca a resposta na própria tela (sem recarregar tudo, pra não perder a rolagem)
+  let assinatura = null;
   const atualizarProgresso = () => {
     const n = respondidos();
+    const assinado = assinatura && !assinatura.vazia();
     document.getElementById('chkProgressFill').style.width = (total ? n / total * 100 : 0) + '%';
     document.getElementById('chkProgressLbl').textContent = `${n}/${total} itens respondidos`;
     const enviar = document.getElementById('btnEnviarChecklist');
-    enviar.disabled = n < total;
-    enviar.textContent = `Enviar checklist (${n}/${total})`;
+    enviar.disabled = n < total || !assinado;
+    enviar.textContent = n < total ? `Enviar checklist (${n}/${total})` : assinado ? 'Assinar e enviar checklist' : 'Assine acima para enviar';
     document.getElementById('btnChkTudoAtende').disabled = n === total;
   };
+  assinatura = prepararAssinatura(document.getElementById('canvasAssinaturaChk'), atualizarProgresso);
+  document.getElementById('btnLimparAssinaturaChk').addEventListener('click', () => assinatura.limpar());
+  atualizarProgresso();
   const marcar = (row, valor) => {
     chkAnswers[row.dataset.item] = valor;
     row.querySelectorAll('.ans-btn').forEach(b => b.classList.toggle('active', b.dataset.val === valor));
@@ -618,13 +608,14 @@ async function loadChecklistMotorista(){
   document.getElementById('btnChkTudoAtende').addEventListener('click', () => {
     document.querySelectorAll('.answer-row').forEach(row => { if(!chkAnswers[row.dataset.item]) marcar(row, 'ok'); });
     atualizarProgresso();
-    mostrarToast('✅ Tudo marcado como "Atende" — toque no que não atende, se houver');
+    mostrarToast('✅ Itens marcados como "Atende" — toque no que não atende, se houver');
   });
-  document.getElementById('btnEnviarChecklist').addEventListener('click', enviarChecklist);
+  document.getElementById('btnEnviarChecklist').addEventListener('click', () => enviarChecklist(assinatura));
 }
 
-async function enviarChecklist(){
+async function enviarChecklist(assinatura){
   const btn = document.getElementById('btnEnviarChecklist');
+  if(!assinatura || assinatura.vazia()){ mostrarToast('✍️ Assine o checklist antes de enviar'); return; }
   btn.disabled = true; btn.textContent = 'Enviando...';
   const conjunto = await carregarMeuConjunto();
   const respostas = Object.keys(chkAnswers).map(itemId => ({ item_id: itemId, resposta: chkAnswers[itemId] }));
@@ -633,11 +624,12 @@ async function enviarChecklist(){
     transportadora_id: usuarioAtual.transportadora_id,
     motorista_id: session.user.id,
     conjunto_id: conjunto ? conjunto.id : null,
-    respostas
+    respostas,
+    assinatura_base64: assinatura.imagem(),
+    assinado_em: new Date().toISOString(),
   });
 
   if(error){ alert('Erro ao enviar checklist: ' + error.message); btn.disabled = false; btn.textContent = 'Tentar de novo'; return; }
-
   const irregulares = respostas.filter(r => r.resposta === 'bad').length;
   mostrarToast(irregulares ? `✅ Checklist enviado — ${irregulares} irregularidade${irregulares > 1 ? 's' : ''} avisada${irregulares > 1 ? 's' : ''} ao escritório` : '✅ Checklist enviado ao escritório');
   chkAnswers = {};

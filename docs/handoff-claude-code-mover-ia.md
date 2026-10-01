@@ -18,7 +18,7 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 ## 2. Arquitetura
 
 - **Frontend sem build:** `index.html` + `css/app.css` + `js/*.js` (scripts clássicos, todas as funções globais — um arquivo chama funções dos outros). Bibliotecas por CDN: supabase-js 2.117.2 (versão fixa, no `index.html`); jsQR, pdf.js 3.11.174 e tesseract.js 5.1.1 são **baixados só quando usados** (`carregarBiblioteca()` / `usarPdfJs()` em `js/ui.js`) — não voltar a colocá-los no `<head>`, isso deixava o celular lento. Fontes Oswald/Inter/JetBrains Mono (Google Fonts).
-- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261001d`) para os celulares baixarem a versão nova.
+- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261001e`) para os celulares baixarem a versão nova.
 - **App instalável (PWA):** `manifest.webmanifest` + `sw.js` (service worker). A página vem da internet primeiro (cópia guardada se sem sinal ou >4s); arquivos com `?v=` e CDN de versão fixa ficam guardados de vez; Supabase nunca é guardado. **Por isso o `?v=` é obrigatório** — sem trocar, o celular continua com o arquivo antigo. Mudou o `sw.js`? Trocar `CACHE` (`moveria-v1` → `v2`). Botão "Instalar o app no celular" na aba Mais do motorista (`instalarApp()` em `ui.js`). O navegador embutido do Claude não registra service worker; a lógica foi testada simulando o navegador no Node.
 - **Backend:** Supabase `otllslhjbyjtktxyvezy` (Postgres + Auth + Storage + Edge Functions). O Claude acessa pelo **conector oficial do Supabase** (MCP) — o Thiago conecta em Configurações → Conectores do app do Claude. Com ele o Claude lê o banco, aplica migrações e publica funções.
 - **Hospedagem:** GitHub `TheagoCosta/Mover.IA`, branch `main` → **GitHub Pages: https://theagocosta.github.io/Mover.IA/** (maiúsculas importam; `/mover-ia/` dá 404). O Netlify antigo está pausado/abandonado.
@@ -65,6 +65,7 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 - Arquitetura sem build (arquivos estáticos + Supabase). Dividir em arquivos foi aprovado.
 - **Senha mínima de 6 caracteres** (ele não quis 8; a proteção de senhas vazadas do Supabase exige plano pago).
 - Abastecimento interno confirmado com a **senha individual** de quem do escritório abasteceu (identifica quem foi).
+- **Checklist assinado** pelo motorista antes de enviar (`checklist.assinatura_base64`); assinaturas feitas com `prepararAssinatura()` (`js/ui.js`), salvas em tinta escura sobre fundo branco. Botão "Marcar todos como Atende" só preenche itens sem resposta.
 - **Checklist obrigatório a cada 24h** (`VALIDADE_CHECKLIST_HORAS` em `js/motorista.js`): vencido trava o app na aba Checklist; com jornada aberta a aba Jornada continua liberada; motorista sem conjunto não trava.
 - Média do Arla separada; a do diesel é a principal. Preço por litro só no abastecimento externo.
 - Os 24 veículos da frota estão nos 6 conjuntos originais — para dar um conjunto a um motorista, editar um conjunto existente (Veículos ou Motoristas).

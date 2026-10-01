@@ -43,6 +43,50 @@ function esconderCarregando(){
   document.body.classList.remove('carregando');
 }
 
+// ---------- quadro de assinatura (jornada e checklist) ----------
+// Assina com o dedo/mouse. Na tela o traço é claro (fundo escuro do app);
+// a imagem salva é refeita com tinta escura sobre fundo branco, para ficar
+// legível no painel do escritório e em impressões.
+// aoMudar(temAssinatura) avisa quando passa a ter (ou deixa de ter) traços.
+function prepararAssinatura(canvas, aoMudar){
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const escala = window.devicePixelRatio || 1;
+  canvas.width = rect.width * escala;
+  canvas.height = rect.height * escala;
+  ctx.scale(escala, escala);
+  ctx.strokeStyle = '#edeef0'; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const tracos = [];
+  let atual = null;
+  const posicao = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try{ canvas.setPointerCapture(e.pointerId); } catch(err){ /* navegador antigo */ }
+    const p = posicao(e);
+    atual = [p]; tracos.push(atual);
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 0.1, p.y); ctx.stroke();
+    if(tracos.length === 1 && aoMudar) aoMudar(true);
+  });
+  canvas.addEventListener('pointermove', (e) => { if(!atual) return; const p = posicao(e); atual.push(p); ctx.lineTo(p.x, p.y); ctx.stroke(); });
+  const soltar = () => { atual = null; };
+  canvas.addEventListener('pointerup', soltar);
+  canvas.addEventListener('pointercancel', soltar);
+  return {
+    vazia: () => !tracos.length,
+    limpar(){ tracos.length = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); if(aoMudar) aoMudar(false); },
+    imagem(){
+      const w = rect.width, h = rect.height, c = document.createElement('canvas');
+      c.width = Math.round(w * 2); c.height = Math.round(h * 2);
+      const x = c.getContext('2d');
+      x.scale(2, 2);
+      x.fillStyle = '#fff'; x.fillRect(0, 0, w, h);
+      x.strokeStyle = '#14181d'; x.lineWidth = 2.2; x.lineCap = 'round'; x.lineJoin = 'round';
+      tracos.forEach(t => { x.beginPath(); x.moveTo(t[0].x, t[0].y); t.forEach(p => x.lineTo(p.x, p.y)); if(t.length === 1) x.lineTo(t[0].x + 0.1, t[0].y); x.stroke(); });
+      return c.toDataURL('image/png');
+    },
+  };
+}
+
 // ---------- instalar o app na tela inicial ----------
 // No Android/Chrome o navegador avisa que dá para instalar (guardamos o
 // aviso para o botão "Instalar"); no iPhone só dá pelo menu do Safari.
