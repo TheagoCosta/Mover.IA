@@ -8,7 +8,8 @@
 //
 // Regras: quem chama tem de ser motorista ativo; o veículo tem de estar no
 // conjunto dele; quem confirma tem de ser do escritório (gestão), ativo e
-// da mesma transportadora. Publicada pelo Claude via conector (verify_jwt).
+// da mesma transportadora. Senha errada demais bloqueia por 15 minutos
+// (tabela tentativa_confirmacao). Publicada pelo Claude via conector (verify_jwt).
 // =====================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -60,9 +61,17 @@ Deno.serve(async (req: Request) => {
     if (!confirmador || !confirmador.ativo || !PAPEIS_GESTAO.includes(confirmador.papel) || confirmador.transportadora_id !== motorista.transportadora_id) {
       return jsonResponse({ error: 'Quem confirma precisa ser do escritório desta transportadora.' }, 403);
     }
+    // limite de tentativas (para ninguém ficar testando senhas do escritório):
+    // 5 erros do motorista ou 10 erros na senha desta pessoa em 15 minutos
+    const { data: liberada, error: erroLimite } = await admin.rpc('confirmacao_liberada', { p_motorista: motorista.id, p_confirmador: confirmador.id });
+    if (erroLimite) return jsonResponse({ error: 'Não consegui conferir a senha agora. Tente de novo.' }, 500);
+    if (!liberada) return jsonResponse({ error: 'Muitas tentativas com senha errada. Aguarde 15 minutos e tente de novo.' }, 429);
+
     const verificador = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
     const { data: login, error: erroSenha } = await verificador.auth.signInWithPassword({ email: confirmador.email, password: String(b.senha) });
-    if (erroSenha || !login?.user || login.user.id !== confirmador.id) return jsonResponse({ error: 'Senha do escritório incorreta.' }, 401);
+    const senhaCerta = !erroSenha && !!login?.user && login.user.id === confirmador.id;
+    await admin.from('tentativa_confirmacao').insert({ motorista_id: motorista.id, confirmador_id: confirmador.id, sucesso: senhaCerta });
+    if (!senhaCerta) return jsonResponse({ error: 'Senha do escritório incorreta.' }, 401);
     // encerra SÓ a sessão criada para conferir a senha ('local'), sem
     // derrubar o login da pessoa do escritório no computador dela
     await verificador.auth.signOut({ scope: 'local' });

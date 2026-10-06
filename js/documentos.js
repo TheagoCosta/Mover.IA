@@ -642,7 +642,7 @@ function mostrarRevisaoDocumento(ctx){
       <div style="background:var(--asphalt-900); width:100%; border-radius:16px 16px 0 0; padding:20px; max-height:85vh; overflow:auto;">
         <h3 style="margin-top:0;">Confirme o documento</h3>
         ${deteccao.tipo
-          ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${deteccao.tipo}</b>${motoristaSugerido ? ' de ' + motoristaSugerido.nome : ''}${veiculoSugerido ? ' do veículo ' + veiculoSugerido.placa : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}${usouOcr ? ' <span class="pill ok" style="margin-left:0;">lido por imagem</span>' : ''}</div>`
+          ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${esc(deteccao.tipo)}</b>${motoristaSugerido ? ' de ' + esc(motoristaSugerido.nome) : ''}${veiculoSugerido ? ' do veículo ' + esc(veiculoSugerido.placa) : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}${usouOcr ? ' <span class="pill ok" style="margin-left:0;">lido por imagem</span>' : ''}</div>`
           : `<div class="l2" style="margin-bottom:14px;">Não consegui identificar automaticamente este arquivo — preencha abaixo.</div>`}
 
         <select id="revisaoReferenteA">
@@ -653,7 +653,7 @@ function mostrarRevisaoDocumento(ctx){
 
         <div id="revisaoReferenteIdWrap" style="margin-top:10px;"></div>
 
-        <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${deteccao.tipo || ''}" style="margin-top:10px;">
+        <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${esc(deteccao.tipo || '')}" style="margin-top:10px;">
         <input type="text" id="revisaoNumero" placeholder="Número (opcional)" value="${numeroSugerido || ''}" style="margin-top:10px;">
 
         ${sugestaoCalendario ? `

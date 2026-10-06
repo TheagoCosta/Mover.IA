@@ -206,8 +206,8 @@ function confirmarDadosNovoMotorista(nome, cpf){
         <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:420px; width:100%;">
           <h3 style="margin-top:0;">Confira os dados do motorista</h3>
           <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema e vou criar o login dele. Não tive certeza da leitura — confira (e corrija se precisar) antes de continuar.</div>
-          <input type="text" id="confNovoMotNome" placeholder="Nome completo" value="${nome || ''}">
-          <input type="text" id="confNovoMotCpf" placeholder="CPF" inputmode="numeric" value="${cpf || ''}" style="margin-top:10px;">
+          <input type="text" id="confNovoMotNome" placeholder="Nome completo" value="${esc(nome || '')}">
+          <input type="text" id="confNovoMotCpf" placeholder="CPF" inputmode="numeric" value="${esc(cpf || '')}" style="margin-top:10px;">
           <div id="confNovoMotErro" class="err" style="margin-top:8px;"></div>
           <button id="btnConfNovoMotOk" style="margin-top:14px; width:100%;">Confirmar e cadastrar</button>
           <button class="btn-small" id="btnConfNovoMotCancelar" style="margin-top:8px; width:100%;">Não cadastrar agora</button>

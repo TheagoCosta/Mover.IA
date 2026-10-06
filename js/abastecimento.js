@@ -152,10 +152,8 @@ async function prepararAbastecimento(cavalo, ultimoKm, ultimoKmArla){
     if(!nota){ erro.textContent = 'Informe o número da nota ou comprovante.'; return; }
     const btn = document.querySelector('#formAbastecimento button[type="submit"]');
     btn.disabled = true; btn.textContent = 'Salvando...';
-    // média do diesel: só litros de diesel (o Arla não entra); Arla tem média própria
-    const media = ultimoKm && km > ultimoKm ? (km - ultimoKm) / litros : null;
-    const mediaArla = arla && ultimoKmArla && km > ultimoKmArla ? (km - ultimoKmArla) / arla : null;
-    const { error } = await sb.from('abastecimento').insert({
+    // médias do diesel e do Arla e a data são calculadas pelo banco (gatilho abastecimento_calcular)
+    const { data: salvo, error } = await sb.from('abastecimento').insert({
       transportadora_id: usuarioAtual.transportadora_id,
       motorista_id: session.user.id,
       veiculo_id: cavalo.veiculo_id,
@@ -163,9 +161,9 @@ async function prepararAbastecimento(cavalo, ultimoKm, ultimoKmArla){
       km, litros, arla_litros: arla,
       preco_litro_diesel: precoDiesel, preco_litro_arla: arla ? precoArla : null,
       posto, nota_numero: nota,
-      media_calculada: media, media_arla_calculada: mediaArla,
-    });
+    }).select('media_calculada').single();
     if(error){ erro.textContent = 'Erro ao salvar: ' + error.message; btn.disabled = false; btn.textContent = 'Registrar abastecimento'; return; }
+    const media = salvo && salvo.media_calculada !== null ? Number(salvo.media_calculada) : null;
     mostrarToast(media ? `✅ Abastecimento salvo — ${media.toFixed(2).replace('.', ',')} km/l` : '✅ Abastecimento salvo');
     loadAbastecimentoMotorista();
     return;
