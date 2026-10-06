@@ -120,8 +120,8 @@ async function loadDocumentos(){
   el.innerHTML = `
     <div class="upload-box" id="btnAdicionarDocumentoAuto">
       ${ic('upload', 28)}
-      <b>Arraste o arquivo aqui ou clique para selecionar</b>
-      <div>PDF ou foto de CNH, CRLV etc. — o app descobre sozinho de quem é e sugere a validade</div>
+      <b>Arraste os arquivos aqui ou clique para selecionar</b>
+      <div>PDF ou foto de CNH, CRLV etc. — pode mandar vários de uma vez. O app descobre de quem é cada um, sugere a validade e, se for CNH de motorista novo, já cria o login</div>
     </div>
     <div class="doc-tabs" style="max-width:640px;">
       ${filtros.map(([k, l]) => `<button class="${documentosFiltro === k ? 'active' : ''}" data-filtro="${k}">${l} (${contagem(k)})</button>`).join('')}
@@ -155,8 +155,7 @@ async function loadDocumentos(){
   dropArea.addEventListener('drop', (e) => {
     e.preventDefault();
     dropArea.style.borderColor = '';
-    const file = e.dataTransfer.files && e.dataTransfer.files[0];
-    if(file) processarUploadAutomatico(file);
+    processarArquivosEnviados([...(e.dataTransfer.files || [])]);
   });
 
   el.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { documentosFiltro = b.dataset.filtro; loadDocumentos(); }));
@@ -444,14 +443,62 @@ async function abrirUploadAutomatico(){
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'application/pdf,image/*';
-  input.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if(file) await processarUploadAutomatico(file);
-  });
+  input.multiple = true;
+  input.addEventListener('change', (e) => processarArquivosEnviados([...e.target.files]));
   input.click();
 }
 
+// Um arquivo: fluxo normal. Vários: processa em lote (um por vez) e, no fim,
+// mostra o resumo e a lista de logins/senhas dos motoristas criados.
+async function processarArquivosEnviados(arquivos){
+  const validos = arquivos.filter(f => f.type === 'application/pdf' || /^image\//.test(f.type));
+  if(!validos.length){ if(arquivos.length) alert('Envie PDF ou foto (JPG/PNG).'); return; }
+  if(validos.length === 1) return processarUploadAutomatico(validos[0]);
+  const lote = { resultados: [], credenciais: [] };
+  for(let i = 0; i < validos.length; i++){
+    prefixoLote = `Documento ${i + 1} de ${validos.length} — ${esc(validos[i].name)}`;
+    mostrarStatusOcr(true, 'Lendo o documento...');
+    try{ await processarUploadAutomatico(validos[i], lote); }
+    catch(e){ lote.resultados.push({ arquivo: validos[i].name, situacao: 'erro', texto: 'Erro inesperado: ' + e.message }); }
+    mostrarStatusOcr(false);
+  }
+  prefixoLote = '';
+  loadDocumentos();
+  mostrarResumoLote(lote);
+}
+let prefixoLote = '';
+
+function mostrarResumoLote(lote){
+  const ICONE = { ok:'✅', novo:'🆕', conferido:'✍️', pulado:'⏭️', erro:'⚠️' };
+  const n = (s) => lote.resultados.filter(r => r.situacao === s).length;
+  abrirModal(`Envio concluído — ${lote.resultados.length} documentos`, `
+    <div class="l2" style="margin-bottom:10px;">${lote.credenciais.length} motorista(s) novo(s) com login · ${n('novo') + n('ok')} documento(s) salvo(s) sozinho(s) · ${n('conferido')} conferido(s) na mão · ${n('pulado') + n('erro')} documento(s) não salvo(s)</div>
+    ${lote.credenciais.length ? `
+      <div class="o-banner" style="margin:0 0 10px; color:var(--signal-amber-ink);">${ic('alert', 18)}<div class="txt"><b>Anote ou imprima os logins agora</b>As senhas temporárias aparecem só aqui. No primeiro acesso, cada motorista confirma o CPF e cria a própria senha.</div></div>
+      ${tabela(['Motorista', 'Login', 'Senha temporária'], lote.credenciais.map(c => `<tr><td>${esc(c.nome)}</td><td class="mono">${esc(c.login)}</td><td class="mono"><b>${esc(c.senha)}</b></td></tr>`))}
+      <div class="o-acoes" style="margin-bottom:12px;">
+        <button type="button" class="btn btn-primary btn-sm" id="btnImprimirLogins">${ic('download', 14)} Imprimir logins</button>
+        <button type="button" class="btn btn-outline btn-sm" id="btnCsvLogins">Baixar planilha de logins</button>
+      </div>` : ''}
+    ${tabela(['', 'Arquivo', 'Resultado'], lote.resultados.map(r => `<tr><td>${ICONE[r.situacao] || ''}</td><td class="sub">${esc(r.arquivo)}</td><td>${esc(r.texto)}</td></tr>`))}`);
+  const imprimir = document.getElementById('btnImprimirLogins');
+  if(imprimir) imprimir.addEventListener('click', () => {
+    const janela = window.open('', '_blank');
+    if(!janela){ alert('O navegador bloqueou a janela de impressão — use "Baixar planilha de logins".'); return; }
+    janela.document.write(`<!doctype html><meta charset="utf-8"><title>Logins MOVER.IA</title>
+      <style>body{font-family:Arial,sans-serif;padding:24px} h1{font-size:18px} table{border-collapse:collapse;width:100%} td,th{border:1px solid #999;padding:8px;text-align:left;font-size:13px} td.m{font-family:monospace;font-size:14px}</style>
+      <h1>MOVER.IA — logins de primeiro acesso (${esc(fmtData(new Date()))})</h1>
+      <p>Endereço: ${esc(location.origin + location.pathname)} · No primeiro acesso, o motorista confirma o CPF e cria a própria senha.</p>
+      <table><tr><th>Motorista</th><th>Login</th><th>Senha temporária</th></tr>
+      ${lote.credenciais.map(c => `<tr><td>${esc(c.nome)}</td><td class="m">${esc(c.login)}</td><td class="m">${esc(c.senha)}</td></tr>`).join('')}</table>`);
+    janela.document.close(); janela.focus(); janela.print();
+  });
+  const csv = document.getElementById('btnCsvLogins');
+  if(csv) csv.addEventListener('click', () => baixarCSV('logins_motoristas', ['Motorista', 'Login', 'Senha temporária'], lote.credenciais.map(c => [c.nome, c.login, c.senha])));
+}
+
 function mostrarStatusOcr(mostrar, mensagem){
+  if(mostrar && prefixoLote) mensagem = `${prefixoLote}<br>${mensagem || ''}`;
   let el = document.getElementById('ocrStatus');
   if(mostrar){
     if(!el){
@@ -460,6 +507,7 @@ function mostrarStatusOcr(mostrar, mensagem){
       el.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,.8); z-index:60; display:flex; align-items:center; justify-content:center; padding:24px;';
       document.body.appendChild(el);
     }
+    // (mensagem é texto do próprio app; o nome do arquivo passa por esc() no prefixo)
     el.innerHTML = `<div style="text-align:center; color:var(--text-primary);">🔍 ${mensagem || 'Lendo o documento...'}<br><span style="color:var(--text-secondary); font-size:12.5px;">Isso pode levar alguns segundos</span></div>`;
   } else if(el){
     el.remove();
@@ -478,6 +526,18 @@ function mostrarToast(mensagem){
 // pessoa confirma manualmente no cartão de revisão quanto quando o app
 // tem certeza suficiente pra cadastrar sozinho, sem perguntar nada.
 async function salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, validade, file }){
+  // CNH nova de quem já tem CNH cadastrada: atualiza a existente (não duplica)
+  if(referenteA === 'motorista' && /^cnh$/i.test(String(tipo || '').trim())){
+    const { data: existente } = await sb.from('documento').select('id').eq('referente_a', 'motorista').eq('referente_id', referenteId).ilike('tipo', 'cnh').limit(1);
+    if(existente && existente[0]){
+      const docId = existente[0].id;
+      const path = `${usuarioAtual.transportadora_id}/${docId}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
+      const { error: upErr } = await sb.storage.from('documentos').upload(path, file, { upsert: true });
+      if(upErr) return { error: upErr, docId };
+      const { error } = await sb.from('documento').update({ arquivo_url: path, numero: numero || null, validade: validade || null, status: 'ok' }).eq('id', docId);
+      return error ? { error, docId } : { docId, atualizado: true };
+    }
+  }
   const { data: novoDoc, error } = await sb.from('documento').insert({
     transportadora_id: usuarioAtual.transportadora_id,
     referente_a: referenteA,
@@ -497,7 +557,11 @@ async function salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, v
   return { docId: novoDoc.id };
 }
 
-async function processarUploadAutomatico(file){
+// lote (opcional): { resultados, credenciais } — no envio de vários arquivos,
+// em vez de janelas e avisos a cada documento, junta tudo para o resumo final
+async function processarUploadAutomatico(file, lote = null){
+  const registrar = (situacao, texto) => { if(lote) lote.resultados.push({ arquivo: file.name, situacao, texto }); };
+  let motoristaNovo = false;
   let texto = '';
   if(file.type === 'application/pdf'){
     try{ texto = await extrairTextoPdf(file); } catch(e){ texto = ''; }
@@ -569,14 +633,16 @@ async function processarUploadAutomatico(file){
       if(resultadoCriacao.motorista){
         motoristaSugerido = { id: resultadoCriacao.motorista.usuarioId, nome: nomeCNH };
         motoristas.push(motoristaSugerido);
-        await mostrarCredenciaisNovoMotorista(resultadoCriacao.motorista);
+        motoristaNovo = true;
+        if(lote) lote.credenciais.push({ nome: nomeCNH, login: resultadoCriacao.motorista.login, senha: resultadoCriacao.motorista.senhaTemporaria });
+        else await mostrarCredenciaisNovoMotorista(resultadoCriacao.motorista);
       } else if(resultadoCriacao.error){
         // Não trava o Thiago (segue pra confirmação manual), mas avisa o
         // motivo — assim dá pra saber se é a função que falta publicar, ou
         // outra coisa.
-        alert('Não consegui cadastrar o motorista automaticamente: ' + resultadoCriacao.error);
+        if(!lote) alert('Não consegui cadastrar o motorista automaticamente: ' + resultadoCriacao.error);
       }
-    } else {
+    } else if(!lote){
       const motivo = !nomeCNH ? 'o nome' : 'a validade';
       alert('Não consegui ler ' + motivo + ' deste motorista automaticamente pra cadastrar ele sozinho — selecione manualmente abaixo (ou complete os dados e cadastre-o pela tela de Documentos > Cadastrar documentos > motorista).');
     }
@@ -600,20 +666,28 @@ async function processarUploadAutomatico(file){
   if(podeSalvarAutomatico){
     const referenteId = deteccao.referenteA === 'motorista' ? motoristaSugerido.id : veiculoSugerido.id;
     const nomeExibicao = deteccao.referenteA === 'motorista' ? motoristaSugerido.nome : veiculoSugerido.placa;
-    const { error } = await salvarDocumentoNoBanco({
+    const { error, atualizado } = await salvarDocumentoNoBanco({
       referenteA: deteccao.referenteA, referenteId, tipo: deteccao.tipo,
       numero: numeroSugerido, validade: validadeAuto, file
     });
     if(!error){
-      mostrarToast(`✅ ${deteccao.tipo} de ${nomeExibicao} cadastrado automaticamente`);
-      loadDocumentos();
+      const validadeTxt = validadeAuto ? ` — validade ${fmtData(validadeAuto)}` : '';
+      if(lote) registrar(motoristaNovo ? 'novo' : 'ok', motoristaNovo
+        ? `Motorista ${nomeExibicao} cadastrado com login; documento ${deteccao.tipo} salvo${validadeTxt}`
+        : `Documento ${deteccao.tipo} de ${nomeExibicao} ${atualizado ? 'atualizado' : 'cadastrado'}${validadeTxt}`);
+      else { mostrarToast(`✅ ${deteccao.tipo} de ${nomeExibicao} ${atualizado ? 'atualizada' : 'cadastrada automaticamente'}`); loadDocumentos(); }
       return;
     }
     // Deu erro salvando sozinho — não trava o Thiago, cai pra tela de
     // confirmação normal pra ele conseguir salvar na mão.
   }
 
-  mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida });
+  if(lote) mostrarStatusOcr(false);
+  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, lote });
+  if(lote){
+    if(resposta && resposta.salvo) registrar(motoristaNovo ? 'novo' : 'conferido', `${motoristaNovo ? 'Motorista cadastrado com login; ' : ''}conferido na mão e salvo`);
+    else registrar('pulado', motoristaNovo ? 'Motorista cadastrado com login, mas o documento não foi salvo (cancelado na conferência)' : 'Pulado na conferência — não foi cadastrado');
+  }
 }
 
 function sugerirValidadePorPlaca(placa, calendario){
@@ -632,15 +706,20 @@ function sugerirValidadePorPlaca(placa, calendario){
   return `${dd}/${mm}/${ano}`;
 }
 
+// Tela de conferência; devolve uma promessa que resolve com { salvo } quando
+// a pessoa salva ou cancela (o envio em lote espera para seguir ao próximo)
 function mostrarRevisaoDocumento(ctx){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida } = ctx;
+  return new Promise((resolverRevisao) => montarRevisaoDocumento(ctx, resolverRevisao));
+}
+function montarRevisaoDocumento(ctx, resolverRevisao){
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, lote } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
   const outrasDatas = validadeSugerida ? datas.filter(d => d !== validadeSugerida) : datas;
 
   const modalHtml = `
     <div id="uploadModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:flex-end;">
       <div style="background:var(--asphalt-900); width:100%; border-radius:16px 16px 0 0; padding:20px; max-height:85vh; overflow:auto;">
-        <h3 style="margin-top:0;">Confirme o documento</h3>
+        <h3 style="margin-top:0;">Confirme o documento${lote ? ` <span class="l2" style="font-weight:400;">· ${esc(file.name)}</span>` : ''}</h3>
         ${deteccao.tipo
           ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${esc(deteccao.tipo)}</b>${motoristaSugerido ? ' de ' + esc(motoristaSugerido.nome) : ''}${veiculoSugerido ? ' do veículo ' + esc(veiculoSugerido.placa) : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}${usouOcr ? ' <span class="pill ok" style="margin-left:0;">lido por imagem</span>' : ''}</div>`
           : `<div class="l2" style="margin-bottom:14px;">Não consegui identificar automaticamente este arquivo — preencha abaixo.</div>`}
@@ -654,7 +733,7 @@ function mostrarRevisaoDocumento(ctx){
         <div id="revisaoReferenteIdWrap" style="margin-top:10px;"></div>
 
         <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${esc(deteccao.tipo || '')}" style="margin-top:10px;">
-        <input type="text" id="revisaoNumero" placeholder="Número (opcional)" value="${numeroSugerido || ''}" style="margin-top:10px;">
+        <input type="text" id="revisaoNumero" placeholder="Número (opcional)" value="${esc(numeroSugerido || '')}" style="margin-top:10px;">
 
         ${sugestaoCalendario ? `
           <div class="l2" style="margin-top:14px;">Sugestão pelo calendário do Detran (final da placa):</div>
@@ -683,12 +762,12 @@ function mostrarRevisaoDocumento(ctx){
     if(referenteA === 'motorista'){
       wrap.innerHTML = `<select id="revisaoReferenteId">
         <option value="">Selecione o motorista</option>
-        ${(motoristas||[]).map(m => `<option value="${m.id}" ${motoristaSugerido && motoristaSugerido.id===m.id ? 'selected':''}>${m.nome}</option>`).join('')}
+        ${(motoristas||[]).map(m => `<option value="${m.id}" ${motoristaSugerido && motoristaSugerido.id===m.id ? 'selected':''}>${esc(m.nome)}</option>`).join('')}
       </select>`;
     } else if(referenteA === 'veiculo'){
       wrap.innerHTML = `<select id="revisaoReferenteId">
         <option value="">Selecione o veículo</option>
-        ${(veiculos||[]).map(v => `<option value="${v.id}" ${veiculoSugerido && veiculoSugerido.id===v.id ? 'selected':''}>${v.placa}</option>`).join('')}
+        ${(veiculos||[]).map(v => `<option value="${v.id}" ${veiculoSugerido && veiculoSugerido.id===v.id ? 'selected':''}>${esc(v.placa)}</option>`).join('')}
       </select>`;
     } else {
       wrap.innerHTML = '';
@@ -704,8 +783,8 @@ function mostrarRevisaoDocumento(ctx){
     btn.classList.add('active', 'ok');
   }));
 
-  function fechar(){ const m = document.getElementById('uploadModal'); if(m) m.remove(); }
-  document.getElementById('btnCancelarUploadAutomatico').addEventListener('click', fechar);
+  function fechar(salvo = false){ const m = document.getElementById('uploadModal'); if(m) m.remove(); resolverRevisao({ salvo }); }
+  document.getElementById('btnCancelarUploadAutomatico').addEventListener('click', () => fechar(false));
 
   document.getElementById('btnSalvarUploadAutomatico').addEventListener('click', async () => {
     const btn = document.getElementById('btnSalvarUploadAutomatico');
@@ -723,10 +802,10 @@ function mostrarRevisaoDocumento(ctx){
     const { error, docId } = await salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, validade, file });
 
     if(error && !docId){ alert('Erro ao criar o documento: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar documento'; return; }
-    if(error){ alert('Documento criado, mas não consegui enviar o arquivo: ' + error.message); fechar(); loadDocumentos(); return; }
+    if(error){ alert('Documento criado, mas não consegui enviar o arquivo: ' + error.message); fechar(true); if(!lote) loadDocumentos(); return; }
 
-    fechar();
-    loadDocumentos();
+    fechar(true);
+    if(!lote) loadDocumentos();
   });
 }
 

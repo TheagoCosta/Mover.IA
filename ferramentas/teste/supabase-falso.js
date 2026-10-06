@@ -13,15 +13,15 @@
     mir: { id:'u-mir', nome:'Maria Teste Souza', papel:'motorista', email:'maria.souza@motoristas.moveria.app', ativo:true, senha_temporaria:false, transportadora_id:T, transportadora:emp },
   };
   const V = [
-    { id:'v1', placa:'GKH-1B12', tipo:'cavalo', modelo:'Scania R450', ano:2021, ativo:true },
+    { id:'v1', placa:'GKH-1B12', tipo:'cavalo', modelo:'Scania R450', ano:2021, ativo:true, grupo:'Chaves' },
     { id:'v2', placa:'FIJ-7F46', tipo:'carreta', modelo:'Randon', ativo:true },
     { id:'v3', placa:'FQQ-1I56', tipo:'dolly', modelo:'Randon', ativo:true },
     { id:'v4', placa:'GJO-5C04', tipo:'carreta', modelo:'Randon', ativo:true },
-    { id:'v5', placa:'GBW-8C41', tipo:'cavalo', modelo:'Volvo FH 540', ativo:true },
+    { id:'v5', placa:'GBW-8C41', tipo:'cavalo', modelo:'Volvo FH 540', ativo:true, grupo:'RAC' },
     { id:'v6', placa:'ABC-1D23', tipo:'carreta', modelo:'Librelato', ativo:true },
     { id:'v7', placa:'XYZ-9876', tipo:'cavalo', modelo:'Mercedes Actros', ativo:true },
   ];
-  const vv = (id) => { const v = V.find(x => x.id === id); return { placa:v.placa, tipo:v.tipo, modelo:v.modelo }; };
+  const vv = (id) => { const v = V.find(x => x.id === id); return { placa:v.placa, tipo:v.tipo, modelo:v.modelo, grupo:v.grupo || null }; };
   const conjunto = [
     { id:'c1', ativo:true, motorista_id:'u-car', motorista:{ nome:U.car.nome }, conjunto_item:[1,2,3,4].map(n => ({ ordem:n, veiculo_id:'v'+n, veiculo:vv('v'+n) })) },
     { id:'c2', ativo:true, motorista_id:null, motorista:null, conjunto_item:[{ ordem:1, veiculo_id:'v5', veiculo:vv('v5') }] },
@@ -116,6 +116,7 @@
       gt(c, v){ linhas = linhas.filter(r => r[c] != null && r[c] > v); return q; },
       lte(c, v){ linhas = linhas.filter(r => r[c] <= v); return q; },
       is(c, v){ linhas = linhas.filter(r => (r[c] ?? null) === v); return q; },
+      ilike(c, v){ const re = new RegExp('^' + String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'i'); linhas = linhas.filter(r => re.test(String(r[c] ?? ''))); return q; },
       not(c, op, v){ if(op === 'is' && v === null) linhas = linhas.filter(r => r[c] != null); return q; },
       order(){ return q; },
       limit(n){ linhas = linhas.slice(0, n); return q; },

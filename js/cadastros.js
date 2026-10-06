@@ -193,6 +193,8 @@ const POSICOES_CONJUNTO = [
 
 let filtroVeiculos = 'todos';
 let buscaVeiculos = '';
+let filtroGrupoVeiculos = '';   // '' = todos os grupos
+const grupoDoConjunto = (c) => { const cav = itensOrdenados(c).find(i => i.ordem === 1); return cav && cav.veiculo ? cav.veiculo.grupo || '' : ''; };
 
 async function secaoVeiculos(el){
   const [veiculos, conjuntosTodos, docs, usuarios] = await Promise.all([
@@ -200,10 +202,14 @@ async function secaoVeiculos(el){
     consultar(sb.from('documento').select('id, referente_id, tipo, validade, status').eq('referente_a', 'veiculo')),
     qUsuarios(),
   ]);
-  const conjuntos = conjuntosTodos.filter(c => c.ativo);
+  const grupos = [...new Set(veiculos.map(v => v.grupo).filter(Boolean))].sort();
+  if(filtroGrupoVeiculos && !grupos.includes(filtroGrupoVeiculos)) filtroGrupoVeiculos = '';
+  const doGrupo = (g) => !filtroGrupoVeiculos || g === filtroGrupoVeiculos;
+  const conjuntosAtivos = conjuntosTodos.filter(c => c.ativo);   // todos (para montar/editar conjuntos)
+  const conjuntos = conjuntosAtivos.filter(c => doGrupo(grupoDoConjunto(c)));
   const docsDe = (vid) => docs.filter(d => d.referente_id === vid);
   const conjuntoDoVeiculo = {};
-  conjuntos.forEach(c => (c.conjunto_item || []).forEach(i => { conjuntoDoVeiculo[i.veiculo_id] = c; }));
+  conjuntosAtivos.forEach(c => (c.conjunto_item || []).forEach(i => { conjuntoDoVeiculo[i.veiculo_id] = c; }));
   const celulaPlaca = (item) => item ? `<span class="mono">${esc(item.veiculo.placa)}</span>` : '<span class="sub">—</span>';
   const motoristas = usuarios.filter(u => u.papel === 'motorista' && u.ativo);
   const posicaoDo = (v) => {
@@ -227,17 +233,23 @@ async function secaoVeiculos(el){
   const filtro = FILTROS.find(f => f[0] === filtroVeiculos) || FILTROS[0];
   const busca = buscaVeiculos.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const ordemTipo = { cavalo:0, carreta:1, dolly:2 };
-  const ordenados = veiculos.filter(filtro[2]).filter(v => !busca || v.placa.replace(/[^A-Z0-9]/g, '').includes(busca))
+  const ordenados = veiculos.filter(filtro[2]).filter(v => doGrupo(v.grupo || '')).filter(v => !busca || v.placa.replace(/[^A-Z0-9]/g, '').includes(busca))
     .sort((a, b) => (b.ativo - a.ativo) || ordemTipo[a.tipo] - ordemTipo[b.tipo] || (posicaoDo(a) || 9) - (posicaoDo(b) || 9) || a.placa.localeCompare(b.placa));
 
   el.innerHTML = `
+    ${grupos.length ? `<div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+      <label for="filtroGrupoVeic" class="l2" style="margin:0; font-weight:600;">Grupo</label>
+      <select id="filtroGrupoVeic" style="width:auto; padding:7px 10px;">
+        <option value="">Todos os grupos</option>${grupos.map(g => `<option value="${esc(g)}" ${filtroGrupoVeiculos === g ? 'selected' : ''}>${esc(g)} (${veiculos.filter(v => v.grupo === g).length})</option>`).join('')}
+      </select></div>` : ''}
     ${painel(`Conjuntos (${conjuntos.length})`,
-      conjuntos.length ? tabela(['Motorista', 'Cavalo', '1ª carreta', 'Dolly', '2ª carreta', 'Documentos'],
+      conjuntos.length ? tabela(['Motorista', 'Grupo', 'Cavalo', '1ª carreta', 'Dolly', '2ª carreta', 'Documentos'],
         conjuntos.map(c => {
           const itens = itensOrdenados(c);
           const naPosicao = (ordem) => itens.find(i => i.ordem === ordem);
           const pior = piorStatus(itens.flatMap(i => docsDe(i.veiculo_id)));
           return `<tr class="clickable" data-conjunto="${c.id}"><td>${c.motorista ? esc(c.motorista.nome) : '<span class="sub">Sem motorista</span>'}</td>
+            <td class="sub">${esc(grupoDoConjunto(c) || '—')}</td>
             <td>${celulaPlaca(naPosicao(1))}</td><td>${celulaPlaca(naPosicao(2))}</td><td>${celulaPlaca(naPosicao(3))}</td><td>${celulaPlaca(naPosicao(4))}</td>
             <td>${pior ? badge(COR_STATUS_DOC[pior], ROTULO_STATUS_DOC[pior]) : '<span class="sub">Nenhum</span>'}</td></tr>`;
         }))
@@ -250,17 +262,19 @@ async function secaoVeiculos(el){
       <input type="search" id="buscaPlaca" placeholder="Buscar placa" value="${esc(buscaVeiculos)}" style="flex:0 1 200px; padding:9px 12px;">
     </div>
     ${painel(`${filtro[1] === 'Todos' ? 'Veículos' : filtro[1]} (${ordenados.length})`,
-      ordenados.length ? tabela(['Placa', 'Posição', 'Modelo', 'Conjunto / motorista', 'Documentos'],
+      ordenados.length ? tabela(['Placa', 'Grupo', 'Posição', 'Modelo', 'Conjunto / motorista', 'Documentos'],
         ordenados.map(v => {
           const c = conjuntoDoVeiculo[v.id];
           const meus = docsDe(v.id);
-          return `<tr class="clickable" data-veiculo="${v.id}" style="${v.ativo ? '' : 'opacity:.55;'}"><td class="mono">${esc(v.placa)}</td><td>${esc(rotuloPosicao(v))}${v.ativo ? '' : ' <span class="sub">(inativo)</span>'}</td><td class="sub">${esc([v.modelo, v.ano].filter(Boolean).join(' · ') || '—')}</td>
+          return `<tr class="clickable" data-veiculo="${v.id}" style="${v.ativo ? '' : 'opacity:.55;'}"><td class="mono">${esc(v.placa)}</td><td class="sub">${esc(v.grupo || '—')}</td><td>${esc(rotuloPosicao(v))}${v.ativo ? '' : ' <span class="sub">(inativo)</span>'}</td><td class="sub">${esc([v.modelo, v.ano].filter(Boolean).join(' · ') || '—')}</td>
             <td>${c ? `${c.motorista ? esc(c.motorista.nome) : '<span class="sub">Sem motorista</span>'}<div class="sub mono">cavalo ${esc(cavaloDoConjunto(c))}</div>` : '<span class="sub">Fora de conjunto</span>'}</td>
             <td>${meus.length ? meus.map(d => `<div style="margin:2px 0;">${badgeDoc(d)} <span class="sub">${esc(d.tipo)}</span></div>`).join('') : '<span class="sub">Nenhum</span>'}</td></tr>`;
         })) : vazio('Nenhum veículo neste filtro.'),
       `<button class="btn btn-primary btn-sm" id="btnNovoVeiculo">${ic('plus', 15)} Cadastrar veículo</button>`)}`;
 
   el.querySelectorAll('[data-filtro-veic]').forEach(b => b.addEventListener('click', () => { filtroVeiculos = b.dataset.filtroVeic; secaoVeiculos(el); }));
+  const selGrupo = document.getElementById('filtroGrupoVeic');
+  if(selGrupo) selGrupo.addEventListener('change', () => { filtroGrupoVeiculos = selGrupo.value; secaoVeiculos(el); });
   const campoBusca = document.getElementById('buscaPlaca');
   campoBusca.addEventListener('input', () => {
     clearTimeout(campoBusca._t);
@@ -269,8 +283,8 @@ async function secaoVeiculos(el){
 
   document.getElementById('btnNovoVeiculo').addEventListener('click', () => abrirEditarVeiculo(null, veiculos));
   el.querySelectorAll('[data-veiculo]').forEach(tr => tr.addEventListener('click', () => abrirEditarVeiculo(veiculos.find(v => v.id === tr.dataset.veiculo), veiculos, conjuntoDoVeiculo[tr.dataset.veiculo])));
-  document.getElementById('btnNovoConjunto').addEventListener('click', () => abrirEditarConjunto(null, { veiculos, conjuntos, motoristas }));
-  el.querySelectorAll('[data-conjunto]').forEach(tr => tr.addEventListener('click', () => abrirEditarConjunto(conjuntos.find(c => c.id === tr.dataset.conjunto), { veiculos, conjuntos, motoristas })));
+  document.getElementById('btnNovoConjunto').addEventListener('click', () => abrirEditarConjunto(null, { veiculos, conjuntos: conjuntosAtivos, motoristas }));
+  el.querySelectorAll('[data-conjunto]').forEach(tr => tr.addEventListener('click', () => abrirEditarConjunto(conjuntosAtivos.find(c => c.id === tr.dataset.conjunto), { veiculos, conjuntos: conjuntosAtivos, motoristas })));
 }
 
 function abrirEditarVeiculo(v, veiculos, conjunto){
@@ -283,6 +297,8 @@ function abrirEditarVeiculo(v, veiculos, conjunto){
           <select id="evTipo" ${conjunto ? 'disabled title="Tire o veículo do conjunto para mudar o tipo"' : ''}>${['cavalo', 'carreta', 'dolly'].map(t => `<option value="${t}" ${v && v.tipo === t ? 'selected' : ''}>${tipoLabelGlobal[t]}</option>`).join('')}</select></div>
         ${campoTexto('evModelo', 'Modelo', v && v.modelo, 'placeholder="ex: Scania R450"')}
         ${campoTexto('evAno', 'Ano', v && v.ano, 'inputmode="numeric" maxlength="4" placeholder="ex: 2021"')}
+        ${campoTexto('evGrupo', 'Grupo (opcional)', v && v.grupo, `list="evGrupos" maxlength="40" placeholder="ex: Chaves, Agregado"`)}
+        <datalist id="evGrupos">${[...new Set(veiculos.map(x => x.grupo).filter(Boolean))].sort().map(g => `<option value="${esc(g)}">`).join('')}</datalist>
       </div>
       ${!novo ? `<label style="display:flex; gap:8px; align-items:center; font-size:13.5px; cursor:pointer;"><input type="checkbox" id="evAtivo" ${v.ativo ? 'checked' : ''} style="width:auto;" ${conjunto && v.ativo ? 'disabled' : ''}> Veículo ativo na frota${conjunto && v.ativo ? ' <span class="l2">(tire do conjunto antes de desativar)</span>' : ''}</label>` : ''}
       ${conjunto ? `<div class="l2">Faz parte do conjunto ${esc(itensOrdenados(conjunto).map(i => i.veiculo.placa).join(' → '))}${conjunto.motorista ? ' — ' + esc(conjunto.motorista.nome) : ''}.</div>` : ''}
@@ -299,7 +315,8 @@ function abrirEditarVeiculo(v, veiculos, conjunto){
     const anoTxt = document.getElementById('evAno').value.trim();
     const ano = anoTxt ? parseInt(anoTxt, 10) : null;
     if(anoTxt && (!ano || ano < 1970 || ano > new Date().getFullYear() + 1)){ erro.textContent = 'Ano inválido.'; return; }
-    const dados = { placa, tipo: document.getElementById('evTipo').value, modelo: document.getElementById('evModelo').value.trim() || null, ano };
+    const dados = { placa, tipo: document.getElementById('evTipo').value, modelo: document.getElementById('evModelo').value.trim() || null, ano,
+      grupo: document.getElementById('evGrupo').value.trim().replace(/\s+/g, ' ') || null };
     if(!novo) dados.ativo = document.getElementById('evAtivo').checked;
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true; btn.textContent = 'Salvando...';

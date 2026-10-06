@@ -158,6 +158,8 @@ Sugiro quebrar em sprints de 2 semanas. Ordem sugerida (cada bloco depende do an
 - [x] **Primeira tela real funcionando ponta a ponta** — login autenticado (Supabase Auth) → banco de dados real (com as regras de acesso por transportadora aplicadas) → tela mostrando frota e checklist reais da ChavesLog. Testado e aprovado no computador e no celular (`mover-ia-real.html`, hospedado via Netlify)
 - [x] **Primeiro login de motorista real criado e testado** (primeiro motorista do piloto) — tela própria do motorista, diferente da do escritório: mostra "Meu conjunto" (GKH-1B12 → FIJ-7F46 → FQQ-1I56 → GJO-5C04, na ordem certa) e o checklist padrão. Confirma que o controle de acesso por papel está funcionando (motorista não vê as abas do escritório)
 - [ ] Repetir o cadastro de login para os outros 5 motoristas quando formos colocar mais gente pra testar
+- [x] **Frota completa cadastrada (06/10)** a partir da relação "Chaves — Frotas e Agregados": 112 veículos (27 cavalos), 25 conjuntos, campo **grupo** (Chaves, Legut, RAC, Agregado) com filtro na tela de Veículos. Cavalos FXV-4I34 e GDI-1E52 sem conjunto (sem carretas na planilha); 12 carretas/dollys sem cavalo ficaram avulsos
+- [ ] **Motoristas pelas 23 CNHs** — envio em lote pronto (Documentos → arrastar todas as CNHs; cria login + CNH com validade; lista de logins para imprimir). Depois: ligar cada motorista ao conjunto e ao celular da planilha (Claude, via banco). Pendências: Luiz Mendonça (agregado GJO-5679) sem CNH; Mirian está no conjunto FEW-5D55, que pela planilha é do Marcos
 - [ ] Construir o restante das telas (Blocos 2 a 6) conectadas a este mesmo banco
 
 ### Nota técnica importante (22–23/09)
