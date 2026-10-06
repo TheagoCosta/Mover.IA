@@ -26,6 +26,28 @@
     { id:'c1', ativo:true, motorista_id:'u-car', motorista:{ nome:U.car.nome }, conjunto_item:[1,2,3,4].map(n => ({ ordem:n, veiculo_id:'v'+n, veiculo:vv('v'+n) })) },
     { id:'c2', ativo:true, motorista_id:null, motorista:null, conjunto_item:[{ ordem:1, veiculo_id:'v5', veiculo:vv('v5') }] },
   ];
+  // 13 meses de abastecimentos fictícios (relatório de consumo), com 3 casos fora do padrão
+  function historicoAbastecimentos(){
+    let semente = 7; const aleat = () => (semente = (semente * 9301 + 49297) % 233280) / 233280;
+    const frota = [ ['v1', 'GKH-1B12', 2.35, U.car], ['v5', 'GBW-8C41', 2.05, U.mir], ['v7', 'XYZ-9876', 2.6, U.car] ];
+    const lista = [];
+    frota.forEach(([vid, placa, base, mot], k) => {
+      let km = 180000 + k * 40000;
+      for(let d = 395; d > 2; d -= 6 + Math.round(aleat() * 4)){
+        const litros = Math.round(260 + aleat() * 160);
+        let media = base * (0.92 + aleat() * 0.16) * (1 + 0.04 * Math.sin(d / 60));
+        if(vid === 'v1' && d < 40 && d > 32) media = base * 0.62;     // muito abaixo (vazamento?)
+        if(vid === 'v5' && d < 30 && d > 15) media = base * 1.45;     // muito acima (faltou registrar um?)
+        if(vid === 'v7' && d < 16 && d > 3) media = 12.4;             // km digitado errado
+        km += Math.round(media * litros);
+        const externo = aleat() > 0.5;
+        lista.push({ id:`h-${vid}-${d}`, data:iso(d * 1440 + 300), tipo: externo ? 'externo' : 'interno', km, litros, arla_litros: Math.round(litros * 0.05),
+          preco_litro_diesel: externo ? 6.05 + Math.round(aleat() * 40) / 100 : null, preco_litro_arla: null, odometro_bomba:null, posto: externo ? 'Posto Estrada' : null, nota_numero: externo ? String(1000 + d) : null,
+          media_calculada: Math.round(media * 100) / 100, media_arla_calculada: null, motorista_id: mot.id, veiculo_id: vid, motorista:{ nome: mot.nome }, veiculo:{ placa, tipo:'cavalo' }, confirmado:null });
+      }
+    });
+    return lista;
+  }
   const eventosAtiva = [{ tipo:'inicio', criado_em:iso(260) }, { tipo:'pausa', motivo:'Pausa para alimentação', criado_em:iso(150) }, { tipo:'retomada', criado_em:iso(110) }];
   const F = {
     usuario: Object.values(U),
@@ -56,6 +78,7 @@
       { id:'a1', data:iso(600), tipo:'interno', km:214900, litros:178, arla_litros:12, odometro_bomba:88998.3, media_calculada:3.21, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12' }, confirmado:{ nome:'Admin Teste' } },
       { id:'a3', data:iso(3000), tipo:'externo', km:214600, litros:95, arla_litros:null, odometro_bomba:null, posto:'Posto 56, Jundiaí', nota_numero:'000123', media_calculada:2.9, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12' }, confirmado:null },
       { id:'a2', data:iso(5000), tipo:null, km:214330, litros:190, odometro_bomba:null, media_calculada:null, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12' }, confirmado:null },
+      ...historicoAbastecimentos(),
     ],
     chamado_manutencao: [
       { id:'ch1', criado_em:iso(90), atualizado_em:iso(90), concluido_em:null, categoria:'Freios', urgencia:'alta', descricao:'Pedal de freio baixo', status:'aberto', observacao_reparo:null, foto_url:'t1/ch1/problema.jpg', foto_reparo_url:null, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12', modelo:'Scania R450' }, responsavel:null,

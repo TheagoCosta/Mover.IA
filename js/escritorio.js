@@ -6,7 +6,8 @@ const SECOES_ESCRITORIO = [
   { k:'painel',        l:'Painel',        i:'home',    meta:() => `Visão geral da frota — hoje, ${hojeExtenso()}` },
   { k:'motoristas',    l:'Motoristas',    i:'user',    meta:() => 'Documentação e situação de todos os motoristas' },
   { k:'veiculos',      l:'Veículos',      i:'truck',   meta:() => 'Conjuntos e documentação da frota' },
-  { k:'abastecimento', l:'Abastecimento', i:'fuel',    meta:() => 'Consumo médio e litros por veículo' },
+  { k:'abastecimento', l:'Abastecimento', i:'fuel',    meta:() => 'Abastecimentos registrados, litros e gastos em posto' },
+  { k:'consumo',       l:'Consumo',       i:'chart',   meta:() => 'Média de consumo por veículo e por motorista, evolução e alertas' },
   { k:'oficina',       l:'Oficina',       i:'wrench',  meta:() => 'Chamados de manutenção — motoristas, mecânico e oficinas externas' },
   { k:'jornadas',      l:'Jornadas',      i:'clock',   meta:() => 'Registro de horas de condução e paradas' },
   { k:'checklists',    l:'Checklists',    i:'checksq', meta:() => 'Inspeções pré-viagem enviadas pelos motoristas' },
@@ -69,7 +70,7 @@ function loadEscritorio(){
 
   const el = document.getElementById('screenContent');
   const renderizar = {
-    painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, abastecimento: secaoAbastecimento,
+    painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, abastecimento: secaoAbastecimento, consumo: secaoConsumo,
     oficina: secaoOficina, jornadas: secaoJornadas, checklists: secaoChecklists, documentos: () => loadDocumentos(),
     capacitacoes: secaoCapacitacoes, agenda: secaoAgenda, usuarios: secaoUsuarios, integracao: secaoIntegracao, config: secaoConfig,
   }[screen];
@@ -267,8 +268,7 @@ async function secaoAbastecimento(el){
     .order('data', { ascending:false }).limit(1000));
   const trintaDias = new Date(Date.now() - 30 * 86400000);
   const recentes = registros.filter(a => new Date(a.data) >= trintaDias);
-  const medias = registros.filter(a => a.media_calculada).map(a => Number(a.media_calculada));
-  const mediaGeral = medias.length ? medias.reduce((s, v) => s + v, 0) / medias.length : null;
+  const mediaGeral = consumoDe(registros).media;   // km rodados ÷ litros (ver js/consumo.js)
   const fmtNum = (n, casas = 1) => n == null ? '—' : Number(n).toLocaleString('pt-BR', { minimumFractionDigits:casas, maximumFractionDigits:casas });
   const soma = (lista, campo) => lista.reduce((s, a) => s + (Number(a[campo]) || 0), 0);
   const nInternos = recentes.filter(a => a.tipo === 'interno').length, nExternos = recentes.filter(a => a.tipo === 'externo').length;
@@ -278,14 +278,14 @@ async function secaoAbastecimento(el){
   const porVeiculo = {};
   registros.forEach(a => {
     const placa = a.veiculo ? a.veiculo.placa : '—';
-    const v = porVeiculo[placa] || (porVeiculo[placa] = { placa, medias:[], mediasArla:[], litros:0, arla:0, n:0, ultimoKm:null, ultimaData:null });
-    if(a.media_calculada) v.medias.push(Number(a.media_calculada));
+    const v = porVeiculo[placa] || (porVeiculo[placa] = { placa, registros:[], mediasArla:[], litros:0, arla:0, n:0, ultimoKm:null, ultimaData:null });
+    v.registros.push(a);
     if(a.media_arla_calculada) v.mediasArla.push(Number(a.media_arla_calculada));
     v.litros += Number(a.litros) || 0; v.arla += Number(a.arla_litros) || 0; v.n++;
     if(!v.ultimaData || new Date(a.data) > new Date(v.ultimaData)){ v.ultimaData = a.data; v.ultimoKm = a.km; }
   });
   const media = (l) => l.length ? l.reduce((s, x) => s + x, 0) / l.length : null;
-  const veiculos = Object.values(porVeiculo).map(v => ({ ...v, media: media(v.medias), mediaArla: media(v.mediasArla) }))
+  const veiculos = Object.values(porVeiculo).map(v => ({ ...v, media: consumoDe(v.registros).media, mediaArla: media(v.mediasArla) }))
     .sort((a, b) => (a.media ?? 99) - (b.media ?? 99));
 
   const visiveis = filtroAbastecimento === 'todos' ? registros : registros.filter(a => a.tipo === filtroAbastecimento);
@@ -302,6 +302,7 @@ async function secaoAbastecimento(el){
       ${kpi(gastoPostos ? fmtReais(gastoPostos) : '—', 'Gasto em postos (30 dias)', 'Só abastecimentos externos')}
       ${kpi(recentes.length, 'Abastecimentos em 30 dias', `${nInternos} interno${nInternos === 1 ? '' : 's'} · ${nExternos} externo${nExternos === 1 ? '' : 's'}`)}
     </div>
+    <div class="o-banner" style="color:var(--ink-700);">${ic('chart', 18)}<div class="txt"><b>Relatório de consumo</b>Evolução mês a mês, ranking por veículo e por motorista e alertas de consumo fora do padrão: <a href="#" data-ir-consumo>abrir o relatório</a>.</div></div>
     ${painel('Consumo médio por veículo',
       veiculos.length ? tabela(['Placa', 'Média diesel', 'Média Arla', 'Abastecimentos', 'Diesel (total)', 'Arla (total)', 'Último km'],
         veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td><b>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</b></td><td>${v.mediaArla ? fmtNum(v.mediaArla, 1) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td>${v.arla ? fmtNum(v.arla, 0) + ' L' : '<span class="sub">—</span>'}</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
@@ -321,6 +322,7 @@ async function secaoAbastecimento(el){
       visiveis.length ? botaoExportar('btnCsvAbastecimentos') : '')}`;
 
   el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
+  el.querySelectorAll('[data-ir-consumo]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = 'consumo'; loadEscritorio(); }));
   const dec = (v, c) => v == null || v === '' ? '' : Number(v).toFixed(c).replace('.', ',');
   const b1 = document.getElementById('btnCsvConsumo');
   if(b1) b1.addEventListener('click', () => baixarCSV('consumo_por_veiculo', ['Placa', 'Média diesel (km/l)', 'Média Arla (km/l)', 'Abastecimentos', 'Diesel (total L)', 'Arla (total L)', 'Último km'],

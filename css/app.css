@@ -83,6 +83,14 @@ body.assinando{overflow:hidden;}
 .assinatura-linha{position:absolute; left:8%; right:8%; bottom:22%; border-top:1.5px dashed var(--asphalt-600); padding-top:4px; font-size:11px; color:var(--text-secondary); text-align:center; pointer-events:none;}
 .assinatura-botoes{display:grid; grid-template-columns:1fr 1fr 2fr; gap:8px;}
 
+/* relatório de consumo (ver js/consumo.js) */
+.cons-grafico{position:relative;}
+.cons-eixo{font:600 10.5px var(--font-body); fill:var(--ink-700);}
+.cons-valor{font:700 11.5px var(--font-body); fill:var(--ink-900);}
+.cons-barra{cursor:default;}
+.cons-barra.ativa path{opacity:.8;}
+.cons-dica{position:absolute; top:0; background:var(--ink-900); color:#fff; font-size:12px; padding:6px 9px; border-radius:7px; pointer-events:none; white-space:nowrap; box-shadow:0 4px 14px rgba(0,0,0,.18);}
+
 /* fotos e vídeos do chamado da oficina */
 .galeria-midias{display:flex; flex-direction:column; gap:10px;}
 .galeria-midias img, .galeria-midias video{width:100%; max-height:70vh; object-fit:contain; border-radius:10px; display:block; background:#000;}

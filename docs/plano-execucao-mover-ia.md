@@ -219,7 +219,7 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [x] Dashboard com KPIs e alertas (29/09 — motoristas, conjuntos, checklists irregulares, documentos vencendo, horas de condução da semana)
 - [x] Telas de gestão: motoristas, veículos, jornadas, checklists, documentos (29/09 — consulta, detalhes, exportação para Excel, cadastro e edição)
 - [x] Agenda de compromissos (revisões, exames, treinamentos) — 30/09
-- [ ] Relatório de consumo médio por veículo e por motorista (comparativo, evolução no tempo, alerta de consumo fora do padrão)
+- [x] Relatório de consumo médio por veículo e por motorista (comparativo, evolução no tempo, alerta de consumo fora do padrão) — 06/10, seção **Consumo** do escritório: período 30/90/180 dias/12 meses com comparação ao período anterior, gráfico mês a mês, ranking por veículo e por motorista ("vs. normal do veículo"), alertas (20% abaixo/acima do normal do veículo ou média fora de 0,8–6 km/l = km digitado errado), custo de diesel por km e planilhas. Média calculada como km rodados ÷ litros (antes era média das médias)
 - [x] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação (29/09)
 
 ### Bloco 5 — Integração Bsoft *(API confirmada ✅ — pode andar em paralelo aos blocos acima)*
