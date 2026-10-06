@@ -80,13 +80,14 @@ Deno.serve(async (req: Request) => {
     const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
     // Só a gestão da transportadora (admin ou gestor/escritório) pode
-    // cadastrar motorista — mesmos papéis da função eh_gestao() do banco.
+    // cadastrar motorista — mesmos papéis da função eh_gestao() do banco —
+    // e precisa estar ativo (quem foi desativado não cadastra ninguém).
     const { data: chamador, error: erroChamador } = await admin
       .from('usuario')
-      .select('papel, transportadora_id')
+      .select('papel, transportadora_id, ativo')
       .eq('id', quemChama.user.id)
       .single();
-    if (erroChamador || !chamador || !['admin_transportadora', 'gestor', 'admin_mover_ia'].includes(chamador.papel)) {
+    if (erroChamador || !chamador || !chamador.ativo || !['admin_transportadora', 'gestor', 'admin_mover_ia'].includes(chamador.papel)) {
       return jsonResponse({ error: 'Sem permissão para cadastrar motorista.' }, 403);
     }
 
