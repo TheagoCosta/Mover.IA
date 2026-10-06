@@ -159,6 +159,14 @@ function resumoVelocidade(){
   ];
 }
 
+// Imagem de assinatura vinda do banco: só mostra se for PNG em base64 (o
+// banco também exige esse formato) — qualquer outro texto vira imagem vazia.
+const FORMATO_ASSINATURA = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/;
+function imgAssinatura(valor, estilo){
+  if(!FORMATO_ASSINATURA.test(String(valor || ''))) return '';
+  return `<img src="${esc(valor)}" alt="Assinatura do motorista" style="${estilo}">`;
+}
+
 // ---------- quadro de assinatura (jornada e checklist) ----------
 // Assina com o dedo/mouse. Na tela o traço é claro (fundo escuro do app);
 // a imagem salva é refeita com tinta escura sobre fundo branco, para ficar

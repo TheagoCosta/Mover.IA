@@ -358,7 +358,7 @@ async function secaoJornadas(el){
     abrirModal(`${j.motorista ? j.motorista.nome : 'Jornada'} — ${fmtData(j.inicio)}`, `
       <div class="l2" style="margin-bottom:10px;">Tempo de condução: <b>${fmtMinutos(c.totalMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[j.status])}</div>
       ${eventos.map(ev => `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
-      ${j.assinatura_base64 ? `<div class="section-label">Assinatura do motorista</div><img src="${j.assinatura_base64}" alt="Assinatura" style="width:100%; background:#fff; border:1px solid var(--border); border-radius:8px;">` : ''}
+      ${imgAssinatura(j.assinatura_base64) ? `<div class="section-label">Assinatura do motorista</div>${imgAssinatura(j.assinatura_base64, 'width:100%; background:#fff; border:1px solid var(--border); border-radius:8px;')}` : ''}
     `);
   }));
   const b = document.getElementById('btnCsvJornadas');
@@ -399,8 +399,8 @@ async function abrirDetalheChecklist(checklist){
     <div class="l2" style="margin-bottom:10px;">${fmtDataHora(checklist.criado_em)} · conjunto ${esc(cavaloDoConjunto(checklist.conjunto))}</div>
     ${ordenados.map(i => { const [cor, txt] = rotulo[resposta[i.id]] || ['grey', resposta[i.id]]; return `<div class="timeline-item"><div class="hora">${i.ordem}.</div><div style="flex:1;">${esc(i.descricao)}${i.padrao_esperado ? `<div class="l2">${esc(i.padrao_esperado)}</div>` : ''}</div><div>${badge(cor, txt)}</div></div>`; }).join('') || '<div class="l2">Sem respostas.</div>'}
     <div class="section-label">Assinatura do motorista</div>
-    ${assinado && assinado.assinatura_base64
-      ? `<img src="${assinado.assinatura_base64}" alt="Assinatura do motorista" style="width:100%; max-width:420px; background:#fff; border:1px solid var(--border); border-radius:8px; display:block;">
+    ${assinado && imgAssinatura(assinado.assinatura_base64)
+      ? `${imgAssinatura(assinado.assinatura_base64, 'width:100%; max-width:420px; background:#fff; border:1px solid var(--border); border-radius:8px; display:block;')}
          <div class="l2">Assinado em ${fmtDataHora(assinado.assinado_em || checklist.criado_em)}</div>`
       : '<div class="l2">Checklist enviado antes da assinatura existir no app.</div>'}`);
 }

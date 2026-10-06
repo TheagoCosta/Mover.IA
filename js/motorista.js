@@ -611,9 +611,9 @@ async function loadHistoricoJornadaDetalhe(){
       <div class="card lista">${(eventos||[]).map(ev => `
         <div class="list-item"><div class="li-ic">${ic(TIPO_EVENTO_ICONE[ev.tipo] || 'clock', 16)}</div>
         <div class="li-body"><div class="li-title">${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</div><div class="li-sub">${fmtHora(ev.criado_em)}${ev.observacao ? ' · ' + esc(ev.observacao) : ''}</div></div></div>`).join('') || '<div class="status">Nenhum evento registrado</div>'}</div>
-      ${jornada && jornada.assinatura_base64 ? `
+      ${jornada && imgAssinatura(jornada.assinatura_base64) ? `
         <div class="section-label">Assinatura do motorista</div>
-        <div class="card" style="padding:10px;"><img src="${jornada.assinatura_base64}" alt="Assinatura" style="width:100%; background:#fff; border-radius:8px; display:block;"></div>` : ''}`,
+        <div class="card" style="padding:10px;">${imgAssinatura(jornada.assinatura_base64, 'width:100%; background:#fff; border-radius:8px; display:block;')}</div>` : ''}`,
   });
 }
 

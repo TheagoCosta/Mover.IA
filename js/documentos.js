@@ -357,7 +357,9 @@ function mostrarSelecaoDeData(docId, datas){
 
 async function anexarArquivoComLeitura(docId, file, onDone){
   if(!file) return;
-  if(file.type === 'application/pdf'){
+  // Sugerir a validade lida do PDF é só para o escritório: o motorista anexa
+  // o arquivo, e quem confere e grava a validade é a gestão (regra do banco)
+  if(file.type === 'application/pdf' && PAPEIS_GESTAO.includes(usuarioAtual.papel)){
     try{
       let texto = await extrairTextoPdf(file);
       let datas = extrairDatasPossiveis(texto);
