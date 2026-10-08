@@ -101,7 +101,7 @@ async function loadDocumentos(){
 
   const el = document.getElementById('screenContent');
   const [{ data: docs, error }, { data: motoristas }, { data: veiculos }] = await Promise.all([
-    sb.from('documento').select('id, referente_a, referente_id, tipo, numero, validade, status, arquivo_url, qr_conteudo').order('tipo'),
+    sb.from('documento').select('id, referente_a, referente_id, tipo, numero, validade, status, arquivo_url, qr_conteudo, criado_em').order('tipo'),
     sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome'),
     sb.from('veiculo').select('id, placa').order('placa'),
   ]);
@@ -112,9 +112,21 @@ async function loadDocumentos(){
   const nomeRef = (d) => d.referente_a === 'empresa' ? 'Empresa' : d.referente_a === 'motorista' ? (motoristaNome[d.referente_id] || '—') : (veiculoPlaca[d.referente_id] || '—');
   const todosDocs = docs || [];
   const filtros = [['todos', 'Todos'], ['empresa', 'Empresa'], ['motorista', 'Motoristas'], ['veiculo', 'Veículos'], ['alerta', 'Vencidos / a vencer']];
-  const visiveis = todosDocs
-    .filter(d => documentosFiltro === 'todos' || (documentosFiltro === 'alerta' ? statusDocumento(d) !== 'ok' : d.referente_a === documentosFiltro))
-    .sort((a, b) => PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)] || nomeRef(a).localeCompare(nomeRef(b)));
+  const doFiltro = todosDocs
+    .filter(d => documentosFiltro === 'todos' || (documentosFiltro === 'alerta' ? statusDocumento(d) !== 'ok' : d.referente_a === documentosFiltro));
+  const porNome = porTexto(nomeRef);
+  const ordens = [
+    ['situacao', 'Situação (vencidos primeiro)', (a, b) => PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)] || porNome(a, b)],
+    ['novos', 'Mais novos primeiro', (a, b) => porData(d => d.criado_em, -1)(a, b) || porNome(a, b)],
+    ['antigos', 'Mais antigos primeiro', (a, b) => porData(d => d.criado_em, 1)(a, b) || porNome(a, b)],
+    ['az', 'Nome de A a Z', (a, b) => porNome(a, b) || porTexto(d => d.tipo)(a, b)],
+    ['za', 'Nome de Z a A', (a, b) => porTexto(nomeRef, -1)(a, b) || porTexto(d => d.tipo)(a, b)],
+    ['vence', 'Vence primeiro', (a, b) => porData(d => d.validade, 1)(a, b) || porNome(a, b)],
+    ['vence_longe', 'Vence por último', (a, b) => porData(d => d.validade, -1)(a, b) || porNome(a, b)],
+    ['tipo', 'Tipo de documento (A a Z)', (a, b) => porTexto(d => d.tipo)(a, b) || porNome(a, b)],
+  ];
+  const textoDoc = (d) => [nomeRef(d), d.tipo, d.numero, { empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo' }[d.referente_a], ROTULO_STATUS_DOC[statusDocumento(d)]].join(' ');
+  let visiveis = aplicarLista('documentos', doFiltro, ordens, textoDoc);
   const contagem = (k) => k === 'todos' ? todosDocs.length : k === 'alerta' ? todosDocs.filter(d => statusDocumento(d) !== 'ok').length : todosDocs.filter(d => d.referente_a === k).length;
 
   el.innerHTML = `
@@ -126,14 +138,22 @@ async function loadDocumentos(){
     <div class="doc-tabs" style="max-width:640px;">
       ${filtros.map(([k, l]) => `<button class="${documentosFiltro === k ? 'active' : ''}" data-filtro="${k}">${l} (${contagem(k)})</button>`).join('')}
     </div>
+    ${barraLista('documentos', ordens, 'Pesquisar por nome, placa, tipo ou número')}
     <div class="o-panel">
-      <div class="o-panel-head"><h3>Documentos (${visiveis.length})</h3>
+      <div class="o-panel-head"><h3 id="docTitulo">Documentos (${visiveis.length})</h3>
         <div class="o-acoes">
           <button class="btn btn-outline btn-sm" id="btnCadastrarManual">${ic('plus', 14)} Cadastrar manualmente</button>
           ${botaoExportar('btnCsvDocumentos')}
         </div>
       </div>
-      ${visiveis.length ? `<div class="o-table-wrap"><table class="o-table"><thead><tr><th>Referente a</th><th>Documento</th><th>Validade</th><th>Status</th><th>Arquivo</th></tr></thead><tbody>
+      <div id="docLista"></div>
+    </div>`;
+
+  const lista = document.getElementById('docLista');
+  function desenharLista(){
+    visiveis = aplicarLista('documentos', doFiltro, ordens, textoDoc);
+    document.getElementById('docTitulo').textContent = `Documentos (${visiveis.length})`;
+    lista.innerHTML = visiveis.length ? `<div class="o-table-wrap"><table class="o-table"><thead><tr><th>Referente a</th><th>Documento</th><th>Validade</th><th>Status</th><th>Arquivo</th></tr></thead><tbody>
         ${visiveis.map(d => `<tr>
           <td>${esc(nomeRef(d))}<div class="sub">${{ empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo' }[d.referente_a] || ''}</div></td>
           <td>${esc(d.tipo)}${d.numero ? `<div class="sub mono">nº ${esc(d.numero)}</div>` : ''}${d.qr_conteudo ? '<div class="sub">QR Code lido ✓</div>' : ''}</td>
@@ -145,8 +165,17 @@ async function loadDocumentos(){
             <button class="o-dl-btn" data-qr="${d.id}" title="Escanear QR Code">${ic('qr', 15)}</button>
             <button class="o-dl-btn" data-editar-doc="${d.id}" title="Editar ou excluir">${ic('gear', 15)}</button>
           </div></td></tr>`).join('')}
-      </tbody></table></div>` : `<div class="o-empty-note">Nenhum documento neste filtro.</div>`}
-    </div>`;
+      </tbody></table></div>` : `<div class="o-empty-note">${estadoListas.documentos.busca ? 'Nenhum documento encontrado nesta pesquisa.' : 'Nenhum documento neste filtro.'}</div>`;
+    lista.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
+    lista.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
+    lista.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
+    lista.querySelectorAll('[data-editar-doc]').forEach(btn => btn.addEventListener('click', () => {
+      const d = todosDocs.find(x => x.id === btn.dataset.editarDoc);
+      abrirEditarDocumento(d, nomeRef(d));
+    }));
+  }
+  desenharLista();
+  ligarBarraLista(el, 'documentos', desenharLista);
 
   const dropArea = document.getElementById('btnAdicionarDocumentoAuto');
   dropArea.addEventListener('click', abrirUploadAutomatico);
@@ -162,13 +191,6 @@ async function loadDocumentos(){
   document.getElementById('btnCadastrarManual').addEventListener('click', () => { documentosSubtela = 'manual'; loadDocumentos(); });
   document.getElementById('btnCsvDocumentos').addEventListener('click', () => baixarCSV('documentos', ['Referente a', 'Tipo', 'Documento', 'Número', 'Validade', 'Status'],
     visiveis.map(d => [nomeRef(d), d.referente_a, d.tipo, d.numero || '', d.validade ? fmtData(d.validade) : '', ROTULO_STATUS_DOC[statusDocumento(d)]])));
-  el.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
-  el.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
-  el.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
-  el.querySelectorAll('[data-editar-doc]').forEach(btn => btn.addEventListener('click', () => {
-    const d = todosDocs.find(x => x.id === btn.dataset.editarDoc);
-    abrirEditarDocumento(d, nomeRef(d));
-  }));
 }
 
 async function loadDocumentosManual(){
@@ -419,10 +441,12 @@ function encontrarMotoristaPorNome(texto, motoristas){
   // Nenhum nome bateu perfeito — o OCR pode ter errado uma letra (comum em
   // nomes compostos/acentuados). Tenta por palavras do nome, exigindo a
   // maior parte delas presente como palavra inteira no texto lido.
+  // O 1º nome tem que estar lá: irmãos/parentes têm o mesmo sobrenome
+  // (ex.: Renato e Rafael Rodrigues de Freitas) e não podem ser confundidos.
   const palavrasTexto = new Set(normalizarPalavras(texto));
   const candidatos = (motoristas || []).map(m => {
     const palavrasNome = normalizarPalavras(m.nome).filter(p => p.length >= 3);
-    if(!palavrasNome.length) return null;
+    if(!palavrasNome.length || !palavrasTexto.has(normalizarPalavras(m.nome)[0])) return null;
     const acertos = palavrasNome.filter(p => palavrasTexto.has(p)).length;
     return { motorista: m, acertos, total: palavrasNome.length };
   }).filter(c => c && c.acertos >= Math.max(2, Math.ceil(c.total * 0.6)));
@@ -612,6 +636,25 @@ async function processarUploadAutomatico(file, lote = null){
     validadeSugerida = extrairValidadeCNH(texto);
   }
 
+  // Na CNH quem manda é o CPF: CPF igual ao de um motorista = é ele (mesmo que o
+  // nome tenha saído com erro); CPF diferente do motorista achado pelo nome = é
+  // outra pessoa (ex.: irmãos com o mesmo sobrenome) — aí trata como motorista novo.
+  let cpfConfere = false;
+  if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH'){
+    const cpfLido = extrairCpfCNH(texto);
+    if(cpfLido){
+      const digitos = (c) => String(c || '').replace(/\D/g, '');
+      const { data: perfis } = await sb.from('motorista_perfil').select('usuario_id, cpf');
+      const dono = (perfis || []).find(p => digitos(p.cpf) && digitos(p.cpf) === digitos(cpfLido));
+      const motoristaDono = dono && (motoristas || []).find(m => m.id === dono.usuario_id);
+      if(motoristaDono){ motoristaSugerido = motoristaDono; cpfConfere = true; }
+      else if(motoristaSugerido){
+        const perfilAchado = (perfis || []).find(p => p.usuario_id === motoristaSugerido.id);
+        if(perfilAchado && digitos(perfilAchado.cpf)) motoristaSugerido = null;
+      }
+    }
+  }
+
   // Motorista não está cadastrado ainda? Se der pra ler o nome dele direto
   // da CNH, cadastra ele sozinho (login + senha temporária) antes de seguir
   // pro documento — assim já entra tudo de uma vez, do jeito que o Thiago
@@ -659,7 +702,7 @@ async function processarUploadAutomatico(file, lote = null){
   const dataBrParaIso = (d) => { if(!d) return null; const [dd, mm, yyyy] = d.split('/'); return `${yyyy}-${mm}-${dd}`; };
   let podeSalvarAutomatico = false;
   let validadeAuto = null;
-  if(deteccao.referenteA === 'motorista' && motoristaSugerido && nomeBateExato(texto, motoristaSugerido) && deteccao.tipo && validadeSugerida){
+  if(deteccao.referenteA === 'motorista' && motoristaSugerido && (cpfConfere || nomeBateExato(texto, motoristaSugerido)) && deteccao.tipo && validadeSugerida){
     podeSalvarAutomatico = true;
     validadeAuto = dataBrParaIso(validadeSugerida);
   } else if(deteccao.referenteA === 'veiculo' && veiculoSugerido && deteccao.tipo && (sugestaoCalendario || datas.length === 1)){
@@ -730,12 +773,14 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
 
   const modalHtml = `
     <div id="uploadModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:flex-end;">
-      <div style="background:var(--asphalt-900); width:100%; border-radius:16px 16px 0 0; padding:20px; max-height:85vh; overflow:auto;">
+      <div class="revisao-caixa">
         <h3 style="margin-top:0;">Confirme o documento${lote ? ` <span class="l2" style="font-weight:400;">· ${esc(file.name)}</span>` : ''}</h3>
+        <div class="revisao-grade">
+        ${previaDocumentoHtml('revisaoPrevia')}
+        <div>
         ${deteccao.tipo
           ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${esc(deteccao.tipo)}</b>${motoristaSugerido ? ' de ' + esc(motoristaSugerido.nome) : ''}${veiculoSugerido ? ' do veículo ' + esc(veiculoSugerido.placa) : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}${usouOcr ? ' <span class="pill ok" style="margin-left:0;">lido por imagem</span>' : ''}</div>`
           : `<div class="l2" style="margin-bottom:14px;">Não consegui identificar automaticamente este arquivo — preencha abaixo.</div>`}
-        ${previaDocumentoHtml('revisaoPrevia')}
 
         <select id="revisaoReferenteA">
           <option value="empresa" ${referenteA==='empresa'?'selected':''}>Documento da empresa</option>
@@ -769,6 +814,8 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
 
         <button id="btnSalvarUploadAutomatico" style="margin-top:16px; width:100%;">Salvar documento</button>
         <button class="btn-small" id="btnCancelarUploadAutomatico" style="margin-top:8px; width:100%;">Cancelar</button>
+        </div>
+        </div>
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', modalHtml);
@@ -843,5 +890,6 @@ async function verArquivo(docId, docs){
   if(!doc || !doc.arquivo_url) return;
   const { data, error } = await sb.storage.from('documentos').createSignedUrl(doc.arquivo_url, 300);
   if(error){ alert('Erro ao abrir arquivo: ' + error.message); return; }
-  window.open(data.signedUrl, '_blank');
+  const tipo = /\.pdf$/i.test(doc.arquivo_url) ? 'application/pdf' : /\.(mp4|mov|webm)$/i.test(doc.arquivo_url) ? 'video' : 'imagem';
+  abrirVisualizador([{ url: data.signedUrl, tipo }], 0, doc.tipo);
 }

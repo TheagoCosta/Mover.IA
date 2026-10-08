@@ -288,7 +288,19 @@ async function secaoAbastecimento(el){
   const veiculos = Object.values(porVeiculo).map(v => ({ ...v, media: consumoDe(v.registros).media, mediaArla: media(v.mediasArla) }))
     .sort((a, b) => (a.media ?? 99) - (b.media ?? 99));
 
-  const visiveis = filtroAbastecimento === 'todos' ? registros : registros.filter(a => a.tipo === filtroAbastecimento);
+  const doFiltro = filtroAbastecimento === 'todos' ? registros : registros.filter(a => a.tipo === filtroAbastecimento);
+  const placaDe = (a) => a.veiculo ? a.veiculo.placa : '', motDe = (a) => a.motorista ? a.motorista.nome : '';
+  const ordensAbast = [
+    ['recentes', 'Mais recentes primeiro', porData(a => a.data, -1)],
+    ['antigos', 'Mais antigos primeiro', porData(a => a.data, 1)],
+    ['placa', 'Placa de A a Z', (a, b) => porTexto(placaDe)(a, b) || porData(x => x.data, -1)(a, b)],
+    ['motorista', 'Motorista de A a Z', (a, b) => porTexto(motDe)(a, b) || porData(x => x.data, -1)(a, b)],
+    ['litros', 'Mais litros de diesel', porNumero(a => a.litros == null ? null : Number(a.litros), -1)],
+    ['valor', 'Maior valor', porNumero(a => valorAbastecimento(a), -1)],
+    ['media', 'Pior média primeiro', porNumero(a => a.media_calculada == null ? null : Number(a.media_calculada), 1)],
+  ];
+  const textoAbast = (a) => [placaDe(a), motDe(a), a.posto, a.nota_numero, fmtDataHora(a.data), a.tipo ? ROTULO_TIPO_ABAST[a.tipo] : ''].join(' ');
+  let visiveis = aplicarLista('abastecimentos', doFiltro, ordensAbast, textoAbast);
   const origem = (a) => a.tipo === 'externo'
     ? `${esc(a.posto || '—')}${a.nota_numero ? `<div class="sub mono">nota ${esc(a.nota_numero)}</div>` : ''}`
     : a.tipo === 'interno'
@@ -311,15 +323,23 @@ async function secaoAbastecimento(el){
     <div class="doc-tabs" style="max-width:420px;">
       ${[['todos', 'Todos'], ['interno', 'Internos'], ['externo', 'Externos']].map(([k, l]) => `<button class="${filtroAbastecimento === k ? 'active' : ''}" data-filtro-abast="${k}">${l}</button>`).join('')}
     </div>
-    ${painel(`Abastecimentos registrados (${visiveis.length})`,
+    ${barraLista('abastecimentos', ordensAbast, 'Pesquisar por placa, motorista, posto ou nota')}
+    <div id="listaAbast"></div>`;
+
+  function desenharAbast(){
+    visiveis = aplicarLista('abastecimentos', doFiltro, ordensAbast, textoAbast);
+    const caixa = document.getElementById('listaAbast');
+    caixa.innerHTML = `${painel(`Abastecimentos registrados (${visiveis.length})${visiveis.length > 200 ? ' · mostrando 200' : ''}`,
       visiveis.length ? tabela(['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km', 'Diesel', 'Arla', 'Média diesel', 'Valor', 'Posto / confirmação'],
         visiveis.slice(0, 200).map(a => { const valor = valorAbastecimento(a); return `<tr><td class="sub">${fmtDataHora(a.data)}</td><td>${a.tipo ? badge(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : '<span class="sub">—</span>'}</td><td class="mono">${esc(a.veiculo ? a.veiculo.placa : '—')}</td><td>${esc(a.motorista ? a.motorista.nome : '—')}</td><td class="mono">${fmtNum(a.km, 0)}</td>
           <td>${fmtNum(a.litros, 1)} L${a.preco_litro_diesel ? `<div class="sub">${fmtReais(a.preco_litro_diesel)}/L</div>` : ''}</td>
           <td>${a.arla_litros ? fmtNum(a.arla_litros, 1) + ' L' : '<span class="sub">—</span>'}${a.preco_litro_arla ? `<div class="sub">${fmtReais(a.preco_litro_arla)}/L</div>` : ''}${a.media_arla_calculada ? `<div class="sub">${fmtNum(a.media_arla_calculada, 1)} km/l</div>` : ''}</td>
           <td>${a.media_calculada ? fmtNum(a.media_calculada, 2) + ' km/l' : '<span class="sub">—</span>'}</td>
           <td>${valor ? fmtReais(valor) : '<span class="sub">—</span>'}</td><td>${origem(a)}</td></tr>`; }))
-        : vazio('Nada por aqui ainda.'),
+        : vazio(doFiltro.length ? 'Nenhum abastecimento encontrado nesta pesquisa.' : 'Nada por aqui ainda.'),
       visiveis.length ? botaoExportar('btnCsvAbastecimentos') : '')}`;
+    ligarCsvAbast();
+  }
 
   el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
   el.querySelectorAll('[data-ir-consumo]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = 'consumo'; loadEscritorio(); }));
@@ -327,9 +347,13 @@ async function secaoAbastecimento(el){
   const b1 = document.getElementById('btnCsvConsumo');
   if(b1) b1.addEventListener('click', () => baixarCSV('consumo_por_veiculo', ['Placa', 'Média diesel (km/l)', 'Média Arla (km/l)', 'Abastecimentos', 'Diesel (total L)', 'Arla (total L)', 'Último km'],
     veiculos.map(v => [v.placa, v.media ? dec(v.media, 2) : '', v.mediaArla ? dec(v.mediaArla, 1) : '', v.n, dec(v.litros, 1), dec(v.arla, 1), v.ultimoKm ?? ''])));
+  const ligarCsvAbast = () => {
   const b2 = document.getElementById('btnCsvAbastecimentos');
   if(b2) b2.addEventListener('click', () => baixarCSV('abastecimentos', ['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km do veículo', 'Diesel (L)', 'R$/L diesel', 'Arla (L)', 'R$/L Arla', 'Valor (R$)', 'Odômetro da bomba', 'Posto', 'Nota / comprovante', 'Confirmado por', 'Média diesel (km/l)', 'Média Arla (km/l)'],
     visiveis.map(a => [fmtDataHora(a.data), a.tipo ? ROTULO_TIPO_ABAST[a.tipo] : '', a.veiculo ? a.veiculo.placa : '', a.motorista ? a.motorista.nome : '', a.km, dec(a.litros, 2), dec(a.preco_litro_diesel, 3), dec(a.arla_litros, 2), dec(a.preco_litro_arla, 3), valorAbastecimento(a) ? dec(valorAbastecimento(a), 2) : '', a.odometro_bomba ?? '', a.posto || '', a.nota_numero || '', a.confirmado ? a.confirmado.nome : '', a.media_calculada ? dec(a.media_calculada, 2) : '', a.media_arla_calculada ? dec(a.media_arla_calculada, 1) : ''])));
+  };
+  desenharAbast();
+  ligarBarraLista(el, 'abastecimentos', desenharAbast);
 }
 
 // (a seção OFICINA fica em js/oficina.js, junto com o app do mecânico)
@@ -349,13 +373,31 @@ async function secaoJornadas(el){
     return { j, eventos, c: calcularConducao(eventos, j.fim ? new Date(j.fim) : new Date()) };
   });
 
-  el.innerHTML = painel(`Registro de jornadas (${jornadas.length})`,
-    jornadas.length ? tabela(['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
-      linhas.map(({ j, c }) => `<tr class="clickable" data-jornada="${j.id}"><td>${esc(j.motorista ? j.motorista.nome : '—')}</td><td>${fmtData(j.inicio)}</td><td class="mono">${fmtHora(j.inicio)}</td><td class="mono">${j.fim ? fmtHora(j.fim) : '—'}</td><td class="mono">${fmtMinutos(c.totalMin)}</td><td>${c.paradas}</td><td>${badge(COR_JORNADA[j.status], ROTULO_JORNADA[j.status])}</td></tr>`))
-      : vazio('Nenhuma jornada registrada ainda.'),
-    jornadas.length ? botaoExportar('btnCsvJornadas') : '');
+  const nomeMot = (l) => l.j.motorista ? l.j.motorista.nome : '';
+  const ordens = [
+    ['recentes', 'Mais recentes primeiro', porData(l => l.j.inicio, -1)],
+    ['antigas', 'Mais antigas primeiro', porData(l => l.j.inicio, 1)],
+    ['az', 'Motorista de A a Z', (a, b) => porTexto(nomeMot)(a, b) || porData(l => l.j.inicio, -1)(a, b)],
+    ['za', 'Motorista de Z a A', (a, b) => porTexto(nomeMot, -1)(a, b) || porData(l => l.j.inicio, -1)(a, b)],
+    ['conducao', 'Maior tempo de condução', porNumero(l => l.c.totalMin, -1)],
+    ['abertas', 'Em andamento primeiro', (a, b) => ((a.j.status === 'encerrada') - (b.j.status === 'encerrada')) || porData(l => l.j.inicio, -1)(a, b)],
+  ];
+  const textoLinha = (l) => [nomeMot(l), fmtData(l.j.inicio), ROTULO_JORNADA[l.j.status]].join(' ');
+  let visiveis = linhas;
+  el.innerHTML = `${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="listaJornadas"></div>`;
+  function desenhar(){
+    visiveis = aplicarLista('jornadas', linhas, ordens, textoLinha);
+    const caixa = document.getElementById('listaJornadas');
+    caixa.innerHTML = painel(`Registro de jornadas (${visiveis.length})`,
+      visiveis.length ? tabela(['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
+        visiveis.map(({ j, c }) => `<tr class="clickable" data-jornada="${j.id}"><td>${esc(j.motorista ? j.motorista.nome : '—')}</td><td>${fmtData(j.inicio)}</td><td class="mono">${fmtHora(j.inicio)}</td><td class="mono">${j.fim ? fmtHora(j.fim) : '—'}</td><td class="mono">${fmtMinutos(c.totalMin)}</td><td>${c.paradas}</td><td>${badge(COR_JORNADA[j.status], ROTULO_JORNADA[j.status])}</td></tr>`))
+        : vazio(jornadas.length ? 'Nenhuma jornada encontrada nesta pesquisa.' : 'Nenhuma jornada registrada ainda.'),
+      visiveis.length ? botaoExportar('btnCsvJornadas') : '');
+    ligarLinhas(caixa);
+  }
 
-  el.querySelectorAll('[data-jornada]').forEach(tr => tr.addEventListener('click', () => {
+  const ligarLinhas = (caixa) => {
+  caixa.querySelectorAll('[data-jornada]').forEach(tr => tr.addEventListener('click', () => {
     const { j, eventos, c } = linhas.find(l => l.j.id === tr.dataset.jornada);
     abrirModal(`${j.motorista ? j.motorista.nome : 'Jornada'} — ${fmtData(j.inicio)}`, `
       <div class="l2" style="margin-bottom:10px;">Tempo de condução: <b>${fmtMinutos(c.totalMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[j.status])}</div>
@@ -365,7 +407,10 @@ async function secaoJornadas(el){
   }));
   const b = document.getElementById('btnCsvJornadas');
   if(b) b.addEventListener('click', () => baixarCSV('jornadas', ['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
-    linhas.map(({ j, c }) => [j.motorista ? j.motorista.nome : '', fmtData(j.inicio), fmtHora(j.inicio), j.fim ? fmtHora(j.fim) : '', fmtMinutos(c.totalMin), c.paradas, ROTULO_JORNADA[j.status]])));
+    visiveis.map(({ j, c }) => [j.motorista ? j.motorista.nome : '', fmtData(j.inicio), fmtHora(j.inicio), j.fim ? fmtHora(j.fim) : '', fmtMinutos(c.totalMin), c.paradas, ROTULO_JORNADA[j.status]])));
+  };
+  desenhar();
+  ligarBarraLista(el, 'jornadas', desenhar);
 }
 
 // ---------------------------------------------------------------------
@@ -375,15 +420,33 @@ async function secaoChecklists(el){
   const checklists = await consultar(sb.from('checklist')
     .select('id, criado_em, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))')
     .order('criado_em', { ascending:false }).limit(200));
-  el.innerHTML = painel(`Checklists enviados (${checklists.length})`,
-    checklists.length ? tabela(['Motorista', 'Conjunto', 'Data', 'Itens respondidos', 'Irregularidades', 'Status'],
-      checklists.map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}</td><td>${(c.respostas || []).length}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
-      : vazio('Nenhum checklist enviado ainda.'),
-    checklists.length ? botaoExportar('btnCsvChecklists') : '');
-  el.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist))));
-  const b = document.getElementById('btnCsvChecklists');
-  if(b) b.addEventListener('click', () => baixarCSV('checklists', ['Motorista', 'Conjunto', 'Data', 'Itens respondidos', 'Irregularidades'],
-    checklists.map(c => [c.motorista ? c.motorista.nome : '', cavaloDoConjunto(c.conjunto), fmtDataHora(c.criado_em), (c.respostas || []).length, contarIrregularidades(c)])));
+  const nomeMot = (c) => c.motorista ? c.motorista.nome : '';
+  const ordens = [
+    ['recentes', 'Mais recentes primeiro', porData(c => c.criado_em, -1)],
+    ['antigos', 'Mais antigos primeiro', porData(c => c.criado_em, 1)],
+    ['az', 'Motorista de A a Z', (a, b) => porTexto(nomeMot)(a, b) || porData(c => c.criado_em, -1)(a, b)],
+    ['za', 'Motorista de Z a A', (a, b) => porTexto(nomeMot, -1)(a, b) || porData(c => c.criado_em, -1)(a, b)],
+    ['irregulares', 'Irregulares primeiro', (a, b) => contarIrregularidades(b) - contarIrregularidades(a) || porData(c => c.criado_em, -1)(a, b)],
+    ['placa', 'Placa do conjunto', (a, b) => porTexto(c => cavaloDoConjunto(c.conjunto))(a, b) || porData(c => c.criado_em, -1)(a, b)],
+  ];
+  const textoLinha = (c) => [nomeMot(c), cavaloDoConjunto(c.conjunto), fmtDataHora(c.criado_em), contarIrregularidades(c) ? 'irregular' : 'ok'].join(' ');
+  let visiveis = checklists;
+  el.innerHTML = `${barraLista('checklists', ordens, 'Pesquisar por motorista, placa ou data')}<div id="listaChecklists"></div>`;
+  function desenhar(){
+    visiveis = aplicarLista('checklists', checklists, ordens, textoLinha);
+    const caixa = document.getElementById('listaChecklists');
+    caixa.innerHTML = painel(`Checklists enviados (${visiveis.length})`,
+      visiveis.length ? tabela(['Motorista', 'Conjunto', 'Data', 'Itens respondidos', 'Irregularidades', 'Status'],
+        visiveis.map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}</td><td>${(c.respostas || []).length}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
+        : vazio(checklists.length ? 'Nenhum checklist encontrado nesta pesquisa.' : 'Nenhum checklist enviado ainda.'),
+      visiveis.length ? botaoExportar('btnCsvChecklists') : '');
+    caixa.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist))));
+    const b = document.getElementById('btnCsvChecklists');
+    if(b) b.addEventListener('click', () => baixarCSV('checklists', ['Motorista', 'Conjunto', 'Data', 'Itens respondidos', 'Irregularidades'],
+      visiveis.map(c => [c.motorista ? c.motorista.nome : '', cavaloDoConjunto(c.conjunto), fmtDataHora(c.criado_em), (c.respostas || []).length, contarIrregularidades(c)])));
+  }
+  desenhar();
+  ligarBarraLista(el, 'checklists', desenhar);
 }
 
 async function abrirDetalheChecklist(checklist){

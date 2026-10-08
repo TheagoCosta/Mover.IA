@@ -15,7 +15,7 @@ const CAMPOS_CAPACITACAO = 'id, tipo, instituicao, carga_horaria, data_realizaca
 async function verCertificado(caminho){
   const { data, error } = await sb.storage.from('documentos').createSignedUrl(caminho, 300);
   if(error){ alert('Não consegui abrir o certificado: ' + error.message); return; }
-  window.open(data.signedUrl, '_blank');
+  abrirVisualizador([{ url: data.signedUrl, tipo: /\.pdf$/i.test(caminho) ? 'application/pdf' : 'imagem' }], 0, 'Certificado');
 }
 
 async function enviarCertificado(capacitacaoId, arquivo){
@@ -39,8 +39,20 @@ async function secaoCapacitacoes(el){
   const vencidas = lista.filter(c => st(c) === 'vencido').length;
   const aVencer = lista.filter(c => st(c) === 'vence_em_breve').length;
   const FILTROS = { todas: ['Todas', () => true], alerta: ['Vencidas / a vencer', c => st(c) !== 'ok'], semCertificado: ['Sem certificado', c => !c.certificado_url] };
-  const visiveis = lista.filter(FILTROS[filtroCapacitacoes][1])
-    .sort((a, b) => PESO_STATUS_DOC[st(b)] - PESO_STATUS_DOC[st(a)] || (a.motorista ? a.motorista.nome : '').localeCompare(b.motorista ? b.motorista.nome : ''));
+  const doFiltro = lista.filter(FILTROS[filtroCapacitacoes][1]);
+  const nomeMot = (c) => c.motorista ? c.motorista.nome : '';
+  const porNome = porTexto(nomeMot);
+  const ordens = [
+    ['situacao', 'Situação (vencidas primeiro)', (a, b) => PESO_STATUS_DOC[st(b)] - PESO_STATUS_DOC[st(a)] || porNome(a, b)],
+    ['az', 'Motorista de A a Z', (a, b) => porNome(a, b) || porTexto(c => c.tipo)(a, b)],
+    ['za', 'Motorista de Z a A', (a, b) => porTexto(nomeMot, -1)(a, b) || porTexto(c => c.tipo)(a, b)],
+    ['recentes', 'Realizadas mais recentes', (a, b) => porData(c => c.data_realizacao, -1)(a, b) || porNome(a, b)],
+    ['antigas', 'Realizadas mais antigas', (a, b) => porData(c => c.data_realizacao, 1)(a, b) || porNome(a, b)],
+    ['vence', 'Vence primeiro', (a, b) => porData(c => c.validade, 1)(a, b) || porNome(a, b)],
+    ['tipo', 'Treinamento de A a Z', (a, b) => porTexto(c => c.tipo)(a, b) || porNome(a, b)],
+  ];
+  const textoCap = (c) => [nomeMot(c), c.tipo, c.instituicao, c.validade ? ROTULO_STATUS_DOC[st(c)] : 'sem validade'].join(' ');
+  let visiveis = aplicarLista('capacitacoes', doFiltro, ordens, textoCap);
 
   el.innerHTML = `
     <div class="kpi-row">
@@ -52,7 +64,13 @@ async function secaoCapacitacoes(el){
     <div class="doc-tabs" style="max-width:520px;">
       ${Object.entries(FILTROS).map(([k, [l, f]]) => `<button class="${filtroCapacitacoes === k ? 'active' : ''}" data-filtro-cap="${k}">${l} (${lista.filter(f).length})</button>`).join('')}
     </div>
-    ${painel(`Capacitações (${visiveis.length})`,
+    ${barraLista('capacitacoes', ordens, 'Pesquisar por motorista, treinamento ou instituição')}
+    <div id="listaCapacitacoes"></div>`;
+
+  function desenhar(){
+    visiveis = aplicarLista('capacitacoes', doFiltro, ordens, textoCap);
+    const caixa = document.getElementById('listaCapacitacoes');
+    caixa.innerHTML = `${painel(`Capacitações (${visiveis.length})`,
       visiveis.length ? tabela(['Motorista', 'Treinamento', 'Realizado em', 'Validade', 'Status', 'Certificado'],
         visiveis.map(c => `<tr class="clickable" data-capacitacao="${c.id}">
           <td>${nomeCelula(c.motorista ? c.motorista.nome : '—')}</td>
@@ -61,16 +79,22 @@ async function secaoCapacitacoes(el){
           <td class="sub">${c.validade ? esc(textoVencimento({ validade: c.validade })) : 'Sem validade'}</td>
           <td>${c.validade ? badgeDoc({ validade: c.validade }) : badge('grey', 'Sem validade')}</td>
           <td>${c.certificado_url ? `<button class="o-dl-btn" data-cert="${esc(c.certificado_url)}" title="Ver certificado">${ic('eye', 15)}</button>` : '<span class="sub">—</span>'}</td></tr>`))
-        : vazio(lista.length ? 'Nada neste filtro.' : 'Nenhuma capacitação cadastrada. Use "Nova capacitação" para registrar MOPP, direção defensiva e outros treinamentos.'),
+        : vazio(estadoListas.capacitacoes.busca ? 'Nenhuma capacitação encontrada nesta pesquisa.' : lista.length ? 'Nada neste filtro.' : 'Nenhuma capacitação cadastrada. Use "Nova capacitação" para registrar MOPP, direção defensiva e outros treinamentos.'),
       `<button class="btn btn-primary btn-sm" id="btnNovaCapacitacao">${ic('plus', 15)} Nova capacitação</button>${lista.length ? botaoExportar('btnCsvCapacitacoes') : ''}`)}`;
+    ligarLista(caixa);
+  }
 
   el.querySelectorAll('[data-filtro-cap]').forEach(b => b.addEventListener('click', () => { filtroCapacitacoes = b.dataset.filtroCap; secaoCapacitacoes(el); }));
-  el.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); verCertificado(b.dataset.cert); }));
+  const ligarLista = (caixa) => {
+  caixa.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); verCertificado(b.dataset.cert); }));
   document.getElementById('btnNovaCapacitacao').addEventListener('click', () => abrirEditarCapacitacao(null, motoristas, el));
-  el.querySelectorAll('[data-capacitacao]').forEach(tr => tr.addEventListener('click', () => abrirEditarCapacitacao(lista.find(c => c.id === tr.dataset.capacitacao), motoristas, el)));
+  caixa.querySelectorAll('[data-capacitacao]').forEach(tr => tr.addEventListener('click', () => abrirEditarCapacitacao(lista.find(c => c.id === tr.dataset.capacitacao), motoristas, el)));
   const csv = document.getElementById('btnCsvCapacitacoes');
   if(csv) csv.addEventListener('click', () => baixarCSV('capacitacoes', ['Motorista', 'Treinamento', 'Instituição', 'Carga horária', 'Realizado em', 'Validade', 'Status', 'Certificado'],
-    lista.map(c => [c.motorista ? c.motorista.nome : '', c.tipo, c.instituicao || '', c.carga_horaria || '', c.data_realizacao ? fmtData(c.data_realizacao) : '', c.validade ? fmtData(c.validade) : '', c.validade ? ROTULO_STATUS_DOC[st(c)] : 'Sem validade', c.certificado_url ? 'Sim' : 'Não'])));
+    visiveis.map(c => [c.motorista ? c.motorista.nome : '', c.tipo, c.instituicao || '', c.carga_horaria || '', c.data_realizacao ? fmtData(c.data_realizacao) : '', c.validade ? fmtData(c.validade) : '', c.validade ? ROTULO_STATUS_DOC[st(c)] : 'Sem validade', c.certificado_url ? 'Sim' : 'Não'])));
+  };
+  desenhar();
+  ligarBarraLista(el, 'capacitacoes', desenhar);
 }
 
 function abrirEditarCapacitacao(c, motoristas, el){

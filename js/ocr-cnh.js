@@ -313,33 +313,32 @@ function extrairCpfCNH(texto){
 // Antes de criar um login de verdade, mostra o que foi lido pro Thiago
 // conferir/corrigir. Devolve { nome, cpf } confirmados, ou null se cancelar.
 // Prévia do documento nas janelas de conferência: a pessoa vê o arquivo enquanto confere/preenche.
-// Imagem aparece direto; PDF tem a 1ª página desenhada. Tocar abre o arquivo inteiro numa aba.
+// Imagem aparece direto; PDF tem a 1ª página desenhada (sem as margens brancas). Dá para dar zoom
+// ali mesmo (dois dedos, roda do mouse, duplo toque ou botões) ou abrir em tela cheia.
 function previaDocumentoHtml(id){
-  return `<div id="${id}" class="previa-doc" style="margin-bottom:14px; border:1px solid var(--border); border-radius:10px; background:#fff; min-height:60px; display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:zoom-in;" title="Toque para ampliar">
-    <span class="l2" style="color:#555; padding:14px;">Carregando a imagem do documento...</span></div>`;
+  return `<div id="${id}" class="previa-doc"><div class="previa-msg">Carregando a imagem do documento...</div></div>`;
 }
 async function montarPreviaDocumento(id, file){
   const caixa = document.getElementById(id);
   if(!caixa || !file) return;
-  const url = URL.createObjectURL(file);
-  caixa.addEventListener('click', () => window.open(url, '_blank'));
-  const mostrar = (src) => { if(document.getElementById(id)) caixa.innerHTML = `<img src="${src}" alt="Documento" style="display:block; width:100%; max-height:45vh; object-fit:contain;">`; };
   try{
-    if(/^image\//.test(file.type)) return mostrar(url);
-    if(file.type !== 'application/pdf') throw new Error('sem prévia');
-    await usarPdfJs();
-    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-    const pagina = await pdf.getPage(1);
-    const base = pagina.getViewport({ scale: 1 });
-    const viewport = pagina.getViewport({ scale: Math.min(2.5, 1400 / base.width) });
-    const canvas = document.createElement('canvas');
-    canvas.width = viewport.width; canvas.height = viewport.height;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await pagina.render({ canvasContext: ctx, viewport }).promise;
-    mostrar(canvas.toDataURL('image/jpeg', 0.85));
+    if(!/^image\//.test(file.type) && file.type !== 'application/pdf') throw new Error('sem prévia');
+    const r = await desenharArquivo({ file }, { maxPaginas: 1, larguraPagina: 1600 });
+    if(!document.getElementById(id)) return;
+    caixa.innerHTML = '';
+    const conteudo = document.createElement('div'); conteudo.appendChild(r.el); caixa.appendChild(conteudo);
+    const zoom = ativarZoom(caixa, conteudo, { largura: r.largura, altura: r.altura, rolarAjustado: true });
+    caixa.insertAdjacentHTML('beforeend', `<div class="previa-botoes">
+      <button type="button" data-z="menos" title="Diminuir">${ic('zoomout', 18)}</button>
+      <button type="button" data-z="mais" title="Aumentar">${ic('zoomin', 18)}</button>
+      <button type="button" data-z="tela" title="Tela cheia">${ic('expand', 18)}</button></div>`);
+    caixa.querySelector('[data-z="menos"]').addEventListener('click', zoom.menos);
+    caixa.querySelector('[data-z="mais"]').addEventListener('click', zoom.mais);
+    caixa.querySelector('[data-z="tela"]').addEventListener('click', () => abrirVisualizador([{ file }]));
   } catch(e){
-    if(document.getElementById(id)) caixa.innerHTML = `<span class="l2" style="color:#555; padding:14px;">Não deu para mostrar a prévia — toque aqui para abrir o arquivo.</span>`;
+    if(!document.getElementById(id)) return;
+    caixa.innerHTML = `<div class="previa-msg">Não deu para mostrar a prévia — toque aqui para abrir o arquivo.</div>`;
+    caixa.addEventListener('click', () => window.open(URL.createObjectURL(file), '_blank'), { once: true });
   }
 }
 
@@ -347,7 +346,7 @@ function confirmarDadosNovoMotorista(nome, cpf, file = null){
   return new Promise((resolve) => {
     const modalHtml = `
       <div id="confNovoMotModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
-        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:520px; width:100%; max-height:92vh; overflow:auto;">
+        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:${file ? '760px' : '420px'}; width:100%; max-height:94vh; overflow:auto;">
           <h3 style="margin-top:0;">Confira os dados do motorista</h3>
           <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema e vou criar o login dele. Não tive certeza da leitura — confira (e corrija se precisar) antes de continuar.</div>
           ${file ? previaDocumentoHtml('confNovoMotPrevia') : ''}

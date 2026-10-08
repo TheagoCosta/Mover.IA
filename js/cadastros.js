@@ -66,24 +66,45 @@ async function secaoMotoristas(el){
     return { m, meusDocs, conj, cnh, pior, situacao };
   });
 
+  const porNome = porTexto(l => l.m.nome);
+  const ativosPrimeiro = (a, b) => b.m.ativo - a.m.ativo;
+  const ordens = [
+    ['az', 'Nome de A a Z', (a, b) => ativosPrimeiro(a, b) || porNome(a, b)],
+    ['za', 'Nome de Z a A', (a, b) => ativosPrimeiro(a, b) || porTexto(l => l.m.nome, -1)(a, b)],
+    ['novos', 'Cadastrados mais recentes', (a, b) => porData(l => l.m.criado_em, -1)(a, b) || porNome(a, b)],
+    ['antigos', 'Cadastrados mais antigos', (a, b) => porData(l => l.m.criado_em, 1)(a, b) || porNome(a, b)],
+    ['cnh', 'CNH que vence primeiro', (a, b) => porData(l => l.cnh && l.cnh.validade, 1)(a, b) || porNome(a, b)],
+    ['docs', 'Documentos com problema primeiro', (a, b) => (PESO_STATUS_DOC[b.pior] || 0) - (PESO_STATUS_DOC[a.pior] || 0) || porNome(a, b)],
+    ['conjunto', 'Sem conjunto primeiro', (a, b) => (!!a.conj - !!b.conj) || porNome(a, b)],
+  ];
+  const textoLinha = (l) => [l.m.nome, loginDoEmail(l.m.email), l.conj ? cavaloDoConjunto(l.conj) : 'sem conjunto'].join(' ');
+
   el.innerHTML = `
     <div class="o-banner">${ic('doc', 18)}<div class="txt"><b>Cadastrar motorista novo</b>Envie a CNH dele em <a href="#" data-ir="documentos">Documentos</a> — o app lê o nome e o CPF e cria o login sozinho. Clique num motorista para editar, vincular conjunto, gerar nova senha ou desativar.</div></div>
-    ${painel(`Motoristas (${motoristas.filter(m => m.ativo).length} ativos)`,
-      motoristas.length ? tabela(['Motorista', 'Conjunto', 'Checklist (24h)', 'CNH', 'Documentos', 'Situação'],
-        linhas.map(({ m, conj, cnh, pior, meusDocs, situacao }) => `<tr class="clickable" data-usuario="${m.id}" style="${m.ativo ? '' : 'opacity:.55;'}">
+    ${barraLista('motoristas', ordens, 'Pesquisar por nome, login ou placa do conjunto')}
+    <div id="listaMotoristas"></div>`;
+
+  function desenhar(){
+    const visiveis = aplicarLista('motoristas', linhas, ordens, textoLinha);
+    const caixa = document.getElementById('listaMotoristas');
+    caixa.innerHTML = painel(`Motoristas (${motoristas.filter(m => m.ativo).length} ativos${visiveis.length !== linhas.length ? ` · ${visiveis.length} na pesquisa` : ''})`,
+      visiveis.length ? tabela(['Motorista', 'Conjunto', 'Checklist (24h)', 'CNH', 'Documentos', 'Situação'],
+        visiveis.map(({ m, conj, cnh, pior, meusDocs, situacao }) => `<tr class="clickable" data-usuario="${m.id}" style="${m.ativo ? '' : 'opacity:.55;'}">
           <td>${nomeCelula(m.nome, loginDoEmail(m.email))}</td>
           <td class="mono">${conj ? esc(cavaloDoConjunto(conj)) : '<span class="sub">Sem conjunto</span>'}</td>
           <td>${m.ativo ? celulaChecklist(m, conj) : '<span class="sub">—</span>'}</td>
           <td>${cnh ? `${badgeDoc(cnh)}<div class="sub">${esc(textoVencimento(cnh))}</div>` : '<span class="sub">Não cadastrada</span>'}</td>
           <td>${pior ? badge(COR_STATUS_DOC[pior], `${meusDocs.length} · ${ROTULO_STATUS_DOC[pior]}`) : '<span class="sub">Nenhum</span>'}</td>
           <td>${situacao}</td></tr>`))
-        : vazio('Nenhum motorista cadastrado ainda.'))}`;
-
+        : vazio(linhas.length ? 'Nenhum motorista encontrado nesta pesquisa.' : 'Nenhum motorista cadastrado ainda.'));
+    caixa.querySelectorAll('[data-usuario]').forEach(tr => tr.addEventListener('click', () => {
+      const l = linhas.find(x => x.m.id === tr.dataset.usuario);
+      abrirEditarUsuario(l.m, { conjuntos, docs: l.meusDocs });
+    }));
+  }
+  desenhar();
+  ligarBarraLista(el, 'motoristas', desenhar);
   el.querySelectorAll('[data-ir]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = a.dataset.ir; loadEscritorio(); }));
-  el.querySelectorAll('[data-usuario]').forEach(tr => tr.addEventListener('click', () => {
-    const l = linhas.find(x => x.m.id === tr.dataset.usuario);
-    abrirEditarUsuario(l.m, { conjuntos, docs: l.meusDocs });
-  }));
 }
 
 // Janela de edição de motorista/mecânico/usuário do escritório

@@ -108,8 +108,15 @@ async function verMidiasChamado(c, momento){
       if(!url) return '<div class="l2">Arquivo indisponível.</div>';
       return m.tipo === 'video'
         ? `<video src="${url}" controls playsinline preload="metadata"></video>`
-        : `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Foto ${i + 1}" loading="lazy"></a>`;
+        : `<a href="#" data-foto="${i}"><img src="${url}" alt="Foto ${i + 1}" loading="lazy"></a>`;
     }).join('')}</div>`);
+  // foto abre no visualizador com zoom (com setas para passar pelas fotos e vídeos do chamado)
+  const itens = lista.map((m, i) => ({ url: data[i] && data[i].signedUrl, tipo: m.tipo === 'video' ? 'video' : 'imagem', nome: `${m.tipo === 'video' ? 'Vídeo' : 'Foto'} ${i + 1}` })).filter(x => x.url);
+  document.querySelectorAll('#modalGenerico [data-foto]').forEach(a => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    const url = data[Number(a.dataset.foto)].signedUrl;
+    abrirVisualizador(itens, Math.max(0, itens.findIndex(x => x.url === url)), c.veiculo ? c.veiculo.placa : '');
+  }));
 }
 
 // Campo "escolher fotos/vídeos" que vai juntando os arquivos (dá para tirar
@@ -421,8 +428,20 @@ async function secaoOficina(el){
   const abertos = chamados.filter(c => c.status === 'aberto').length;
   const andamento = chamados.filter(c => c.status === 'em_andamento').length;
   const urgentes = chamados.filter(c => c.urgencia === 'alta' && c.status !== 'concluido').length;
-  const visiveis = oficinaFiltroEscritorio === 'todos' ? chamados : chamados.filter(c => oficinaFiltroEscritorio === 'concluidos' ? c.status === 'concluido' : c.status !== 'concluido');
+  const doFiltro = oficinaFiltroEscritorio === 'todos' ? chamados : chamados.filter(c => oficinaFiltroEscritorio === 'concluidos' ? c.status === 'concluido' : c.status !== 'concluido');
   const mecanicos = usuarios.filter(u => u.papel === 'mecanico' && u.ativo);
+  const PESO_URG = { alta: 3, media: 2, baixa: 1 };
+  const placaDe = (c) => c.veiculo ? c.veiculo.placa : '';
+  const ordens = [
+    ['recentes', 'Mais recentes primeiro', porData(c => c.criado_em, -1)],
+    ['antigos', 'Mais antigos primeiro', porData(c => c.criado_em, 1)],
+    ['urgencia', 'Mais urgentes primeiro', (a, b) => (PESO_URG[b.urgencia] || 0) - (PESO_URG[a.urgencia] || 0) || porData(c => c.criado_em, -1)(a, b)],
+    ['placa', 'Placa de A a Z', (a, b) => porTexto(placaDe)(a, b) || porData(c => c.criado_em, -1)(a, b)],
+    ['motorista', 'Motorista de A a Z', (a, b) => porTexto(c => c.motorista ? c.motorista.nome : '')(a, b) || porData(c => c.criado_em, -1)(a, b)],
+    ['categoria', 'Categoria de A a Z', (a, b) => porTexto(c => c.categoria)(a, b) || porData(c => c.criado_em, -1)(a, b)],
+  ];
+  const textoChamado = (c) => [placaDe(c), c.motorista ? c.motorista.nome : '', c.categoria, c.descricao, c.observacao_reparo, c.responsavel ? c.responsavel.nome : '', ROTULO_CHAMADO[c.status], ROTULO_URGENCIA[c.urgencia], fmtDataHora(c.criado_em)].join(' ');
+  let visiveis = aplicarLista('oficina', doFiltro, ordens, textoChamado);
 
   el.innerHTML = `
     <div class="kpi-row tres">
@@ -434,7 +453,13 @@ async function secaoOficina(el){
     <div class="doc-tabs" style="max-width:460px;">
       ${[['pendentes', 'A fazer'], ['concluidos', 'Concluídos'], ['todos', 'Todos']].map(([k, l]) => `<button class="${oficinaFiltroEscritorio === k ? 'active' : ''}" data-filtro-of="${k}">${l}</button>`).join('')}
     </div>
-    ${painel(`Chamados de manutenção (${visiveis.length})`,
+    ${barraLista('oficina', ordens, 'Pesquisar por placa, motorista, categoria ou descrição')}
+    <div id="listaOficina"></div>`;
+
+  function desenhar(){
+    visiveis = aplicarLista('oficina', doFiltro, ordens, textoChamado);
+    const caixa = document.getElementById('listaOficina');
+    caixa.innerHTML = `${painel(`Chamados de manutenção (${visiveis.length})`,
       visiveis.length ? tabela(['Data', 'Placa', 'Motorista', 'Categoria', 'Descrição', 'Urgência', 'Status', ''],
         visiveis.map(c => `<tr>
           <td class="sub">${fmtDataHora(c.criado_em)}</td>
@@ -449,17 +474,23 @@ async function secaoOficina(el){
             ${botaoMidias(c, 'reparo', 'btn btn-outline btn-sm')}
             ${c.status !== 'concluido' ? `<button class="btn btn-outline btn-sm" data-atualizar="${c.id}">${c.status === 'aberto' ? 'Iniciar' : 'Concluir'}</button>` : ''}
           </div></td></tr>`))
-        : vazio(oficinaFiltroEscritorio === 'pendentes' ? 'Nenhum chamado pendente.' : 'Nenhum chamado por aqui.'),
+        : vazio(estadoListas.oficina.busca ? 'Nenhum chamado encontrado nesta pesquisa.' : oficinaFiltroEscritorio === 'pendentes' ? 'Nenhum chamado pendente.' : 'Nenhum chamado por aqui.'),
       `<button class="btn btn-primary btn-sm" id="btnAbrirChamado">${ic('plus', 15)} Abrir chamado</button>${chamados.length ? botaoExportar('btnCsvOficina') : ''}`)}`;
+    ligarLista(caixa);
+  }
 
   el.querySelectorAll('[data-ir]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = a.dataset.ir; loadEscritorio(); }));
   el.querySelectorAll('[data-filtro-of]').forEach(b => b.addEventListener('click', () => { oficinaFiltroEscritorio = b.dataset.filtroOf; secaoOficina(el); }));
-  ligarBotoesMidias(el, chamados);
-  el.querySelectorAll('[data-atualizar]').forEach(b => b.addEventListener('click', () => abrirAtualizacaoChamado(chamados.find(c => c.id === b.dataset.atualizar), el)));
+  const ligarLista = (caixa) => {
+  ligarBotoesMidias(caixa, chamados);
+  caixa.querySelectorAll('[data-atualizar]').forEach(b => b.addEventListener('click', () => abrirAtualizacaoChamado(chamados.find(c => c.id === b.dataset.atualizar), el)));
   document.getElementById('btnAbrirChamado').addEventListener('click', () => abrirNovoChamadoEscritorio(veiculos, usuarios.filter(u => u.papel === 'motorista' && u.ativo), el));
   const csv = document.getElementById('btnCsvOficina');
   if(csv) csv.addEventListener('click', () => baixarCSV('chamados_oficina', ['Aberto em', 'Placa', 'Motorista', 'Categoria', 'Descrição', 'Urgência', 'Status', 'Observação da oficina', 'Responsável', 'Concluído em'],
-    chamados.map(c => [fmtDataHora(c.criado_em), c.veiculo ? c.veiculo.placa : '', c.motorista ? c.motorista.nome : '', c.categoria, c.descricao || '', ROTULO_URGENCIA[c.urgencia], ROTULO_CHAMADO[c.status], c.observacao_reparo || '', c.responsavel ? c.responsavel.nome : '', c.concluido_em ? fmtDataHora(c.concluido_em) : ''])));
+    visiveis.map(c => [fmtDataHora(c.criado_em), c.veiculo ? c.veiculo.placa : '', c.motorista ? c.motorista.nome : '', c.categoria, c.descricao || '', ROTULO_URGENCIA[c.urgencia], ROTULO_CHAMADO[c.status], c.observacao_reparo || '', c.responsavel ? c.responsavel.nome : '', c.concluido_em ? fmtDataHora(c.concluido_em) : ''])));
+  };
+  desenhar();
+  ligarBarraLista(el, 'oficina', desenhar);
 }
 
 // Escritório atualiza o chamado em nome da oficina (útil quando é terceirizada)
