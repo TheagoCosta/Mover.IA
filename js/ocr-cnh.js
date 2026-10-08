@@ -10,7 +10,10 @@
 // bem melhor em documentos de identidade com várias colunas/campos como a
 // CNH, e renderiza numa resolução bem alta pra não perder os números
 // pequenos (CPF, nº de registro) nem o texto em vermelho do cartão.
-async function ocrArquivo(file){
+async function ocrArquivo(file){ return (await ocrArquivoCompleto(file)).texto; }
+
+// Lê o texto da página e, se for CNH, também a categoria (ver lerCategoriaNaImagem)
+async function ocrArquivoCompleto(file){
   let worker = null;
   try{
     await carregarBiblioteca('ocr');
@@ -32,13 +35,121 @@ async function ocrArquivo(file){
     }
     worker = await Tesseract.createWorker('eng');
     await worker.setParameters({ tessedit_pageseg_mode: '6' });
-    const resultado = await worker.recognize(fonteImagem);
-    return (resultado && resultado.data && resultado.data.text) || '';
+    const resultado = await worker.recognize(fonteImagem, {}, { text: true, blocks: true });
+    const texto = (resultado && resultado.data && resultado.data.text) || '';
+    // modelo novo: a categoria vem no texto logo após o nº de registro (mais confiável);
+    // modelo antigo: o texto não traz, então lê o recorte da caixa "CAT. HAB." na imagem
+    let categoria = extrairCategoriaCNH(texto);
+    if(!categoria){ try{ categoria = await lerCategoriaNaImagem(worker, resultado.data, fonteImagem); } catch(e){ /* fica sem */ } }
+    return { texto, categoria };
   } catch(e){
-    return '';
+    return { texto: '', categoria: null };
   } finally {
     if(worker) try{ await worker.terminate(); } catch(e){ /* ignora */ }
   }
+}
+
+// ---------- categoria da CNH ----------
+// Campo "9 CAT HAB" (modelo novo) ou "CAT. HAB." (modelo antigo). No modelo
+// antigo o valor fica numa caixinha em vermelho ao lado de campos hachurados,
+// e a leitura da página inteira embaralha — então acha o rótulo na imagem,
+// recorta logo abaixo dele e lê só ali, aceitando apenas as letras A–E.
+const CATEGORIAS_CNH = ['ACC', 'AB', 'AC', 'AD', 'AE', 'A', 'B', 'C', 'D', 'E'];
+function categoriaDoTexto(t){
+  const candidatos = String(t || '').toUpperCase().match(/[A-E]{1,3}/g) || [];
+  return candidatos.find(c => CATEGORIAS_CNH.includes(c)) || null;
+}
+// Pelo texto (modelo novo): a categoria vem logo depois do nº de registro (11 dígitos)
+function extrairCategoriaCNH(texto){
+  const t = normalizarTextoComEspacos(texto);
+  const m = t.match(/\b\d{11}\b[^A-Z0-9\n]{0,4}([A-E]{1,3})\b/);
+  return m && CATEGORIAS_CNH.includes(m[1]) ? m[1] : null;
+}
+function palavrasDoOcr(dados){
+  if(dados && dados.words && dados.words.length) return dados.words;
+  const lista = [];
+  (dados && dados.blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => (l.words || []).forEach(w => lista.push(w)))));
+  return lista;
+}
+async function lerCategoriaNaImagem(worker, dados, imagem){
+  const palavras = palavrasDoOcr(dados);
+  const norm = (w) => normalizarTextoComEspacos(w.text || '').replace(/[^A-Z]/g, '');
+  const i = palavras.findIndex((w, k) => norm(w) === 'CAT' && palavras[k + 1] && /^HA[BR]/.test(norm(palavras[k + 1])));
+  if(i < 0) return null;
+  const a = palavras[i].bbox, b = palavras[i + 1].bbox;
+  const h = Math.max(a.y1 - a.y0, b.y1 - b.y0);
+  let fonte = imagem;
+  if(!(imagem instanceof HTMLCanvasElement)){
+    const bmp = await createImageBitmap(imagem);
+    fonte = document.createElement('canvas'); fonte.width = bmp.width; fonte.height = bmp.height;
+    fonte.getContext('2d').drawImage(bmp, 0, 0);
+  }
+  await worker.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: 'ABCDE' });
+  // a categoria fica abaixo do rótulo, dentro da caixa, impressa em vermelho: a cor só serve
+  // para LOCALIZAR o texto (recorte justo, sem as bordas da caixa, que o OCR confunde com "C")
+  const x0 = Math.min(a.x0, b.x0), x1 = Math.max(a.x1, b.x1), y1 = Math.max(a.y1, b.y1);
+  const area = { left: x0 - h * 0.6, top: y1 + h * 0.05, right: x1 + h * 0.6, bottom: y1 + h * 2.4 };
+  const achado = localizarVermelho(fonte, area);
+  // mancha maior que 1–3 letras é o desenho do fundo (modelo novo), não a categoria: não arrisca
+  if(!achado || achado.right - achado.left > h * 3 || achado.bottom - achado.top > h * 1.5) return null;
+  const tentativas = [];
+  tentativas.push({ left: achado.left - h * 0.25, top: achado.top - h * 0.2, right: achado.right + h * 0.25, bottom: achado.bottom + h * 0.2 });
+  for(const t of tentativas){
+    const recorte = recorteCategoria(fonte, t);
+    if(!recorte) continue;
+    const r = await worker.recognize(recorte);
+    const cat = categoriaDoTexto(r && r.data && r.data.text);
+    if(cat) return cat;
+  }
+  return null;
+}
+
+// Acha o retângulo dos pixels avermelhados na área (ignora pontos soltos). Devolve null se não houver.
+function localizarVermelho(fonte, t){
+  const left = Math.max(0, Math.round(t.left)), top = Math.max(0, Math.round(t.top));
+  const width = Math.min(fonte.width, Math.round(t.right)) - left, height = Math.min(fonte.height, Math.round(t.bottom)) - top;
+  if(width < 4 || height < 4) return null;
+  const d = fonte.getContext('2d').getImageData(left, top, width, height).data;
+  const linhas = new Array(height).fill(0), colunas = new Array(width).fill(0);
+  for(let y = 0; y < height; y++) for(let x = 0; x < width; x++){
+    const p = (y * width + x) * 4, r = d[p], g = d[p + 1], b = d[p + 2];
+    if(r > 140 && r - g > 30 && r - b > 30){ linhas[y]++; colunas[x]++; }
+  }
+  const total = linhas.reduce((s, v) => s + v, 0);
+  if(total < 15) return null;
+  // faixa vertical: o maior bloco contínuo de linhas com vermelho
+  let melhor = null, ini = -1, soma = 0;
+  for(let y = 0; y <= height; y++){
+    if(y < height && linhas[y] > 0){ if(ini < 0){ ini = y; soma = 0; } soma += linhas[y]; }
+    else if(ini >= 0){ if(!melhor || soma > melhor.soma) melhor = { ini, fim: y - 1, soma }; ini = -1; }
+  }
+  const xs = colunas.map((v, x) => v > 0 ? x : -1).filter(x => x >= 0);
+  return { left: left + xs[0], right: left + xs[xs.length - 1] + 1, top: top + melhor.ini, bottom: top + melhor.fim + 1 };
+}
+
+// Recorta a região, amplia 3x e passa para tons de cinza usando o canal VERDE com o contraste
+// esticado: a categoria é impressa em vermelho (fica escura no verde) e o fundo é claro.
+function recorteCategoria(fonte, t){
+  const left = Math.max(0, Math.round(t.left)), top = Math.max(0, Math.round(t.top));
+  const width = Math.min(fonte.width, Math.round(t.right)) - left, height = Math.min(fonte.height, Math.round(t.bottom)) - top;
+  if(width < 4 || height < 4) return null;
+  const escala = 3, borda = 24;
+  const c = document.createElement('canvas');
+  c.width = width * escala + borda * 2; c.height = height * escala + borda * 2;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(fonte, left, top, width, height, borda, borda, width * escala, height * escala);
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  let min = 255, max = 0;
+  for(let p = 0; p < d.length; p += 4){ const g = d[p + 1]; if(g < min) min = g; if(g > max) max = g; }
+  const faixa = Math.max(1, max - min);
+  for(let p = 0; p < d.length; p += 4){
+    const v = Math.round((d[p + 1] - min) * 255 / faixa);
+    d[p] = d[p + 1] = d[p + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
 }
 
 // Campos específicos da CNH que valem a pena buscar "pelo rótulo" no texto
@@ -114,6 +225,8 @@ function limparLinhaNome(linha){
   const principais = nome.filter(p => !CONECTIVOS_NOME.has(p));
   if(principais.length < 2 || nome.join('').length < 5) return null;
   if(nome.some(p => PALAVRAS_ROTULO_CNH.has(normalizarTextoComEspacos(p)))) return null;
+  // rótulo "1ª HABILITAÇÃO" (o OCR lê HABILITAGAO, HABILITACAO...) ao lado do nome
+  if(nome.some(p => /^HABILITA/.test(normalizarTextoComEspacos(p)))) return null;
   return nome.join(' ');
 }
 
@@ -199,13 +312,45 @@ function extrairCpfCNH(texto){
 // Palpite de nome (não achou pelo rótulo) ou CPF que não fechou a conta?
 // Antes de criar um login de verdade, mostra o que foi lido pro Thiago
 // conferir/corrigir. Devolve { nome, cpf } confirmados, ou null se cancelar.
-function confirmarDadosNovoMotorista(nome, cpf){
+// Prévia do documento nas janelas de conferência: a pessoa vê o arquivo enquanto confere/preenche.
+// Imagem aparece direto; PDF tem a 1ª página desenhada. Tocar abre o arquivo inteiro numa aba.
+function previaDocumentoHtml(id){
+  return `<div id="${id}" class="previa-doc" style="margin-bottom:14px; border:1px solid var(--border); border-radius:10px; background:#fff; min-height:60px; display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:zoom-in;" title="Toque para ampliar">
+    <span class="l2" style="color:#555; padding:14px;">Carregando a imagem do documento...</span></div>`;
+}
+async function montarPreviaDocumento(id, file){
+  const caixa = document.getElementById(id);
+  if(!caixa || !file) return;
+  const url = URL.createObjectURL(file);
+  caixa.addEventListener('click', () => window.open(url, '_blank'));
+  const mostrar = (src) => { if(document.getElementById(id)) caixa.innerHTML = `<img src="${src}" alt="Documento" style="display:block; width:100%; max-height:45vh; object-fit:contain;">`; };
+  try{
+    if(/^image\//.test(file.type)) return mostrar(url);
+    if(file.type !== 'application/pdf') throw new Error('sem prévia');
+    await usarPdfJs();
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const pagina = await pdf.getPage(1);
+    const base = pagina.getViewport({ scale: 1 });
+    const viewport = pagina.getViewport({ scale: Math.min(2.5, 1400 / base.width) });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width; canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await pagina.render({ canvasContext: ctx, viewport }).promise;
+    mostrar(canvas.toDataURL('image/jpeg', 0.85));
+  } catch(e){
+    if(document.getElementById(id)) caixa.innerHTML = `<span class="l2" style="color:#555; padding:14px;">Não deu para mostrar a prévia — toque aqui para abrir o arquivo.</span>`;
+  }
+}
+
+function confirmarDadosNovoMotorista(nome, cpf, file = null){
   return new Promise((resolve) => {
     const modalHtml = `
       <div id="confNovoMotModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
-        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:420px; width:100%;">
+        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:520px; width:100%; max-height:92vh; overflow:auto;">
           <h3 style="margin-top:0;">Confira os dados do motorista</h3>
           <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema e vou criar o login dele. Não tive certeza da leitura — confira (e corrija se precisar) antes de continuar.</div>
+          ${file ? previaDocumentoHtml('confNovoMotPrevia') : ''}
           <input type="text" id="confNovoMotNome" placeholder="Nome completo" value="${esc(nome || '')}">
           <input type="text" id="confNovoMotCpf" placeholder="CPF" inputmode="numeric" value="${esc(cpf || '')}" style="margin-top:10px;">
           <div id="confNovoMotErro" class="err" style="margin-top:8px;"></div>
@@ -214,6 +359,7 @@ function confirmarDadosNovoMotorista(nome, cpf){
         </div>
       </div>`;
     document.body.insertAdjacentHTML('beforeend', modalHtml);
+    if(file) montarPreviaDocumento('confNovoMotPrevia', file);
     const fechar = (valor) => { const m = document.getElementById('confNovoMotModal'); if(m) m.remove(); resolve(valor); };
     document.getElementById('btnConfNovoMotCancelar').addEventListener('click', () => fechar(null));
     document.getElementById('btnConfNovoMotOk').addEventListener('click', () => {

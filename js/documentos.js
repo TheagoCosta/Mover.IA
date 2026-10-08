@@ -583,9 +583,13 @@ async function processarUploadAutomatico(file, lote = null){
     || (deteccao.referenteA === 'veiculo' && !veiculoSugerido)
     || !datas.length;
   let usouOcr = false;
-  if(faltaInfo){
+  let categoriaSugerida = null;
+  // CNH também passa pelo OCR mesmo com tudo achado: a categoria só sai da imagem
+  if(faltaInfo || deteccao.tipo === 'CNH'){
     mostrarStatusOcr(true, 'Lendo o documento com reconhecimento de imagem...');
-    const textoOcr = await ocrArquivo(file);
+    const leitura = await ocrArquivoCompleto(file);
+    const textoOcr = leitura.texto;
+    categoriaSugerida = leitura.categoria;
     mostrarStatusOcr(false);
     if(textoOcr){
       usouOcr = true;
@@ -620,7 +624,7 @@ async function processarUploadAutomatico(file, lote = null){
     // Pede pro Thiago conferir antes de criar o login.
     let cancelouConferencia = false;
     if(nomeCNH && validadeSugerida && (!leituraNome.confiavel || !cpfCNH)){
-      const conferido = await confirmarDadosNovoMotorista(nomeCNH, cpfCNH);
+      const conferido = await confirmarDadosNovoMotorista(nomeCNH, cpfCNH, file);
       if(conferido){ nomeCNH = conferido.nome; cpfCNH = conferido.cpf; }
       else cancelouConferencia = true;
     }
@@ -671,7 +675,8 @@ async function processarUploadAutomatico(file, lote = null){
       numero: numeroSugerido, validade: validadeAuto, file
     });
     if(!error){
-      const validadeTxt = validadeAuto ? ` — validade ${fmtData(validadeAuto)}` : '';
+      if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH') await salvarCategoriaCnh(referenteId, categoriaSugerida);
+      const validadeTxt = (validadeAuto ? ` — validade ${fmtData(validadeAuto)}` : '') + (deteccao.tipo === 'CNH' && categoriaSugerida ? `, categoria ${categoriaSugerida}` : '');
       if(lote) registrar(motoristaNovo ? 'novo' : 'ok', motoristaNovo
         ? `Motorista ${nomeExibicao} cadastrado com login; documento ${deteccao.tipo} salvo${validadeTxt}`
         : `Documento ${deteccao.tipo} de ${nomeExibicao} ${atualizado ? 'atualizado' : 'cadastrado'}${validadeTxt}`);
@@ -683,11 +688,18 @@ async function processarUploadAutomatico(file, lote = null){
   }
 
   if(lote) mostrarStatusOcr(false);
-  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, lote });
+  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, lote });
   if(lote){
     if(resposta && resposta.salvo) registrar(motoristaNovo ? 'novo' : 'conferido', `${motoristaNovo ? 'Motorista cadastrado com login; ' : ''}conferido na mão e salvo`);
     else registrar('pulado', motoristaNovo ? 'Motorista cadastrado com login, mas o documento não foi salvo (cancelado na conferência)' : 'Pulado na conferência — não foi cadastrado');
   }
+}
+
+// Guarda a categoria da CNH no perfil do motorista (só quando foi lida/informada)
+async function salvarCategoriaCnh(usuarioId, categoria){
+  const cat = String(categoria || '').trim().toUpperCase();
+  if(!usuarioId || !/^(ACC|[A-E]{1,3})$/.test(cat)) return;
+  await sb.from('motorista_perfil').upsert({ usuario_id: usuarioId, categoria_cnh: cat });
 }
 
 function sugerirValidadePorPlaca(placa, calendario){
@@ -712,7 +724,7 @@ function mostrarRevisaoDocumento(ctx){
   return new Promise((resolverRevisao) => montarRevisaoDocumento(ctx, resolverRevisao));
 }
 function montarRevisaoDocumento(ctx, resolverRevisao){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, lote } = ctx;
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, lote } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
   const outrasDatas = validadeSugerida ? datas.filter(d => d !== validadeSugerida) : datas;
 
@@ -723,6 +735,7 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
         ${deteccao.tipo
           ? `<div class="l2" style="margin-bottom:14px;">Detectei: <b>${esc(deteccao.tipo)}</b>${motoristaSugerido ? ' de ' + esc(motoristaSugerido.nome) : ''}${veiculoSugerido ? ' do veículo ' + esc(veiculoSugerido.placa) : ''}${(deteccao.referenteA==='motorista' && !motoristaSugerido) || (deteccao.referenteA==='veiculo' && !veiculoSugerido) ? ' — não identifiquei de quem é, selecione abaixo' : ''}${usouOcr ? ' <span class="pill ok" style="margin-left:0;">lido por imagem</span>' : ''}</div>`
           : `<div class="l2" style="margin-bottom:14px;">Não consegui identificar automaticamente este arquivo — preencha abaixo.</div>`}
+        ${previaDocumentoHtml('revisaoPrevia')}
 
         <select id="revisaoReferenteA">
           <option value="empresa" ${referenteA==='empresa'?'selected':''}>Documento da empresa</option>
@@ -734,6 +747,9 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
 
         <input type="text" id="revisaoTipo" placeholder="Tipo (ex: CNH, CRLV)" value="${esc(deteccao.tipo || '')}" style="margin-top:10px;">
         <input type="text" id="revisaoNumero" placeholder="Número (opcional)" value="${esc(numeroSugerido || '')}" style="margin-top:10px;">
+        <div id="revisaoCategoriaWrap" style="margin-top:10px;">
+          <input type="text" id="revisaoCategoria" placeholder="Categoria da CNH (ex: AE)" maxlength="3" value="${esc(categoriaSugerida || '')}" style="text-transform:uppercase;">
+        </div>
 
         ${sugestaoCalendario ? `
           <div class="l2" style="margin-top:14px;">Sugestão pelo calendário do Detran (final da placa):</div>
@@ -756,6 +772,14 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', modalHtml);
+  montarPreviaDocumento('revisaoPrevia', file);
+
+  // categoria só faz sentido para CNH de motorista
+  function atualizarCampoCategoria(){
+    const ehCnh = referenteA === 'motorista' && /^cnh$/i.test(document.getElementById('revisaoTipo').value.trim());
+    document.getElementById('revisaoCategoriaWrap').style.display = ehCnh ? '' : 'none';
+  }
+  document.getElementById('revisaoTipo').addEventListener('input', atualizarCampoCategoria);
 
   function renderReferenteIdSelect(){
     const wrap = document.getElementById('revisaoReferenteIdWrap');
@@ -774,8 +798,9 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     }
   }
   renderReferenteIdSelect();
+  atualizarCampoCategoria();
 
-  document.getElementById('revisaoReferenteA').addEventListener('change', (e) => { referenteA = e.target.value; renderReferenteIdSelect(); });
+  document.getElementById('revisaoReferenteA').addEventListener('change', (e) => { referenteA = e.target.value; renderReferenteIdSelect(); atualizarCampoCategoria(); });
   document.querySelectorAll('[data-data]').forEach(btn => btn.addEventListener('click', () => {
     const [dd, mm, yyyy] = btn.dataset.data.split('/');
     document.getElementById('revisaoValidade').value = `${yyyy}-${mm}-${dd}`;
@@ -793,15 +818,19 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     const tipo = document.getElementById('revisaoTipo').value.trim();
     const numero = document.getElementById('revisaoNumero').value.trim();
     const validade = document.getElementById('revisaoValidade').value;
+    const ehCnh = referenteA === 'motorista' && /^cnh$/i.test(tipo);
+    const categoria = ehCnh ? document.getElementById('revisaoCategoria').value.trim().toUpperCase() : '';
 
     if(!tipo){ alert('Informe o tipo do documento.'); return; }
     if(referenteA !== 'empresa' && !referenteId){ alert('Selecione a quem este documento pertence.'); return; }
+    if(categoria && !/^(ACC|[A-E]{1,3})$/.test(categoria)){ alert('Categoria inválida — use letras de A a E (ex: AE, D, B).'); return; }
 
     btn.disabled = true; btn.textContent = 'Salvando...';
 
     const { error, docId } = await salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, validade, file });
 
     if(error && !docId){ alert('Erro ao criar o documento: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar documento'; return; }
+    if(ehCnh && categoria) await salvarCategoriaCnh(referenteId, categoria);
     if(error){ alert('Documento criado, mas não consegui enviar o arquivo: ' + error.message); fechar(true); if(!lote) loadDocumentos(); return; }
 
     fechar(true);
