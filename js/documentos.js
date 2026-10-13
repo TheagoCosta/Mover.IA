@@ -457,6 +457,92 @@ function encontrarMotoristaPorNome(texto, motoristas){
   return null;
 }
 
+// Dados para cadastrar um veículo novo a partir do CRLV (placa, tipo, modelo, ano). Tudo é só
+// sugestão — a pessoa confere na janela de cadastro. O nome do arquivo também ajuda na placa
+// (o CRLV Digital vem como "CRLVDigital_BZG9878_2026.pdf").
+function extrairDadosCRLV(texto, nomeArquivo = ''){
+  const t = normalizarTexto(texto || '');
+  const linhas = (texto || '').split('\n').map(l => normalizarTexto(l).trim()).filter(Boolean);
+  const PLACA = /\b([A-Z]{3})[\s-]?([0-9][A-Z0-9][0-9]{2})\b/;
+  let placa = null;
+  const iPlaca = t.search(/\bPLACA\b(?!\s*ANTERIOR)/);
+  if(iPlaca !== -1){ const m = t.slice(iPlaca, iPlaca + 80).match(PLACA); if(m) placa = m[1] + '-' + m[2]; }
+  if(!placa){ const m = normalizarTexto(nomeArquivo).replace(/[_.]/g, ' ').match(PLACA); if(m) placa = m[1] + '-' + m[2]; }
+  let tipo = null;
+  if(/SEMI[\s-]*REBOQUE/.test(t)) tipo = 'carreta';
+  else if(/TRATOR/.test(t)) tipo = 'cavalo';
+  else if(/\bREBOQUE\b/.test(t)) tipo = 'dolly';
+  let modelo = null;
+  const iModelo = linhas.findIndex(l => /MARCA\s*\/?\s*MODELO/.test(l));
+  if(iModelo !== -1){
+    const resto = linhas[iModelo].replace(/^.*MARCA\s*\/?\s*MODELO\s*\/?\s*(VERSAO)?/, '').trim();
+    const candidato = resto.length >= 3 ? resto : (linhas[iModelo + 1] || '');
+    if(candidato && !/ESPECIE|TIPO/.test(candidato)) modelo = candidato.replace(/\s+/g, ' ').slice(0, 40);
+  }
+  let ano = null;
+  const iAno = t.search(/ANO\s*(DE\s*)?FABRICA/);
+  if(iAno !== -1){ const m = t.slice(iAno, iAno + 80).match(/\b(19[7-9][0-9]|20[0-9]{2})\b/); if(m) ano = Number(m[1]); }
+  const iNome = linhas.findIndex(l => /^NOME\b/.test(l));
+  const proprietario = iNome !== -1 ? (linhas[iNome].replace(/^NOME\s*/, '') || linhas[iNome + 1] || '') : '';
+  return { placa, tipo, modelo, ano, proprietario };
+}
+
+// Janela de cadastro de veículo aberta pela conferência de documento. Devolve o veículo
+// criado ({ id, placa, grupo }) ou null se a pessoa voltar sem cadastrar.
+function cadastrarVeiculoPeloDocumento(sug, veiculos, file){
+  return new Promise((resolve) => {
+    const grupos = [...new Set(veiculos.map(v => v.grupo).filter(Boolean))].sort();
+    // grupo sugerido pelo nome do proprietário no CRLV (ex.: "LEGUTRAN ..." → grupo "Legut")
+    const dono = normalizarTexto(sug.proprietario || '').replace(/[^A-Z]/g, '');
+    const grupoSugerido = grupos.find(g => { const n = normalizarTexto(g).replace(/[^A-Z]/g, ''); return n.length >= 4 && dono.includes(n); }) || '';
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="novoVeicModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
+        <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:${file ? '760px' : '440px'}; width:100%; max-height:94vh; overflow:auto;">
+          <h3 style="margin-top:0;">Cadastrar novo veículo</h3>
+          <div class="l2" style="margin-bottom:14px;">Confira os dados no documento abaixo (dá para dar zoom). Depois é só montar o conjunto em Veículos, se ele fizer parte de um.</div>
+          ${file ? previaDocumentoHtml('novoVeicPrevia') : ''}
+          <div class="o-form-grid">
+            <div class="field-row" style="margin:0;"><label for="nvPlaca">Placa</label><input type="text" id="nvPlaca" value="${esc(sug.placa || '')}" placeholder="ex: GKH-1B12" style="text-transform:uppercase;"></div>
+            <div class="field-row" style="margin:0;"><label for="nvTipo">Tipo</label><select id="nvTipo">
+              <option value="">Selecione</option>
+              ${['cavalo', 'carreta', 'dolly'].map(t => `<option value="${t}" ${sug.tipo === t ? 'selected' : ''}>${tipoLabelGlobal[t]}</option>`).join('')}</select></div>
+            <div class="field-row" style="margin:0;"><label for="nvModelo">Modelo</label><input type="text" id="nvModelo" value="${esc(sug.modelo || '')}" maxlength="60" placeholder="ex: Scania R450"></div>
+            <div class="field-row" style="margin:0;"><label for="nvAno">Ano</label><input type="text" id="nvAno" value="${esc(sug.ano || '')}" inputmode="numeric" maxlength="4" placeholder="ex: 2021"></div>
+            <div class="field-row" style="margin:0;"><label for="nvGrupo">Grupo (opcional)</label><input type="text" id="nvGrupo" value="${esc(grupoSugerido)}" list="nvGrupos" maxlength="40" placeholder="ex: Chaves, Agregado"></div>
+            <datalist id="nvGrupos">${grupos.map(g => `<option value="${esc(g)}">`).join('')}</datalist>
+          </div>
+          <div class="err" id="nvErro" style="margin-top:8px;"></div>
+          <button id="btnNvOk" style="margin-top:14px; width:100%;">Cadastrar veículo</button>
+          <button class="btn-small" id="btnNvVoltar" style="margin-top:8px; width:100%;">Voltar</button>
+        </div>
+      </div>`);
+    if(file){ document.getElementById('novoVeicPrevia').style.height = 'min(38vh, 360px)'; montarPreviaDocumento('novoVeicPrevia', file); }
+    const fechar = (valor) => { const m = document.getElementById('novoVeicModal'); if(m) m.remove(); resolve(valor); };
+    document.getElementById('btnNvVoltar').addEventListener('click', () => fechar(null));
+    document.getElementById('btnNvOk').addEventListener('click', async () => {
+      const erro = document.getElementById('nvErro'), btn = document.getElementById('btnNvOk');
+      const placa = normalizarPlaca(document.getElementById('nvPlaca').value);
+      const tipo = document.getElementById('nvTipo').value;
+      const anoTxt = document.getElementById('nvAno').value.trim();
+      const ano = anoTxt ? parseInt(anoTxt, 10) : null;
+      if(!placa){ erro.textContent = 'Placa inválida. Use o formato AAA-9999 ou AAA-9A99.'; return; }
+      if(veiculos.some(v => v.placa === placa)){ erro.textContent = `A placa ${placa} já está cadastrada — selecione ela na lista.`; return; }
+      if(!tipo){ erro.textContent = 'Escolha o tipo (cavalo, carreta ou dolly).'; return; }
+      if(anoTxt && (!ano || ano < 1970 || ano > new Date().getFullYear() + 1)){ erro.textContent = 'Ano inválido.'; return; }
+      btn.disabled = true; btn.textContent = 'Cadastrando...';
+      const { data, error } = await sb.from('veiculo').insert({
+        transportadora_id: usuarioAtual.transportadora_id, placa, tipo,
+        modelo: document.getElementById('nvModelo').value.trim() || null, ano,
+        grupo: document.getElementById('nvGrupo').value.trim().replace(/\s+/g, ' ') || null,
+      }).select('id, placa, grupo').single();
+      if(error){ erro.textContent = 'Não consegui cadastrar: ' + error.message; btn.disabled = false; btn.textContent = 'Cadastrar veículo'; return; }
+      if(window.limparCacheTelas) limparCacheTelas();
+      mostrarToast(`✅ Veículo ${placa} cadastrado`);
+      fechar({ id: data.id, placa, grupo: data.grupo || null });
+    });
+  });
+}
+
 function encontrarVeiculoPorPlaca(texto, veiculos){
   const t = normalizarTextoGrudado(texto);
   const encontrados = (veiculos || []).filter(v => t.includes(normalizarTextoGrudado(v.placa)));
@@ -592,7 +678,7 @@ async function processarUploadAutomatico(file, lote = null){
   }
   let deteccao = detectarTipoDocumento(texto);
   const { data: motoristas } = await sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome');
-  const { data: veiculos } = await sb.from('veiculo').select('id, placa').order('placa');
+  const { data: veiculos } = await sb.from('veiculo').select('id, placa, grupo').order('placa');
   const { data: calendario } = await sb.from('calendario_licenciamento').select('final_placa, mes');
   let datas = texto ? extrairDatasPossiveis(texto) : [];
 
@@ -731,7 +817,8 @@ async function processarUploadAutomatico(file, lote = null){
   }
 
   if(lote) mostrarStatusOcr(false);
-  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo: motoristaNovo ? null : sugestaoNovo, lote });
+  const sugestaoVeiculo = deteccao.referenteA === 'veiculo' && !veiculoSugerido ? extrairDadosCRLV(texto, file.name) : null;
+  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo: motoristaNovo ? null : sugestaoNovo, sugestaoVeiculo, calendario, lote });
   if(resposta && resposta.criouMotorista) motoristaNovo = true;
   if(lote){
     if(resposta && resposta.salvo) registrar(motoristaNovo ? 'novo' : 'conferido', `${motoristaNovo ? 'Motorista cadastrado com login; ' : ''}conferido na mão e salvo`);
@@ -768,9 +855,10 @@ function mostrarRevisaoDocumento(ctx){
   return new Promise((resolverRevisao) => montarRevisaoDocumento(ctx, resolverRevisao));
 }
 function montarRevisaoDocumento(ctx, resolverRevisao){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo, lote } = ctx;
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo, sugestaoVeiculo, calendario, lote } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
   let motoristaEscolhido = motoristaSugerido ? motoristaSugerido.id : '';
+  let veiculoEscolhido = veiculoSugerido ? veiculoSugerido.id : '';
   let criouMotorista = false;
   const outrasDatas = validadeSugerida ? datas.filter(d => d !== validadeSugerida) : datas;
 
@@ -847,8 +935,14 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     } else if(referenteA === 'veiculo'){
       wrap.innerHTML = `<select id="revisaoReferenteId">
         <option value="">Selecione o veículo</option>
-        ${(veiculos||[]).map(v => `<option value="${v.id}" ${veiculoSugerido && veiculoSugerido.id===v.id ? 'selected':''}>${esc(v.placa)}</option>`).join('')}
+        <option value="__novo__">+ Cadastrar novo veículo${sugestaoVeiculo && sugestaoVeiculo.placa ? ' (' + esc(sugestaoVeiculo.placa) + ')' : ''}</option>
+        ${(veiculos||[]).map(v => `<option value="${v.id}" ${veiculoEscolhido === v.id ? 'selected':''}>${esc(v.placa)}</option>`).join('')}
       </select>`;
+      const sel = document.getElementById('revisaoReferenteId');
+      sel.addEventListener('change', () => {
+        if(sel.value === '__novo__'){ sel.value = veiculoEscolhido; cadastrarNovoVeiculo(); }
+        else veiculoEscolhido = sel.value;
+      });
     } else {
       wrap.innerHTML = '';
     }
@@ -873,6 +967,24 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     renderReferenteIdSelect();
     if(lote) lote.credenciais.push({ nome: dados.nome, login: r.motorista.login, senha: r.motorista.senhaTemporaria });
     else await mostrarCredenciaisNovoMotorista(r.motorista);
+  }
+
+  // Veículo ainda fora da frota: cadastra aqui mesmo (placa, tipo, modelo e ano vêm do CRLV)
+  async function cadastrarNovoVeiculo(){
+    const novo = await cadastrarVeiculoPeloDocumento(sugestaoVeiculo || {}, veiculos || [], file);
+    if(!novo) return;
+    veiculos.push(novo);
+    veiculos.sort((a, b) => a.placa.localeCompare(b.placa));
+    veiculoEscolhido = novo.id;
+    renderReferenteIdSelect();
+    // CRLV: sem validade escolhida, sugere a do calendário do Detran pelo final da placa
+    const campoValidade = document.getElementById('revisaoValidade');
+    const sugestao = sugerirValidadePorPlaca(novo.placa, calendario);
+    if(sugestao && !campoValidade.value && /crlv|licenciamento/i.test(document.getElementById('revisaoTipo').value)){
+      const [dd, mm, yyyy] = sugestao.split('/');
+      campoValidade.value = `${yyyy}-${mm}-${dd}`;
+      mostrarToast(`Validade sugerida pelo calendário do Detran: ${sugestao}`);
+    }
   }
 
   renderReferenteIdSelect();
