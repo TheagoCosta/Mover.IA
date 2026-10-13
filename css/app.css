@@ -385,7 +385,7 @@ body.tema-escritorio .pill.vencido{color:var(--signal-red-ink); background:var(-
 .previa-doc .previa-msg{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; color:#555; padding:14px; font-size:13px;}
 .previa-botoes{position:absolute; right:8px; bottom:8px; display:flex; gap:6px; z-index:2;}
 .previa-botoes button{background:rgba(20,24,29,.82); color:#fff; border:none; width:38px; height:38px; padding:0; border-radius:10px; display:flex; align-items:center; justify-content:center;}
-.revisao-caixa{background:var(--asphalt-900); width:100%; max-width:1180px; margin:0 auto; border-radius:16px 16px 0 0; padding:20px; max-height:94vh; overflow:auto;}
+.revisao-caixa{background:var(--asphalt-900); width:100%; max-width:1180px; margin:0 auto; border-radius:16px; padding:20px; max-height:calc(100vh - 32px); overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.35);}
 .revisao-grade{display:grid; grid-template-columns:1fr; gap:4px 20px; align-items:start;}
 @media (min-width:900px){
   .revisao-grade{grid-template-columns:minmax(0, 1.5fr) minmax(0, 1fr);}

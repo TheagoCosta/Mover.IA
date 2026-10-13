@@ -659,21 +659,24 @@ async function processarUploadAutomatico(file, lote = null){
   // da CNH, cadastra ele sozinho (login + senha temporária) antes de seguir
   // pro documento — assim já entra tudo de uma vez, do jeito que o Thiago
   // pediu.
+  // (a validade não é obrigatória para criar o login: se faltar, é preenchida na conferência)
+  let sugestaoNovo = null;
   if(deteccao.referenteA === 'motorista' && deteccao.tipo === 'CNH' && !motoristaSugerido){
     const leituraNome = extrairNomeCNH(texto);
     let nomeCNH = leituraNome ? leituraNome.nome : null;
     let cpfCNH = extrairCpfCNH(texto);
+    sugestaoNovo = { nome: nomeCNH, cpf: cpfCNH };
     // Leitura insegura (nome por palpite ou CPF que não fechou a conta)?
     // Pede pro Thiago conferir antes de criar o login.
     let cancelouConferencia = false;
-    if(nomeCNH && validadeSugerida && (!leituraNome.confiavel || !cpfCNH)){
+    if(nomeCNH && (!leituraNome.confiavel || !cpfCNH)){
       const conferido = await confirmarDadosNovoMotorista(nomeCNH, cpfCNH, file);
       if(conferido){ nomeCNH = conferido.nome; cpfCNH = conferido.cpf; }
       else cancelouConferencia = true;
     }
     if(cancelouConferencia){
       // Thiago preferiu não cadastrar agora — segue pra confirmação manual.
-    } else if(nomeCNH && validadeSugerida){
+    } else if(nomeCNH){
       mostrarStatusOcr(true, 'Motorista não encontrado — cadastrando automaticamente...');
       const resultadoCriacao = await criarMotoristaAutomatico(nomeCNH, cpfCNH);
       mostrarStatusOcr(false);
@@ -689,9 +692,6 @@ async function processarUploadAutomatico(file, lote = null){
         // outra coisa.
         if(!lote) alert('Não consegui cadastrar o motorista automaticamente: ' + resultadoCriacao.error);
       }
-    } else if(!lote){
-      const motivo = !nomeCNH ? 'o nome' : 'a validade';
-      alert('Não consegui ler ' + motivo + ' deste motorista automaticamente pra cadastrar ele sozinho — selecione manualmente abaixo (ou complete os dados e cadastre-o pela tela de Documentos > Cadastrar documentos > motorista).');
     }
   }
 
@@ -731,7 +731,8 @@ async function processarUploadAutomatico(file, lote = null){
   }
 
   if(lote) mostrarStatusOcr(false);
-  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, lote });
+  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo: motoristaNovo ? null : sugestaoNovo, lote });
+  if(resposta && resposta.criouMotorista) motoristaNovo = true;
   if(lote){
     if(resposta && resposta.salvo) registrar(motoristaNovo ? 'novo' : 'conferido', `${motoristaNovo ? 'Motorista cadastrado com login; ' : ''}conferido na mão e salvo`);
     else registrar('pulado', motoristaNovo ? 'Motorista cadastrado com login, mas o documento não foi salvo (cancelado na conferência)' : 'Pulado na conferência — não foi cadastrado');
@@ -767,12 +768,14 @@ function mostrarRevisaoDocumento(ctx){
   return new Promise((resolverRevisao) => montarRevisaoDocumento(ctx, resolverRevisao));
 }
 function montarRevisaoDocumento(ctx, resolverRevisao){
-  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, lote } = ctx;
+  const { file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo, lote } = ctx;
   let referenteA = deteccao.referenteA || 'empresa';
+  let motoristaEscolhido = motoristaSugerido ? motoristaSugerido.id : '';
+  let criouMotorista = false;
   const outrasDatas = validadeSugerida ? datas.filter(d => d !== validadeSugerida) : datas;
 
   const modalHtml = `
-    <div id="uploadModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:flex-end;">
+    <div id="uploadModal" style="position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:50; display:flex; align-items:center; justify-content:center; padding:16px;">
       <div class="revisao-caixa">
         <h3 style="margin-top:0;">Confirme o documento${lote ? ` <span class="l2" style="font-weight:400;">· ${esc(file.name)}</span>` : ''}</h3>
         <div class="revisao-grade">
@@ -833,8 +836,14 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     if(referenteA === 'motorista'){
       wrap.innerHTML = `<select id="revisaoReferenteId">
         <option value="">Selecione o motorista</option>
-        ${(motoristas||[]).map(m => `<option value="${m.id}" ${motoristaSugerido && motoristaSugerido.id===m.id ? 'selected':''}>${esc(m.nome)}</option>`).join('')}
+        <option value="__novo__">+ Cadastrar novo motorista</option>
+        ${(motoristas||[]).map(m => `<option value="${m.id}" ${motoristaEscolhido === m.id ? 'selected':''}>${esc(m.nome)}</option>`).join('')}
       </select>`;
+      const sel = document.getElementById('revisaoReferenteId');
+      sel.addEventListener('change', () => {
+        if(sel.value === '__novo__'){ sel.value = motoristaEscolhido; cadastrarNovoMotorista(); }
+        else motoristaEscolhido = sel.value;
+      });
     } else if(referenteA === 'veiculo'){
       wrap.innerHTML = `<select id="revisaoReferenteId">
         <option value="">Selecione o veículo</option>
@@ -844,6 +853,28 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
       wrap.innerHTML = '';
     }
   }
+  // Motorista ainda sem cadastro: cria o login aqui mesmo (nome e CPF já vêm da leitura da CNH)
+  async function cadastrarNovoMotorista(){
+    const sug = sugestaoNovo || {};
+    const dados = await confirmarDadosNovoMotorista(sug.nome || '', sug.cpf || '', file, {
+      titulo: 'Cadastrar novo motorista',
+      texto: 'Confira o nome completo e o CPF no documento abaixo (dá para dar zoom). O app cria o login e uma senha temporária para o motorista.',
+      botao: 'Cadastrar motorista', cancelar: 'Voltar'
+    });
+    if(!dados) return;
+    mostrarStatusOcr(true, 'Cadastrando o motorista...');
+    const r = await criarMotoristaAutomatico(dados.nome, dados.cpf);
+    mostrarStatusOcr(false);
+    if(!r.motorista){ alert('Não consegui cadastrar o motorista: ' + (r.error || 'erro desconhecido')); return; }
+    const novo = { id: r.motorista.usuarioId, nome: dados.nome };
+    motoristas.push(novo);
+    motoristas.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    motoristaEscolhido = novo.id; criouMotorista = true;
+    renderReferenteIdSelect();
+    if(lote) lote.credenciais.push({ nome: dados.nome, login: r.motorista.login, senha: r.motorista.senhaTemporaria });
+    else await mostrarCredenciaisNovoMotorista(r.motorista);
+  }
+
   renderReferenteIdSelect();
   atualizarCampoCategoria();
 
@@ -855,7 +886,7 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     btn.classList.add('active', 'ok');
   }));
 
-  function fechar(salvo = false){ const m = document.getElementById('uploadModal'); if(m) m.remove(); resolverRevisao({ salvo }); }
+  function fechar(salvo = false){ const m = document.getElementById('uploadModal'); if(m) m.remove(); resolverRevisao({ salvo, criouMotorista }); }
   document.getElementById('btnCancelarUploadAutomatico').addEventListener('click', () => fechar(false));
 
   document.getElementById('btnSalvarUploadAutomatico').addEventListener('click', async () => {

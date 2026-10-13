@@ -170,8 +170,39 @@ function extrairNumeroRegistroCNH(texto){
   return m ? m[0] : null;
 }
 
+// Linha de códigos (MRZ) no rodapé da CNH Digital, ex.: "7305070M2910219BRA<<<" =
+// nascimento (AAMMDD + dígito), sexo, validade (AAMMDD + dígito), BRA. Letras grandes e
+// fáceis de ler, e cada data tem dígito verificador (padrão ICAO): se confere, a data é certa.
+function digitoMrz(s){ return [...s].reduce((soma, c, i) => soma + Number(c) * [7, 3, 1][i % 3], 0) % 10; }
+function lerMrzCNH(texto){
+  const linhas = normalizarTextoComEspacos(texto).split('\n').map(l => l.replace(/\s+/g, ''));
+  let validade = null, nome = null;
+  for(const l of linhas){
+    const m = l.match(/([0-9O]{6})([0-9O])[MFX<]([0-9O]{6})([0-9O])BRA/);
+    if(m && !validade){
+      const [nasc, dn, val, dv] = m.slice(1).map(x => x.replace(/O/g, '0'));
+      const mm = Number(val.slice(2, 4)), dd = Number(val.slice(4, 6));
+      if(digitoMrz(val) === Number(dv) && digitoMrz(nasc) === Number(dn) && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31)
+        validade = `${val.slice(4, 6)}/${val.slice(2, 4)}/20${val.slice(0, 2)}`;
+    }
+    const n = l.match(/^([A-Z]{2,}<<[A-Z<]{3,})/);
+    if(n && !nome && !/^I<BRA|BRA\d/.test(l)){
+      const partes = [];
+      for(let p of n[1].split('<').filter(Boolean)){
+        if(/^[KLC]{2,}$/.test(p) || (p.length === 1 && p !== 'E')) break;   // os "<<<" do fim, lidos como letras
+        p = p.replace(/^K(?=[BCDFGJMNPQSTVWXZ])/, '');                        // "<" lido como K grudado (KSILVA)
+        partes.push(p);
+      }
+      if(partes.length >= 2 && partes.every(p => p === 'E' || /[AEIOUY]/.test(p))) nome = partes.join(' ');
+    }
+  }
+  return { validade, nome };
+}
+
 function extrairValidadeCNH(texto){
   const t = normalizarTextoComEspacos(texto);
+  const mrz = lerMrzCNH(texto).validade;
+  if(mrz) return mrz;
   // Modelo novo da CNH: "DATA EMISSAO" e "VALIDADE" aparecem como rótulos em
   // sequência, seguidos logo abaixo pelas duas datas correspondentes na
   // mesma ordem — a 2ª data é a validade.
@@ -277,6 +308,10 @@ function extrairNomeCNH(texto){
     const nome = limparLinhaNome(linhas[i]);
     if(nome) return { nome: formatarNomeProprio(nome), confiavel: false };
   }
+  // 4) Linha de códigos do rodapé (RENATO<<RODRIGUES<DE<FREITAS) — pode vir cortada em
+  // nomes longos, por isso não é "confiável" (o app pede para conferir)
+  const mrz = lerMrzCNH(texto).nome;
+  if(mrz) return { nome: formatarNomeProprio(mrz), confiavel: false };
   return null;
 }
 
@@ -342,23 +377,24 @@ async function montarPreviaDocumento(id, file){
   }
 }
 
-function confirmarDadosNovoMotorista(nome, cpf, file = null){
+// textos: { titulo, texto, botao, cancelar } — usada também pelo "+ Cadastrar novo motorista" da conferência
+function confirmarDadosNovoMotorista(nome, cpf, file = null, textos = {}){
   return new Promise((resolve) => {
     const modalHtml = `
       <div id="confNovoMotModal" style="position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:65; display:flex; align-items:center; justify-content:center; padding:20px;">
         <div style="background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:20px; max-width:${file ? '760px' : '420px'}; width:100%; max-height:94vh; overflow:auto;">
-          <h3 style="margin-top:0;">Confira os dados do motorista</h3>
-          <div class="l2" style="margin-bottom:14px;">Não encontrei esse motorista no sistema e vou criar o login dele. Não tive certeza da leitura — confira (e corrija se precisar) antes de continuar.</div>
+          <h3 style="margin-top:0;">${esc(textos.titulo || 'Confira os dados do motorista')}</h3>
+          <div class="l2" style="margin-bottom:14px;">${esc(textos.texto || 'Não encontrei esse motorista no sistema e vou criar o login dele. Não tive certeza da leitura — confira (e corrija se precisar) antes de continuar.')}</div>
           ${file ? previaDocumentoHtml('confNovoMotPrevia') : ''}
           <input type="text" id="confNovoMotNome" placeholder="Nome completo" value="${esc(nome || '')}">
           <input type="text" id="confNovoMotCpf" placeholder="CPF" inputmode="numeric" value="${esc(cpf || '')}" style="margin-top:10px;">
           <div id="confNovoMotErro" class="err" style="margin-top:8px;"></div>
-          <button id="btnConfNovoMotOk" style="margin-top:14px; width:100%;">Confirmar e cadastrar</button>
-          <button class="btn-small" id="btnConfNovoMotCancelar" style="margin-top:8px; width:100%;">Não cadastrar agora</button>
+          <button id="btnConfNovoMotOk" style="margin-top:14px; width:100%;">${esc(textos.botao || 'Confirmar e cadastrar')}</button>
+          <button class="btn-small" id="btnConfNovoMotCancelar" style="margin-top:8px; width:100%;">${esc(textos.cancelar || 'Não cadastrar agora')}</button>
         </div>
       </div>`;
     document.body.insertAdjacentHTML('beforeend', modalHtml);
-    if(file) montarPreviaDocumento('confNovoMotPrevia', file);
+    if(file){ document.getElementById('confNovoMotPrevia').style.height = 'min(38vh, 360px)'; montarPreviaDocumento('confNovoMotPrevia', file); }
     const fechar = (valor) => { const m = document.getElementById('confNovoMotModal'); if(m) m.remove(); resolve(valor); };
     document.getElementById('btnConfNovoMotCancelar').addEventListener('click', () => fechar(null));
     document.getElementById('btnConfNovoMotOk').addEventListener('click', () => {

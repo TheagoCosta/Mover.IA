@@ -1,0 +1,33 @@
+# Despertador do banco de dados: o plano gratuito do Supabase pausa o projeto
+# depois de alguns dias sem uso (e aí ninguém consegue entrar no app).
+# A cada 2 dias, esta tarefa faz uma consulta simples ao banco para mantê-lo ativo.
+# Usa só a chave pública do app (a mesma que já está em js/nucleo.js) e chama a
+# função manter_ativo(), que só devolve "1" (supabase/migrations/20261013_01_despertador.sql).
+# Dá para rodar na mão em: GitHub > Actions > "Despertador do Supabase" > Run workflow.
+name: Despertador do Supabase
+
+on:
+  schedule:
+    - cron: '17 11 */2 * *'   # dia sim, dia não, ~08:17 de Brasília
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  acordar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Consulta simples ao banco
+        env:
+          SUPABASE_URL: https://otllslhjbyjtktxyvezy.supabase.co
+          SUPABASE_CHAVE_PUBLICA: sb_publishable_eFeBsxW2lThWWBAHquuv5g_NWe9lgvf
+        run: |
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST \
+            "$SUPABASE_URL/rest/v1/rpc/manter_ativo" \
+            -H "apikey: $SUPABASE_CHAVE_PUBLICA" -H "Content-Type: application/json" -d '{}')
+          echo "Resposta do banco: $codigo"
+          if [ "$codigo" != "200" ]; then
+            echo "::error::O banco não respondeu como esperado ($codigo). Ele pode estar pausado — reative em supabase.com/dashboard."
+            exit 1
+          fi
