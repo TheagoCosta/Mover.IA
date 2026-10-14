@@ -15,6 +15,7 @@ const SECOES_ESCRITORIO = [
   { k:'capacitacoes',  l:'Capacitações',  i:'award',   meta:() => 'Treinamentos e certificações da equipe' },
   { k:'agenda',        l:'Agenda',        i:'cal',     meta:() => 'Revisões, exames e compromissos agendados' },
   { k:'usuarios',      l:'Usuários',      i:'users',   meta:() => 'Quem tem acesso ao sistema' },
+  { k:'privacidade',   l:'Privacidade',   i:'lock',    meta:() => 'LGPD — pedidos dos titulares e leitura da política' },
   { k:'integracao',    l:'Integração',    i:'sync',    meta:() => 'Sincronização com o sistema da transportadora (TMS)', emBreve:true },
   { k:'config',        l:'Configurações', i:'gear',    meta:() => 'Dados da empresa e plano contratado' },
 ];
@@ -72,7 +73,7 @@ function loadEscritorio(){
   const renderizar = {
     painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, abastecimento: secaoAbastecimento, consumo: secaoConsumo,
     oficina: secaoOficina, jornadas: secaoJornadas, checklists: secaoChecklists, documentos: () => loadDocumentos(),
-    capacitacoes: secaoCapacitacoes, agenda: secaoAgenda, usuarios: secaoUsuarios, integracao: secaoIntegracao, config: secaoConfig,
+    capacitacoes: secaoCapacitacoes, agenda: secaoAgenda, usuarios: secaoUsuarios, privacidade: secaoPrivacidade, integracao: secaoIntegracao, config: secaoConfig,
   }[screen];
   Promise.resolve(renderizar(el)).catch(e => { el.innerHTML = `<div class="status">Erro ao carregar: ${esc(e.message)}</div>`; });
 }

@@ -18,7 +18,7 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 ## 2. Arquitetura
 
 - **Frontend sem build:** `index.html` + `css/app.css` + `js/*.js` (scripts clássicos, todas as funções globais — um arquivo chama funções dos outros). Bibliotecas por CDN: supabase-js 2.117.2 (versão fixa, no `index.html`); jsQR, pdf.js 3.11.174 e tesseract.js 5.1.1 são **baixados só quando usados** (`carregarBiblioteca()` / `usarPdfJs()` em `js/ui.js`) — não voltar a colocá-los no `<head>`, isso deixava o celular lento. Fontes Oswald/Inter/JetBrains Mono (Google Fonts).
-- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261013b`) para os celulares baixarem a versão nova.
+- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261014a` — também em `privacidade.html`) para os celulares baixarem a versão nova.
 - **App instalável (PWA):** `manifest.webmanifest` + `sw.js` (service worker). A página abre **na hora com a cópia guardada** e a nova é buscada por trás; o app confere a versão publicada (`conferirVersaoNova()` em `ui.js`, via `?verificar=`) e mostra o aviso "Atualizar" (`?atualizar=` faz o service worker buscar da internet). Medidor de velocidade no Perfil do motorista (`resumoVelocidade()`); arquivos com `?v=` e CDN de versão fixa ficam guardados de vez; Supabase nunca é guardado. **Por isso o `?v=` é obrigatório** — sem trocar, o celular continua com o arquivo antigo. Mudou o `sw.js`? Trocar `CACHE` (`moveria-v1` → `v2`). Botão "Instalar o app no celular" na aba Mais do motorista (`instalarApp()` em `ui.js`). O navegador embutido do Claude não registra service worker; a lógica foi testada simulando o navegador no Node.
 - **Backend:** Supabase `otllslhjbyjtktxyvezy` (Postgres + Auth + Storage + Edge Functions). O Claude acessa pelo **conector oficial do Supabase** (MCP) — o Thiago conecta em Configurações → Conectores do app do Claude. Com ele o Claude lê o banco, aplica migrações e publica funções.
 - **Hospedagem:** GitHub `TheagoCosta/Mover.IA`, branch `main` → **GitHub Pages: https://theagocosta.github.io/Mover.IA/** (maiúsculas importam; `/mover-ia/` dá 404). O Netlify antigo está pausado/abandonado.
@@ -108,3 +108,11 @@ Depois me diga o que você precisa que eu instale ou configure aqui, e vamos dec
 
 ## Despertador do Supabase (13/10)
 O plano gratuito pausa o projeto após dias sem uso (aconteceu em 13/10: ninguém conseguia entrar). O GitHub Actions `.github/workflows/despertador-supabase.yml` chama a função `manter_ativo()` (só devolve 1; migração `20261013_01_despertador.sql`) a cada 2 dias; se falhar, o GitHub manda e-mail. Solução definitiva: plano Pro (não pausa e tem backup diário).
+
+
+## LGPD — etapa 1 (14/10)
+- `js/privacidade.js`: texto da Política de Privacidade (`htmlPoliticaPrivacidade`; versão em `VERSAO_PRIVACIDADE` — subir a versão faz todos lerem de novo), aviso no 1º acesso com registro de leitura, **Meus dados** (ver, relatório para imprimir, baixar JSON, pedir correção/exclusão/outro) para motorista (Mais), mecânico (cadeado no topo) e escritório; seção **Privacidade** do escritório (pedidos com prazo de 15 dias, quem leu a política).
+- `privacidade.html`: página pública da política (link na tela de login). Não carrega `ui.js`.
+- Banco: `aceite_privacidade` e `solicitacao_titular` (só leitura direta; gravação pelas funções `registrar_aceite_privacidade`, `criar_solicitacao_titular`, `responder_solicitacao_titular`). Migração `20261014_01_lgpd_aceite_e_solicitacoes.sql`. Segurança testada no banco real.
+- Contato de privacidade: e-mail do Thiago (constante `CONTATO_PRIVACIDADE`). Fichas cadastrais continuam no app (decisão do Thiago).
+- Próximas etapas: registro de acesso a documentos, prazo de guarda após desligamento, documentos para o advogado (inventário de dados, contrato de tratamento com a transportadora, plano de incidentes, política de retenção).

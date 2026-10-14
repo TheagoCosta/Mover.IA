@@ -182,6 +182,7 @@ function prepararDestino(destino){
     else motoristaScreen = destino;
   } else if(usuarioAtual.papel === 'mecanico'){
     mecanicoTab = 'chamados'; mecanicoFiltro = 'pendentes';
+    if(destino === 'privacidade') setTimeout(abrirMeusDadosModal, 800);
   } else {
     screen = { agendamentos:'agenda', 'tab:viagem':'painel', documentosMotorista:'documentos', documentosConjunto:'documentos' }[destino] || destino;
     documentosSubtela = 'lista';

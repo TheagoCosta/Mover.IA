@@ -138,7 +138,7 @@ function definirTrava(conjunto, ultimo, jornadaAberta){
 }
 
 function liberadoComChecklistVencido(tela, aba){
-  if(tela === 'perfil') return true;
+  if(tela === 'perfil' || tela === 'privacidade') return true;
   if(tela === 'home' && aba === 'checklist') return true;
   if(travaChecklist.jornadaAberta && ((tela === 'home' && aba === 'jornada') || tela === 'jornadaPausa' || tela === 'jornadaEncerrar')) return true;
   return false;
@@ -216,6 +216,7 @@ async function abrirTelaMotorista(){
     documentos: loadDocumentosMotorista, historicoJornada: loadHistoricoJornadas, historicoJornadaDetalhe: loadHistoricoJornadaDetalhe,
     conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista, oficina: loadOficinaMotorista,
     agendamentos: loadAgendamentosMotorista, capacitacoes: loadCapacitacoesMotorista, notificacoes: loadNotificacoesMotorista,
+    privacidade: loadPrivacidadeMotorista,
   };
   // Início: a consulta única já traz a situação do checklist (sem esperar outra ida ao servidor)
   const vaiParaInicio = !subtelas[motoristaScreen] && !motoristaScreen.startsWith('emBreve:') && !['jornada', 'checklist', 'viagem', 'mais'].includes(motoristaTab);
@@ -784,6 +785,7 @@ function loadAbaMais(){
     { ir:'capacitacoes', l:'Capacitações', i:'award', m:'Treinamentos e certificados' },
     { ir:'notificacoes', l:'Notificações', i:'bell', m:'Avisos do escritório e da oficina' },
     { ir:'perfil', l:'Meu perfil', i:'user', m:usuarioAtual.nome },
+    { ir:'privacidade', l:'Meus dados e privacidade', i:'lock', m:'Ver, baixar ou corrigir seus dados' },
   ];
   montarTelaMotorista({
     tab: 'mais',

@@ -62,6 +62,7 @@ function loginScreen(){
         </form>
       </div>
       <div class="l2" style="margin-top:14px; text-align:center;">Esqueceu a senha? Fale com o escritório da sua transportadora.</div>
+      <div class="l2" style="margin-top:8px; text-align:center;"><a href="privacidade.html" target="_blank" rel="noopener" style="color:inherit;">Política de Privacidade</a></div>
     </div>
   </div>`;
 }
@@ -169,6 +170,7 @@ async function loadShell(){
   const destino = lerDestinoDaUrl();
   if(destino) prepararDestino(destino);
   sincronizarPush();
+  setTimeout(verificarAceitePrivacidade, 600);   // aviso da Política de Privacidade (1º acesso / versão nova)
 
   if(usuarioAtual.papel === 'motorista'){ definirTema('escuro'); loadShellMotorista(); return; }
   if(usuarioAtual.papel === 'mecanico'){ definirTema('escuro'); loadShellMecanico(); return; }

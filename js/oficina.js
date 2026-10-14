@@ -272,6 +272,8 @@ function montarTelaMecanico({ header, conteudo }){
   }));
   const sair = document.getElementById('btnSairMec');
   if(sair) sair.addEventListener('click', () => { if(confirm('Sair deste aparelho?')) doLogout(); });
+  const priv = document.getElementById('btnPrivMec');
+  if(priv) priv.addEventListener('click', abrirMeusDadosModal);
   const sino = document.getElementById('btnSinoMecanico');
   if(sino){
     sino.addEventListener('click', () => abrirNotificacoesJanela(() => { mecanicoTab = 'chamados'; mecanicoFiltro = 'pendentes'; loadShellMecanico(); }));
@@ -280,7 +282,7 @@ function montarTelaMecanico({ header, conteudo }){
 }
 
 function headerMecanico(titulo, sub){
-  return headerPrincipal(titulo, sub, `<div style="display:flex; align-items:center; gap:6px;">${botaoSino('btnSinoMecanico', 0)}<button class="back-btn" id="btnSairMec" title="Sair" style="width:auto; height:auto; padding:8px 10px; border-radius:9px; background:var(--asphalt-800); border:1px solid var(--asphalt-700); color:var(--text-secondary);">${ic('logout', 16)}</button></div>`);
+  return headerPrincipal(titulo, sub, `<div style="display:flex; align-items:center; gap:6px;">${botaoSino('btnSinoMecanico', 0)}<button class="back-btn" id="btnPrivMec" title="Meus dados e privacidade" style="width:auto; height:auto; padding:8px 10px; border-radius:9px; background:var(--asphalt-800); border:1px solid var(--asphalt-700); color:var(--text-secondary);">${ic('lock', 16)}</button><button class="back-btn" id="btnSairMec" title="Sair" style="width:auto; height:auto; padding:8px 10px; border-radius:9px; background:var(--asphalt-800); border:1px solid var(--asphalt-700); color:var(--text-secondary);">${ic('logout', 16)}</button></div>`);
 }
 
 async function loadShellMecanico(){

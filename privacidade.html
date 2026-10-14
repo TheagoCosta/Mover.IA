@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de Privacidade — MOVER.IA</title>
+<link rel="icon" type="image/png" href="img/icone.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=20261014a">
+<style>
+  body{background:var(--asphalt-850); margin:0;}
+  .pp-wrap{max-width:820px; margin:0 auto; padding:24px 16px 48px;}
+  .pp-topo{display:flex; align-items:center; gap:12px; margin-bottom:18px;}
+  .pp-topo img{width:44px; height:auto;}
+  .pp-topo b{font-family:var(--font-title); font-size:22px; letter-spacing:.5px;}
+  .pp-card{background:var(--asphalt-900); border:1px solid var(--border); border-radius:16px; padding:22px;}
+  .pp-card h1{font-size:22px; margin:0 0 6px;}
+</style>
+</head>
+<body class="tema-escritorio">
+  <div class="pp-wrap">
+    <div class="pp-topo"><img src="img/logo.png" alt=""><b>MOVER.IA</b></div>
+    <div class="pp-card">
+      <h1>Política de Privacidade</h1>
+      <div id="politica">Carregando...</div>
+    </div>
+  </div>
+  <script src="js/privacidade.js?v=20261014a"></script>
+  <script>document.getElementById('politica').innerHTML = htmlPoliticaPrivacidade(null);</script>
+</body>
+</html>
