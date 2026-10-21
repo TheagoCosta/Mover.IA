@@ -73,7 +73,7 @@ Dados sensíveis identificados: CNH, CPF, exames toxicológicos, ASO, endereços
 - [x] Escrever política de privacidade clara, acessível dentro do próprio app — 14/10: versão 1.0 no app (aviso no 1º acesso com registro de leitura) e em `privacidade.html`; falta revisão do advogado
 - [x] Aplicar controle de acesso por papel (motorista só vê os próprios dados; escritório só vê dados da própria transportadora) — feito e auditado (06/10)
 - [x] Direitos do titular no app (14/10): **Meus dados** — ver, baixar, pedir correção/exclusão; escritório responde em **Privacidade** (prazo de 15 dias)
-- [ ] Definir por quanto tempo guardar cada tipo de documento (prazos legais de guarda trabalhista/fiscal, geralmente 5 anos)
+- [x] Definir por quanto tempo guardar cada tipo de documento — 21/10: 5 anos após o desligamento (ajustável), aviso semanal e anonimização pelo escritório; registro de acessos e alterações
 - [ ] Formalizar contratos com fornecedores (Bsoft, provedor de nuvem/storage) com cláusulas de proteção de dados (DPA)
 - [ ] Ter um plano simples de resposta a incidentes (o que fazer em caso de vazamento, quem comunica a ANPD e os titulares)
 - [ ] Consultar um advogado especializado em LGPD antes do piloto — recomendado dado o volume de dados de saúde envolvido

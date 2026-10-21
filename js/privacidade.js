@@ -163,6 +163,13 @@ function mostrarAvisoPrivacidade(empresa){
   });
 }
 
+// Registro de quem abriu qual arquivo (LGPD — rastreabilidade). Não atrasa a abertura:
+// se falhar (sem internet etc.), o arquivo abre do mesmo jeito.
+function registrarAcessoArquivo(alvo, id){
+  if(!id) return;
+  sb.rpc('registrar_acesso_arquivo', { p_alvo: alvo, p_id: id }).then(() => {}, () => {});
+}
+
 // ---------------------------------------------------------------------
 // MEUS DADOS — o titular vê, baixa e faz pedidos (direitos do art. 18)
 // ---------------------------------------------------------------------
@@ -347,11 +354,15 @@ async function abrirMeusDadosModal(){
 // ESCRITÓRIO — seção Privacidade (LGPD)
 // ---------------------------------------------------------------------
 async function secaoPrivacidade(el){
-  const [pedidos, aceites, usuarios] = await Promise.all([
+  const [pedidos, aceites, usuarios, pessoas, [empresa], registros] = await Promise.all([
     consultar(sb.from('solicitacao_titular').select('id, usuario_id, tipo, mensagem, status, resposta, criado_em, respondido_em, usuario:usuario_id(nome, papel), respondente:respondido_por(nome)').order('criado_em', { ascending: false })),
     consultar(sb.from('aceite_privacidade').select('usuario_id, versao, aceito_em')),
     qUsuarios(),
+    consultar(sb.from('usuario').select('id, nome, papel, email, ativo, desligado_em, anonimizado_em').eq('ativo', false)),
+    consultar(sb.from('transportadora').select('id, anos_guarda_dados').eq('id', usuarioAtual.transportadora_id)),
+    consultar(sb.from('registro_acesso').select('id, acao, alvo, descricao, criado_em, quem:usuario_id(nome), titular:titular_id(nome)').order('criado_em', { ascending: false }).limit(500)),
   ]);
+  const anosGuarda = (empresa && empresa.anos_guarda_dados) || 5;
   const ativos = usuarios.filter(u => u.ativo && u.papel !== 'admin_mover_ia');
   const leu = {};
   aceites.filter(a => a.versao === VERSAO_PRIVACIDADE).forEach(a => { leu[a.usuario_id] = a.aceito_em; });
@@ -379,12 +390,123 @@ async function secaoPrivacidade(el){
         : vazio('Nenhum pedido recebido. Quando um motorista pedir acesso, correção ou exclusão de dados pelo app, aparece aqui e no sino.'))}
     ${painel(`Leitura da Política de Privacidade — versão ${VERSAO_PRIVACIDADE}`,
       tabela(['Pessoa', 'Papel', 'Leu em'], listaLeitura.map(u => `<tr><td>${nomeCelula(u.nome, loginDoEmail(u.email))}</td><td>${esc(papelLabel[u.papel] || u.papel)}</td><td>${leu[u.id] ? `<span class="sub">${fmtDataHora(leu[u.id])}</span>` : badge('amber', 'Ainda não leu')}</td></tr>`)),
-      botaoExportar('btnCsvLeituras'))}`;
+      botaoExportar('btnCsvLeituras'))}
+    ${painelPrazoGuarda(pessoas, anosGuarda)}
+    ${barraLista('registro_acesso', ordensRegistro(), 'Pesquisar por pessoa, documento ou ação')}
+    <div id="listaRegistroAcesso"></div>`;
+
+  const desenharRegistro = () => {
+    const visiveis = aplicarLista('registro_acesso', registros, ordensRegistro(), textoRegistro);
+    const caixa = document.getElementById('listaRegistroAcesso');
+    caixa.innerHTML = painel(`Registro de acessos e alterações (${visiveis.length}${registros.length === 500 ? ' — últimos 500' : ''})`,
+      visiveis.length ? tabela(['Quando', 'Quem', 'Ação', 'O quê', 'De quem é o dado'], visiveis.slice(0, 300).map(r => `<tr>
+        <td class="sub">${fmtDataHora(r.criado_em)}</td>
+        <td>${esc(r.quem ? r.quem.nome : 'Sistema')}</td>
+        <td>${badge(COR_ACAO_REGISTRO[r.acao] || 'grey', ROTULO_ACAO_REGISTRO[r.acao] || r.acao)}</td>
+        <td>${esc(r.descricao || r.alvo)}</td>
+        <td>${esc(r.titular ? r.titular.nome : '—')}</td></tr>`))
+        : vazio(registros.length ? 'Nada encontrado nesta pesquisa.' : 'Ainda não há registros. Daqui para frente, toda abertura de arquivo e toda alteração de documento ou dado de motorista fica anotada aqui.'),
+      visiveis.length ? botaoExportar('btnCsvRegistro') : '');
+    const csv = document.getElementById('btnCsvRegistro');
+    if(csv) csv.addEventListener('click', () => baixarCSV('registro_de_acessos', ['Quando', 'Quem', 'Ação', 'O quê', 'De quem é o dado'],
+      visiveis.map(r => [fmtDataHora(r.criado_em), r.quem ? r.quem.nome : 'Sistema', ROTULO_ACAO_REGISTRO[r.acao] || r.acao, r.descricao || r.alvo, r.titular ? r.titular.nome : ''])));
+  };
+  desenharRegistro();
+  ligarBarraLista(el, 'registro_acesso', desenharRegistro);
+  el.querySelectorAll('[data-anonimizar]').forEach(b => b.addEventListener('click', () => abrirAnonimizar(pessoas.find(p => p.id === b.dataset.anonimizar), anosGuarda, el)));
+  const bPrazo = document.getElementById('btnPrazoGuarda');
+  if(bPrazo) bPrazo.addEventListener('click', () => abrirPrazoGuarda(anosGuarda, el));
 
   el.querySelectorAll('[data-priv]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); if(a.dataset.priv === 'politica') abrirPoliticaPrivacidade(); else abrirMeusDadosModal(); }));
   el.querySelectorAll('[data-responder]').forEach(b => b.addEventListener('click', () => abrirResponderPedido(pedidos.find(s => s.id === b.dataset.responder), el)));
   document.getElementById('btnCsvLeituras').addEventListener('click', () => baixarCSV('leitura_politica_privacidade', ['Pessoa', 'Papel', 'Versão', 'Leu em'],
     listaLeitura.map(u => [u.nome, papelLabel[u.papel] || u.papel, VERSAO_PRIVACIDADE, leu[u.id] ? fmtDataHora(leu[u.id]) : 'Ainda não leu'])));
+}
+
+// ---------- registro de acessos ----------
+const ROTULO_ACAO_REGISTRO = { visualizou: 'Abriu', cadastrou: 'Cadastrou', alterou: 'Alterou', excluiu: 'Excluiu', anonimizou: 'Anonimizou' };
+const COR_ACAO_REGISTRO = { visualizou: 'blue', cadastrou: 'green', alterou: 'amber', excluiu: 'red', anonimizou: 'red' };
+const textoRegistro = (r) => [r.quem ? r.quem.nome : 'Sistema', r.titular ? r.titular.nome : '', ROTULO_ACAO_REGISTRO[r.acao], r.descricao, fmtDataHora(r.criado_em)].join(' ');
+const ordensRegistro = () => [
+  ['recentes', 'Mais recentes primeiro', porData(r => r.criado_em, -1)],
+  ['antigos', 'Mais antigos primeiro', porData(r => r.criado_em, 1)],
+  ['quem', 'Quem fez (A a Z)', (a, b) => porTexto(r => r.quem ? r.quem.nome : 'Sistema')(a, b) || porData(r => r.criado_em, -1)(a, b)],
+  ['titular', 'De quem é o dado (A a Z)', (a, b) => porTexto(r => r.titular ? r.titular.nome : 'zzz')(a, b) || porData(r => r.criado_em, -1)(a, b)],
+];
+
+// ---------- prazo de guarda e anonimização ----------
+const ROTULO_PAPEL_EX = { motorista: 'Ex-motorista', mecanico: 'Ex-mecânico', gestor: 'Ex-usuário do escritório' };
+function limiteGuarda(p, anos){ if(!p.desligado_em) return null; const d = new Date(p.desligado_em); d.setFullYear(d.getFullYear() + anos); return d; }
+
+function painelPrazoGuarda(pessoas, anos){
+  const desligados = pessoas.filter(p => !p.anonimizado_em && !['admin_transportadora', 'admin_mover_ia'].includes(p.papel))
+    .sort((a, b) => (limiteGuarda(a, anos) || 0) - (limiteGuarda(b, anos) || 0));
+  const anonimizados = pessoas.filter(p => p.anonimizado_em).length;
+  const podeMudar = ['admin_transportadora', 'admin_mover_ia'].includes(usuarioAtual.papel);
+  return painel(`Ex-colaboradores e prazo de guarda (${desligados.length})`, `
+    <div class="o-panel-body" style="padding-bottom:0;"><div class="l2">Quem tem o acesso desativado fica aqui. Os dados ficam guardados por <b>${anos} ano${anos > 1 ? 's' : ''}</b> depois do desligamento (prazos trabalhistas); passado esse prazo, o sistema avisa toda segunda-feira e você pode <b>anonimizar</b> — os dados pessoais são apagados e o histórico da frota (jornadas, abastecimentos, chamados) continua, sem identificar a pessoa.${anonimizados ? ` Já anonimizados: ${anonimizados}.` : ''}</div></div>
+    ${desligados.length ? tabela(['Pessoa', 'Desligado em', 'Guardar até', 'Situação', ''], desligados.map(p => {
+      const limite = limiteGuarda(p, anos), vencido = limite && limite < new Date();
+      return `<tr><td>${nomeCelula(p.nome, ROTULO_PAPEL_EX[p.papel] || '')}</td>
+        <td class="sub">${p.desligado_em ? fmtData(p.desligado_em) : '—'}</td>
+        <td class="sub">${limite ? fmtData(limite.toISOString()) : '—'}</td>
+        <td>${vencido ? badge('red', 'Prazo vencido — anonimizar') : badge('grey', 'Dentro do prazo')}</td>
+        <td><button class="btn ${vencido ? 'btn-primary' : 'btn-outline'} btn-sm" data-anonimizar="${p.id}">Anonimizar</button></td></tr>`;
+    })) : vazio('Ninguém desligado no momento.')}`,
+    podeMudar ? `<button class="btn btn-outline btn-sm" id="btnPrazoGuarda">Prazo: ${anos} ano${anos > 1 ? 's' : ''}</button>` : '');
+}
+
+function abrirPrazoGuarda(anos, el){
+  abrirModal('Prazo de guarda após o desligamento', `
+    <form id="formPrazoGuarda">
+      <div class="l2" style="margin-bottom:10px;">Por quantos anos os dados de quem saiu ficam guardados antes de poderem ser anonimizados. O padrão de 5 anos acompanha os prazos trabalhistas; confirme com o advogado antes de diminuir.</div>
+      <select id="pgAnos">${[2, 3, 5, 10, 20].map(n => `<option value="${n}" ${n === anos ? 'selected' : ''}>${n} anos</option>`).join('')}</select>
+      <div class="err" id="pgErro"></div>
+      <button type="submit" style="margin-top:12px;">Salvar</button>
+    </form>`);
+  document.getElementById('formPrazoGuarda').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const { error } = await sb.from('transportadora').update({ anos_guarda_dados: Number(document.getElementById('pgAnos').value) }).eq('id', usuarioAtual.transportadora_id);
+    if(error){ document.getElementById('pgErro').textContent = 'Não consegui salvar: ' + error.message; return; }
+    fecharModal(); mostrarToast('✅ Prazo de guarda atualizado'); secaoPrivacidade(el);
+  });
+}
+
+function abrirAnonimizar(p, anos, el){
+  if(!p) return;
+  const limite = limiteGuarda(p, anos), dentro = !limite || limite > new Date();
+  abrirModal(`Anonimizar ${p.nome}`, `
+    ${dentro ? `<div class="card" style="margin:0 0 12px; padding:12px; border:1px solid var(--signal-red); background:var(--signal-red-bg); color:var(--signal-red-ink);"><b>Atenção: ainda está dentro do prazo de guarda${limite ? ' (até ' + fmtData(limite.toISOString()) + ')' : ''}.</b> Só anonimize antes do prazo se houver um bom motivo (por exemplo, um pedido de exclusão aceito) e nenhuma obrigação legal de guardar os dados — na dúvida, consulte o advogado.</div>` : ''}
+    <div class="l2"><b>Será apagado para sempre:</b> nome, telefone, login, CPF, CNH e validades de exames, todos os documentos e certificados (com os arquivos), assinaturas, observações das paradas, avisos e pedidos sobre dados. O login é bloqueado.</div>
+    <div class="l2" style="margin-top:8px;"><b>Continua, sem identificar a pessoa:</b> horários das jornadas, checklists, abastecimentos, chamados de oficina e viagens — para o histórico da frota.</div>
+    <div class="l2" style="margin-top:12px;">Isto <b>não pode ser desfeito</b>. Para confirmar, digite <b>ANONIMIZAR</b>:</div>
+    <input type="text" id="anConfirma" autocomplete="off" style="margin-top:8px;">
+    <div class="err" id="anErro"></div>
+    <button type="button" id="btnAnonimizar" class="btn-danger" style="margin-top:12px; width:100%;" disabled>Anonimizar dados</button>`);
+  const campo = document.getElementById('anConfirma'), btn = document.getElementById('btnAnonimizar');
+  campo.addEventListener('input', () => { btn.disabled = campo.value.trim().toUpperCase() !== 'ANONIMIZAR'; });
+  btn.addEventListener('click', async () => {
+    const erro = document.getElementById('anErro');
+    btn.disabled = true; btn.textContent = 'Apagando os arquivos...';
+    // 1) arquivos (documentos e certificados) — o banco não apaga arquivos do armazenamento
+    const [docs, caps] = await Promise.all([
+      sb.from('documento').select('arquivo_url').eq('referente_a', 'motorista').eq('referente_id', p.id),
+      sb.from('capacitacao').select('certificado_url').eq('motorista_id', p.id),
+    ]);
+    const caminhos = [...(docs.data || []).map(d => d.arquivo_url), ...(caps.data || []).map(c => c.certificado_url)].filter(Boolean);
+    if(caminhos.length){
+      const { error } = await sb.storage.from('documentos').remove(caminhos);
+      if(error){ erro.textContent = 'Não consegui apagar os arquivos: ' + error.message; btn.disabled = false; btn.textContent = 'Anonimizar dados'; return; }
+    }
+    // 2) dados no banco
+    btn.textContent = 'Anonimizando...';
+    const { error } = await sb.rpc('anonimizar_titular', { p_usuario: p.id });
+    if(error){ erro.textContent = error.message; btn.disabled = false; btn.textContent = 'Anonimizar dados'; return; }
+    fecharModal();
+    mostrarToast('✅ Dados anonimizados');
+    if(window.limparCacheTelas) limparCacheTelas();
+    secaoPrivacidade(el);
+  });
 }
 
 function abrirResponderPedido(s, el){

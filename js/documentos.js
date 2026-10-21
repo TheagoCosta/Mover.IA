@@ -1033,6 +1033,7 @@ async function verArquivo(docId, docs){
   if(!doc || !doc.arquivo_url) return;
   const { data, error } = await sb.storage.from('documentos').createSignedUrl(doc.arquivo_url, 300);
   if(error){ alert('Erro ao abrir arquivo: ' + error.message); return; }
+  registrarAcessoArquivo('documento', doc.id);
   const tipo = /\.pdf$/i.test(doc.arquivo_url) ? 'application/pdf' : /\.(mp4|mov|webm)$/i.test(doc.arquivo_url) ? 'video' : 'imagem';
   abrirVisualizador([{ url: data.signedUrl, tipo }], 0, doc.tipo);
 }

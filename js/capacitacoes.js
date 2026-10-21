@@ -12,9 +12,10 @@ const TIPOS_CAPACITACAO = ['MOPP — Movimentação de Produtos Perigosos', 'Dir
 let filtroCapacitacoes = 'todas';
 const CAMPOS_CAPACITACAO = 'id, tipo, instituicao, carga_horaria, data_realizacao, validade, certificado_url, observacao, motorista_id, motorista:motorista_id(nome)';
 
-async function verCertificado(caminho){
+async function verCertificado(caminho, capacitacaoId = null){
   const { data, error } = await sb.storage.from('documentos').createSignedUrl(caminho, 300);
   if(error){ alert('Não consegui abrir o certificado: ' + error.message); return; }
+  if(capacitacaoId) registrarAcessoArquivo('capacitacao', capacitacaoId);
   abrirVisualizador([{ url: data.signedUrl, tipo: /\.pdf$/i.test(caminho) ? 'application/pdf' : 'imagem' }], 0, 'Certificado');
 }
 
@@ -78,7 +79,7 @@ async function secaoCapacitacoes(el){
           <td>${fmtData(c.data_realizacao)}</td>
           <td class="sub">${c.validade ? esc(textoVencimento({ validade: c.validade })) : 'Sem validade'}</td>
           <td>${c.validade ? badgeDoc({ validade: c.validade }) : badge('grey', 'Sem validade')}</td>
-          <td>${c.certificado_url ? `<button class="o-dl-btn" data-cert="${esc(c.certificado_url)}" title="Ver certificado">${ic('eye', 15)}</button>` : '<span class="sub">—</span>'}</td></tr>`))
+          <td>${c.certificado_url ? `<button class="o-dl-btn" data-cert="${esc(c.certificado_url)}" data-cert-id="${c.id}" title="Ver certificado">${ic('eye', 15)}</button>` : '<span class="sub">—</span>'}</td></tr>`))
         : vazio(estadoListas.capacitacoes.busca ? 'Nenhuma capacitação encontrada nesta pesquisa.' : lista.length ? 'Nada neste filtro.' : 'Nenhuma capacitação cadastrada. Use "Nova capacitação" para registrar MOPP, direção defensiva e outros treinamentos.'),
       `<button class="btn btn-primary btn-sm" id="btnNovaCapacitacao">${ic('plus', 15)} Nova capacitação</button>${lista.length ? botaoExportar('btnCsvCapacitacoes') : ''}`)}`;
     ligarLista(caixa);
@@ -86,7 +87,7 @@ async function secaoCapacitacoes(el){
 
   el.querySelectorAll('[data-filtro-cap]').forEach(b => b.addEventListener('click', () => { filtroCapacitacoes = b.dataset.filtroCap; secaoCapacitacoes(el); }));
   const ligarLista = (caixa) => {
-  caixa.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); verCertificado(b.dataset.cert); }));
+  caixa.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); verCertificado(b.dataset.cert, b.dataset.certId); }));
   document.getElementById('btnNovaCapacitacao').addEventListener('click', () => abrirEditarCapacitacao(null, motoristas, el));
   caixa.querySelectorAll('[data-capacitacao]').forEach(tr => tr.addEventListener('click', () => abrirEditarCapacitacao(lista.find(c => c.id === tr.dataset.capacitacao), motoristas, el)));
   const csv = document.getElementById('btnCsvCapacitacoes');
@@ -154,7 +155,7 @@ function abrirEditarCapacitacao(c, motoristas, el){
     secaoCapacitacoes(el);
   });
   const ver = document.getElementById('btnCpVer');
-  if(ver) ver.addEventListener('click', () => verCertificado(c.certificado_url));
+  if(ver) ver.addEventListener('click', () => verCertificado(c.certificado_url, c.id));
   const excluir = document.getElementById('btnCpExcluir');
   if(excluir) excluir.addEventListener('click', async () => {
     if(!confirm(`Excluir "${c.tipo}" de ${c.motorista ? c.motorista.nome : ''}${c.certificado_url ? ' e o certificado anexado' : ''}? Não dá para desfazer.`)) return;
@@ -182,11 +183,11 @@ async function loadCapacitacoesMotorista(){
           <div class="li-title">${esc(c.tipo)}</div>
           <div class="li-sub">${c.validade ? esc(textoVencimento({ validade: c.validade })) : 'Sem validade'}${c.data_realizacao ? ' · feito em ' + fmtData(c.data_realizacao) : ''}</div>
           ${c.instituicao ? `<div class="li-sub">${esc(c.instituicao)}${c.carga_horaria ? ' · ' + esc(c.carga_horaria) + 'h' : ''}</div>` : ''}
-          ${c.certificado_url ? `<div class="li-acoes"><button class="btn-small" data-cert="${esc(c.certificado_url)}">${ic('eye', 14)} Ver certificado</button></div>` : ''}
+          ${c.certificado_url ? `<div class="li-acoes"><button class="btn-small" data-cert="${esc(c.certificado_url)}" data-cert-id="${c.id}">${ic('eye', 14)} Ver certificado</button></div>` : ''}
         </div>
         <div class="li-row-end">${c.validade ? pillDoc({ validade: c.validade }) : pillStatus('grey', 'Sem validade')}</div>
       </div>`).join('')}</div>`
       : `<div class="card em-breve-box"><div class="ic-grande">${ic('award', 34)}</div><div class="card-dark-title">Nenhuma capacitação registrada</div><div class="card-dark-sub">Seus treinamentos e certificados (MOPP, direção defensiva etc.) aparecem aqui quando o escritório registrar.</div></div>`,
   });
-  document.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', () => verCertificado(b.dataset.cert)));
+  document.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', () => verCertificado(b.dataset.cert, b.dataset.certId)));
 }

@@ -89,7 +89,9 @@ async function consultar(promessa){
   if(error) throw new Error(error.message);
   return data || [];
 }
-const qUsuarios = () => consultar(sb.from('usuario').select('id, nome, papel, email, telefone, ativo, senha_temporaria, criado_em').order('nome'));
+// (anonimizados pela LGPD não aparecem nas listas — só na seção Privacidade)
+const qUsuarios = () => consultar(sb.from('usuario').select('id, nome, papel, email, telefone, ativo, senha_temporaria, criado_em, anonimizado_em').order('nome'))
+  .then(lista => lista.filter(u => !u.anonimizado_em));
 const qVeiculos = () => consultar(sb.from('veiculo').select('id, placa, tipo, modelo, ano, ativo, grupo').order('placa'));
 const qConjuntos = () => consultar(sb.from('conjunto').select('id, ativo, motorista_id, motorista:motorista_id(nome), conjunto_item(ordem, veiculo_id, veiculo:veiculo_id(placa, tipo, modelo, grupo))'));
 const qDocumentos = () => consultar(sb.from('documento').select('id, referente_a, referente_id, tipo, numero, validade, status, arquivo_url, qr_conteudo').order('tipo'));
