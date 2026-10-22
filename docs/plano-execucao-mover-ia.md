@@ -226,10 +226,10 @@ Publicar como "Artifact" do Claude (a vitrine usada para o protótipo) **não fu
 - [x] Painel de Oficina: todos os chamados da frota, ação de avançar status, observação do reparo e fotos anexadas, exportação (29/09)
 
 ### Bloco 5 — Integração Bsoft *(API confirmada ✅ — pode andar em paralelo aos blocos acima)*
-- [ ] Autenticação com a API do Bsoft
-- [ ] Sincronização de viagens/CT-e/MDF-e
-- [ ] Vínculo automático por placa/CPF
-- [ ] Painel de status da sincronização
+- [x] Autenticação com a API do Bsoft — 22/10: função pronta no servidor; falta o Thiago cadastrar o usuário de integração nos segredos do Supabase
+- [x] Sincronização de viagens/CT-e/MDF-e — MDF-e vira viagem com PDFs do DAMDFE/DACTE (prévia antes de gravar); automático a cada 15 min aguardando aprovação
+- [x] Vínculo automático por placa/CPF
+- [x] Painel de status da sincronização (tela Integração)
 
 ### Bloco 6 — Capacitações e polimento
 - [ ] Tela de capacitações/treinamentos
