@@ -412,15 +412,17 @@ async function secaoAbastecimento(el){
     visiveis = aplicarLista('abastecimentos', doFiltro, ordensAbast, textoAbast);
     const caixa = document.getElementById('listaAbast');
     caixa.innerHTML = `${painel(`Abastecimentos registrados (${visiveis.length})${visiveis.length > 200 ? ' · mostrando 200' : ''}`,
-      visiveis.length ? tabela(['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km', 'Diesel', 'Arla', 'Média diesel', 'Valor', 'Posto / confirmação'],
+      visiveis.length ? tabela(['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km', 'Diesel', 'Arla', 'Média diesel', 'Valor', 'Posto / confirmação', ''],
         visiveis.slice(0, 200).map(a => { const valor = valorAbastecimento(a); return `<tr><td class="sub">${fmtDataHora(a.data)}</td><td>${a.tipo ? badge(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : '<span class="sub">—</span>'}</td><td class="mono">${esc(a.veiculo ? a.veiculo.placa : '—')}</td><td>${esc(a.motorista ? a.motorista.nome : '—')}</td><td class="mono">${fmtNum(a.km, 0)}</td>
           <td>${fmtNum(a.litros, 1)} L${a.preco_litro_diesel ? `<div class="sub">${fmtReais(a.preco_litro_diesel)}/L</div>` : ''}</td>
           <td>${a.arla_litros ? fmtNum(a.arla_litros, 1) + ' L' : '<span class="sub">—</span>'}${a.preco_litro_arla ? `<div class="sub">${fmtReais(a.preco_litro_arla)}/L</div>` : ''}${a.media_arla_calculada ? `<div class="sub">${fmtNum(a.media_arla_calculada, 1)} km/l</div>` : ''}</td>
           <td>${a.media_calculada ? fmtNum(a.media_calculada, 2) + ' km/l' : '<span class="sub">—</span>'}</td>
-          <td>${valor ? fmtReais(valor) : '<span class="sub">—</span>'}</td><td>${origem(a)}</td></tr>`; }))
+          <td>${valor ? fmtReais(valor) : '<span class="sub">—</span>'}</td><td>${origem(a)}</td>
+          <td><button class="o-dl-btn" data-editar-abast="${a.id}" title="Corrigir ou excluir">${ic('gear', 15)}</button></td></tr>`; }))
         : vazio(doFiltro.length ? 'Nenhum abastecimento encontrado nesta pesquisa.' : 'Nada por aqui ainda.'),
       visiveis.length ? botaoExportar('btnCsvAbastecimentos') : '')}`;
     ligarCsvAbast();
+    caixa.querySelectorAll('[data-editar-abast]').forEach(b => b.addEventListener('click', () => abrirEditarAbastecimento(registros.find(a => a.id === b.dataset.editarAbast), el)));
   }
 
   el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
@@ -436,6 +438,103 @@ async function secaoAbastecimento(el){
   };
   desenharAbast();
   ligarBarraLista(el, 'abastecimentos', desenharAbast);
+}
+
+// ---------- correções do escritório (abastecimento, jornada, checklist; oficina fica em oficina.js) ----------
+// campo <input type="datetime-local"> ↔ data/hora do banco
+function paraCampoDataHora(iso){
+  if(!iso) return '';
+  const d = new Date(iso), p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+const doCampoDataHora = (v) => v ? new Date(v).toISOString() : null;
+const numeroOuNulo = (v) => { const t = String(v ?? '').trim().replace(',', '.'); return t === '' ? null : Number(t); };
+
+// Botão "Excluir" com confirmação; registra no Registro de acessos (gatilho no banco)
+async function excluirRegistro(tabela, id, pergunta, aoTerminar){
+  if(!confirm(pergunta + '\n\nIsto não pode ser desfeito.')) return false;
+  const { error } = await sb.from(tabela).delete().eq('id', id);
+  if(error){ alert('Não consegui excluir: ' + error.message); return false; }
+  if(window.limparCacheTelas) limparCacheTelas();
+  fecharModal();
+  mostrarToast('Excluído');
+  if(aoTerminar) aoTerminar();
+  return true;
+}
+
+function abrirEditarAbastecimento(a, el){
+  if(!a) return;
+  const externo = a.tipo === 'externo';
+  abrirModal(`Abastecimento — ${a.veiculo ? a.veiculo.placa : ''} · ${fmtDataHora(a.data)}`, `
+    <form id="formEditarAbast">
+      <div class="l2" style="margin-bottom:10px;">${esc(a.motorista ? a.motorista.nome : '')} · ${esc(a.tipo ? ROTULO_TIPO_ABAST[a.tipo] : '')}. A média de consumo é recalculada sozinha (deste e do abastecimento seguinte do veículo).</div>
+      <div class="o-form-grid">
+        <div class="field-row" style="margin:0;"><label for="eaData">Data e hora</label><input type="datetime-local" id="eaData" value="${paraCampoDataHora(a.data)}" required></div>
+        <div class="field-row" style="margin:0;"><label for="eaKm">Km do veículo</label><input type="text" inputmode="decimal" id="eaKm" value="${a.km ?? ''}" required></div>
+        <div class="field-row" style="margin:0;"><label for="eaLitros">Diesel (litros)</label><input type="text" inputmode="decimal" id="eaLitros" value="${a.litros ?? ''}" required></div>
+        <div class="field-row" style="margin:0;"><label for="eaArla">Arla (litros)</label><input type="text" inputmode="decimal" id="eaArla" value="${a.arla_litros ?? ''}"></div>
+        ${externo ? `
+        <div class="field-row" style="margin:0;"><label for="eaPrecoD">R$/litro diesel</label><input type="text" inputmode="decimal" id="eaPrecoD" value="${a.preco_litro_diesel ?? ''}"></div>
+        <div class="field-row" style="margin:0;"><label for="eaPrecoA">R$/litro Arla</label><input type="text" inputmode="decimal" id="eaPrecoA" value="${a.preco_litro_arla ?? ''}"></div>
+        <div class="field-row" style="margin:0;"><label for="eaPosto">Posto</label><input type="text" id="eaPosto" value="${esc(a.posto || '')}"></div>
+        <div class="field-row" style="margin:0;"><label for="eaNota">Nº da nota</label><input type="text" id="eaNota" value="${esc(a.nota_numero || '')}"></div>`
+        : `<div class="field-row" style="margin:0;"><label for="eaBomba">Odômetro da bomba</label><input type="text" inputmode="decimal" id="eaBomba" value="${a.odometro_bomba ?? ''}"></div>`}
+      </div>
+      <div class="err" id="eaErro"></div>
+      <button type="submit" style="margin-top:12px;">Salvar correção</button>
+      <button type="button" class="btn-danger" id="btnExcluirAbast" style="margin-top:8px; width:100%;">Excluir abastecimento</button>
+    </form>`);
+  document.getElementById('btnExcluirAbast').addEventListener('click', () =>
+    excluirRegistro('abastecimento', a.id, `Excluir o abastecimento de ${fmtDataHora(a.data)} (${a.veiculo ? a.veiculo.placa : ''})?`, () => secaoAbastecimento(el)));
+  document.getElementById('formEditarAbast').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const erro = document.getElementById('eaErro'), btn = e.target.querySelector('button[type="submit"]');
+    const dados = { data: doCampoDataHora(document.getElementById('eaData').value), km: numeroOuNulo(document.getElementById('eaKm').value),
+      litros: numeroOuNulo(document.getElementById('eaLitros').value), arla_litros: numeroOuNulo(document.getElementById('eaArla').value) };
+    if(externo){
+      Object.assign(dados, { preco_litro_diesel: numeroOuNulo(document.getElementById('eaPrecoD').value), preco_litro_arla: numeroOuNulo(document.getElementById('eaPrecoA').value),
+        posto: document.getElementById('eaPosto').value.trim() || null, nota_numero: document.getElementById('eaNota').value.trim() || null });
+    } else dados.odometro_bomba = numeroOuNulo(document.getElementById('eaBomba').value);
+    if(!dados.data || !(dados.km > 0) || !(dados.litros > 0)){ erro.textContent = 'Confira data, km e litros (números maiores que zero).'; return; }
+    if(document.getElementById('eaData').value === paraCampoDataHora(a.data)) delete dados.data;   // data não mudou: mantém a original (com os segundos)
+    if(Object.values(dados).some(v => typeof v === 'number' && (isNaN(v) || v < 0))){ erro.textContent = 'Algum número está inválido.'; return; }
+    btn.disabled = true; btn.textContent = 'Salvando...';
+    const { error } = await sb.from('abastecimento').update(dados).eq('id', a.id);
+    if(error){ erro.textContent = 'Não consegui salvar: ' + error.message; btn.disabled = false; btn.textContent = 'Salvar correção'; return; }
+    if(window.limparCacheTelas) limparCacheTelas();
+    fecharModal(); mostrarToast('✅ Abastecimento corrigido'); secaoAbastecimento(el);
+  });
+}
+
+function abrirCorrigirJornada(j, el){
+  abrirModal(`Corrigir jornada — ${j.motorista ? j.motorista.nome : ''}`, `
+    <form id="formCorrigirJornada">
+      <div class="l2" style="margin-bottom:10px;">Use para encerrar uma jornada que o motorista esqueceu aberta ou corrigir um horário errado. A correção fica anotada no Registro de acessos.</div>
+      <div class="o-form-grid">
+        <div class="field-row" style="margin:0;"><label for="cjInicio">Início</label><input type="datetime-local" id="cjInicio" value="${paraCampoDataHora(j.inicio)}" required></div>
+        <div class="field-row" style="margin:0;"><label for="cjFim">Fim</label><input type="datetime-local" id="cjFim" value="${paraCampoDataHora(j.fim)}"></div>
+        <div class="field-row" style="margin:0;"><label for="cjStatus">Situação</label><select id="cjStatus">
+          ${Object.entries(ROTULO_JORNADA).map(([k, l]) => `<option value="${k}" ${j.status === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div class="err" id="cjErro"></div>
+      <button type="submit" style="margin-top:12px;">Salvar correção</button>
+    </form>`);
+  document.getElementById('formCorrigirJornada').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const erro = document.getElementById('cjErro');
+    const inicio = doCampoDataHora(document.getElementById('cjInicio').value), fim = doCampoDataHora(document.getElementById('cjFim').value);
+    const status = document.getElementById('cjStatus').value;
+    if(!inicio){ erro.textContent = 'Informe o início.'; return; }
+    if(status === 'encerrada' && !fim){ erro.textContent = 'Jornada encerrada precisa do horário de fim.'; return; }
+    if(fim && new Date(fim) <= new Date(inicio)){ erro.textContent = 'O fim precisa ser depois do início.'; return; }
+    const dados = { fim: status === 'encerrada' ? fim : null, status };
+    if(document.getElementById('cjInicio').value !== paraCampoDataHora(j.inicio)) dados.inicio = inicio;
+    if(status === 'encerrada' && document.getElementById('cjFim').value === paraCampoDataHora(j.fim)) dados.fim = j.fim;
+    const { error } = await sb.from('jornada').update(dados).eq('id', j.id);
+    if(error){ erro.textContent = 'Não consegui salvar: ' + error.message; return; }
+    if(window.limparCacheTelas) limparCacheTelas();
+    fecharModal(); mostrarToast('✅ Jornada corrigida'); secaoJornadas(el);
+  });
 }
 
 // (a seção OFICINA fica em js/oficina.js, junto com o app do mecânico)
@@ -485,7 +584,14 @@ async function secaoJornadas(el){
       <div class="l2" style="margin-bottom:10px;">Tempo de condução: <b>${fmtMinutos(c.totalMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[j.status])}</div>
       ${eventos.map(ev => `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
       ${imgAssinatura(j.assinatura_base64) ? `<div class="section-label">Assinatura do motorista</div>${imgAssinatura(j.assinatura_base64, 'width:100%; background:#fff; border:1px solid var(--border); border-radius:8px;')}` : ''}
+      <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-outline btn-sm" id="btnCorrigirJornada">Corrigir horários / encerrar</button>
+        <button type="button" class="btn-danger btn-sm" id="btnExcluirJornada" style="padding:8px 14px;">Excluir jornada</button>
+      </div>
     `);
+    document.getElementById('btnCorrigirJornada').addEventListener('click', () => abrirCorrigirJornada(j, el));
+    document.getElementById('btnExcluirJornada').addEventListener('click', () =>
+      excluirRegistro('jornada', j.id, `Excluir a jornada de ${j.motorista ? j.motorista.nome : ''} do dia ${fmtData(j.inicio)}? Todas as paradas dela também serão apagadas.`, () => secaoJornadas(el)));
   }));
   const b = document.getElementById('btnCsvJornadas');
   if(b) b.addEventListener('click', () => baixarCSV('jornadas', ['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
@@ -522,7 +628,7 @@ async function secaoChecklists(el){
         visiveis.map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}</td><td>${(c.respostas || []).length}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
         : vazio(checklists.length ? 'Nenhum checklist encontrado nesta pesquisa.' : 'Nenhum checklist enviado ainda.'),
       visiveis.length ? botaoExportar('btnCsvChecklists') : '');
-    caixa.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist))));
+    caixa.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist), () => secaoChecklists(el))));
     const b = document.getElementById('btnCsvChecklists');
     if(b) b.addEventListener('click', () => baixarCSV('checklists', ['Motorista', 'Conjunto', 'Data', 'Itens respondidos', 'Irregularidades'],
       visiveis.map(c => [c.motorista ? c.motorista.nome : '', cavaloDoConjunto(c.conjunto), fmtDataHora(c.criado_em), (c.respostas || []).length, contarIrregularidades(c)])));
@@ -531,7 +637,7 @@ async function secaoChecklists(el){
   ligarBarraLista(el, 'checklists', desenhar);
 }
 
-async function abrirDetalheChecklist(checklist){
+async function abrirDetalheChecklist(checklist, aoExcluir = () => loadEscritorio()){
   if(!checklist) return;
   // a assinatura (imagem) só é buscada aqui, para não pesar as listas
   const [itens, { data: assinado }] = await Promise.all([
@@ -549,7 +655,13 @@ async function abrirDetalheChecklist(checklist){
     ${assinado && imgAssinatura(assinado.assinatura_base64)
       ? `${imgAssinatura(assinado.assinatura_base64, 'width:100%; max-width:420px; background:#fff; border:1px solid var(--border); border-radius:8px; display:block;')}
          <div class="l2">Assinado em ${fmtDataHora(assinado.assinado_em || checklist.criado_em)}</div>`
-      : '<div class="l2">Checklist enviado antes da assinatura existir no app.</div>'}`);
+      : '<div class="l2">Checklist enviado antes da assinatura existir no app.</div>'}
+    <div style="margin-top:16px;">
+      <div class="l2" style="margin-bottom:8px;">O checklist é assinado pelo motorista, por isso não é editado: se estiver errado, exclua e peça para ele enviar de novo.</div>
+      <button type="button" class="btn-danger btn-sm" id="btnExcluirChecklist" style="padding:8px 14px;">Excluir checklist</button>
+    </div>`);
+  document.getElementById('btnExcluirChecklist').addEventListener('click', () =>
+    excluirRegistro('checklist', checklist.id, `Excluir o checklist de ${checklist.motorista ? checklist.motorista.nome : ''} enviado em ${fmtDataHora(checklist.criado_em)}?`, aoExcluir));
 }
 
 // (as seções AGENDA e CAPACITAÇÕES ficam em js/agenda.js e js/capacitacoes.js)

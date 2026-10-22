@@ -475,6 +475,7 @@ async function secaoOficina(el){
             ${botaoMidias(c, 'problema', 'btn btn-outline btn-sm')}
             ${botaoMidias(c, 'reparo', 'btn btn-outline btn-sm')}
             ${c.status !== 'concluido' ? `<button class="btn btn-outline btn-sm" data-atualizar="${c.id}">${c.status === 'aberto' ? 'Iniciar' : 'Concluir'}</button>` : ''}
+            <button class="o-dl-btn" data-editar-chamado="${c.id}" title="Corrigir ou excluir">${ic('gear', 15)}</button>
           </div></td></tr>`))
         : vazio(estadoListas.oficina.busca ? 'Nenhum chamado encontrado nesta pesquisa.' : oficinaFiltroEscritorio === 'pendentes' ? 'Nenhum chamado pendente.' : 'Nenhum chamado por aqui.'),
       `<button class="btn btn-primary btn-sm" id="btnAbrirChamado">${ic('plus', 15)} Abrir chamado</button>${chamados.length ? botaoExportar('btnCsvOficina') : ''}`)}`;
@@ -486,6 +487,7 @@ async function secaoOficina(el){
   const ligarLista = (caixa) => {
   ligarBotoesMidias(caixa, chamados);
   caixa.querySelectorAll('[data-atualizar]').forEach(b => b.addEventListener('click', () => abrirAtualizacaoChamado(chamados.find(c => c.id === b.dataset.atualizar), el)));
+  caixa.querySelectorAll('[data-editar-chamado]').forEach(b => b.addEventListener('click', () => abrirEditarChamado(chamados.find(c => c.id === b.dataset.editarChamado), veiculos, el)));
   document.getElementById('btnAbrirChamado').addEventListener('click', () => abrirNovoChamadoEscritorio(veiculos, usuarios.filter(u => u.papel === 'motorista' && u.ativo), el));
   const csv = document.getElementById('btnCsvOficina');
   if(csv) csv.addEventListener('click', () => baixarCSV('chamados_oficina', ['Aberto em', 'Placa', 'Motorista', 'Categoria', 'Descrição', 'Urgência', 'Status', 'Observação da oficina', 'Responsável', 'Concluído em'],
@@ -493,6 +495,57 @@ async function secaoOficina(el){
   };
   desenhar();
   ligarBarraLista(el, 'oficina', desenhar);
+}
+
+// Escritório corrige ou exclui um chamado (fica anotado no Registro de acessos)
+function abrirEditarChamado(c, veiculos, el){
+  if(!c) return;
+  abrirModal(`Chamado — ${c.veiculo ? c.veiculo.placa : 'sem placa'} · ${fmtDataHora(c.criado_em)}`, `
+    <form id="formEditarChamado">
+      <div class="l2" style="margin-bottom:10px;">Aberto por ${esc(c.motorista ? c.motorista.nome : 'escritório')}.</div>
+      <div class="o-form-grid">
+        <div class="field-row" style="margin:0;"><label for="ecVeiculo">Veículo</label><select id="ecVeiculo"><option value="">Sem placa</option>
+          ${(veiculos || []).filter(v => v.ativo || v.id === c.veiculo_id).map(v => `<option value="${v.id}" ${v.id === c.veiculo_id ? 'selected' : ''}>${esc(v.placa)}</option>`).join('')}</select></div>
+        <div class="field-row" style="margin:0;"><label for="ecCategoria">Categoria</label><select id="ecCategoria">
+          ${[...new Set([...CATEGORIAS_CHAMADO, c.categoria].filter(Boolean))].map(k => `<option ${k === c.categoria ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></div>
+        <div class="field-row" style="margin:0;"><label for="ecUrgencia">Urgência</label><select id="ecUrgencia">
+          ${Object.entries(ROTULO_URGENCIA).map(([k, l]) => `<option value="${k}" ${k === c.urgencia ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="field-row" style="margin:0;"><label for="ecStatus">Situação</label><select id="ecStatus">
+          ${Object.entries(ROTULO_CHAMADO).map(([k, l]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div class="field-row" style="margin:0;"><label for="ecDescricao">Descrição do problema</label><textarea id="ecDescricao" rows="3">${esc(c.descricao || '')}</textarea></div>
+      <div class="field-row" style="margin:0;"><label for="ecObs">Observação do conserto</label><textarea id="ecObs" rows="2">${esc(c.observacao_reparo || '')}</textarea></div>
+      <div class="err" id="ecErro"></div>
+      <button type="submit" style="margin-top:12px;">Salvar correção</button>
+      <button type="button" class="btn-danger" id="btnExcluirChamado" style="margin-top:8px; width:100%;">Excluir chamado (e as fotos/vídeos)</button>
+    </form>`);
+  document.getElementById('formEditarChamado').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const status = document.getElementById('ecStatus').value;
+    const dados = {
+      veiculo_id: document.getElementById('ecVeiculo').value || null, categoria: document.getElementById('ecCategoria').value,
+      urgencia: document.getElementById('ecUrgencia').value, status, descricao: document.getElementById('ecDescricao').value.trim() || null,
+      observacao_reparo: document.getElementById('ecObs').value.trim() || null, atualizado_em: new Date().toISOString(),
+      concluido_em: status === 'concluido' ? (c.concluido_em || new Date().toISOString()) : null,
+    };
+    const { error } = await sb.from('chamado_manutencao').update(dados).eq('id', c.id);
+    if(error){ document.getElementById('ecErro').textContent = 'Não consegui salvar: ' + error.message; return; }
+    if(window.limparCacheTelas) limparCacheTelas();
+    fecharModal(); mostrarToast('✅ Chamado corrigido'); secaoOficina(el);
+  });
+  document.getElementById('btnExcluirChamado').addEventListener('click', async () => {
+    if(!confirm(`Excluir este chamado de ${c.categoria}${c.veiculo ? ' (' + c.veiculo.placa + ')' : ''}, com todas as fotos e vídeos?\n\nIsto não pode ser desfeito.`)) return;
+    // arquivos primeiro (o banco não apaga arquivos do armazenamento)
+    const caminhos = [...new Set([...(c.midias || []).map(m => m.caminho), c.foto_url, c.foto_reparo_url].filter(Boolean))];
+    if(caminhos.length){
+      const { error: eArq } = await sb.storage.from('oficina').remove(caminhos);
+      if(eArq){ alert('Não consegui apagar as fotos/vídeos: ' + eArq.message); return; }
+    }
+    const { error } = await sb.from('chamado_manutencao').delete().eq('id', c.id);
+    if(error){ alert('Não consegui excluir: ' + error.message); return; }
+    if(window.limparCacheTelas) limparCacheTelas();
+    fecharModal(); mostrarToast('Chamado excluído'); secaoOficina(el);
+  });
 }
 
 // Escritório atualiza o chamado em nome da oficina (útil quando é terceirizada)
