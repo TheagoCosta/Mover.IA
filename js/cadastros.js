@@ -487,7 +487,10 @@ async function secaoConfig(el){
         </div>
         <div class="l2" style="margin-top:12px;">Para mudar de plano, fale com a MOVER.IA.</div>
       </div>`)}
-    </div>`;
+    </div>
+    <div class="o-banner">${ic('lock', 18)}<div class="txt"><b>Privacidade (LGPD)</b>Pedidos dos motoristas sobre os dados deles, quem leu a Política de Privacidade, registro de acessos e prazo de guarda ficam na seção <a href="#" id="lnkPrivacidadeConfig">Privacidade</a> do menu. Seus próprios dados: <a href="#" id="lnkMeusDadosConfig">Meus dados</a>.</div></div>`;
+  document.getElementById('lnkPrivacidadeConfig').addEventListener('click', (e) => { e.preventDefault(); screen = 'privacidade'; loadEscritorio(); });
+  document.getElementById('lnkMeusDadosConfig').addEventListener('click', (e) => { e.preventDefault(); abrirMeusDadosModal(); });
 
   document.getElementById('formEmpresa').addEventListener('submit', async (e) => {
     e.preventDefault();

@@ -736,6 +736,8 @@ async function enviarChecklist(assinaturaBase64){
 // ---------------------------------------------------------------------
 async function loadAbaViagem(){
   const viagem = await dadosTela('viagem', carregarViagemAtual, () => { if(motoristaScreen === 'home' && motoristaTab === 'viagem') loadAbaViagem(); });
+  // arquivos anexados pelo escritório (CT-e, MDF-e, nota...) — o motorista vê, baixa e compartilha
+  const arquivos = viagem ? ((await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'viagem').eq('referente_id', viagem.id).order('tipo')).data || []) : [];
   const docItem = (nome, numero) => `
     <div class="list-item"><div class="li-ic">${ic('doc', 16)}</div>
       <div class="li-body"><div class="li-title">${nome}</div><div class="li-sub">${numero ? 'nº ' + esc(numero) : 'Número não informado pelo escritório'}</div></div>
@@ -756,12 +758,15 @@ async function loadAbaViagem(){
       </div>
       <div class="section-label">Documentos da viagem</div>
       <div class="card lista">${docItem('CT-e', viagem.cte_numero)}${docItem('MDF-e', viagem.mdfe_numero)}</div>
-      <div class="card-dark-sub" style="margin:-4px 0 14px;">Quando a integração com o sistema da transportadora estiver pronta, os arquivos do CT-e e MDF-e aparecem aqui para baixar.</div>
+      ${arquivos.length ? `<div class="section-label">Arquivos para baixar e compartilhar</div>
+        <div class="card lista">${arquivos.map(d => cardDocumento(d, '', false)).join('')}</div>`
+        : `<div class="card-dark-sub" style="margin:-4px 0 14px;">O escritório ainda não anexou os arquivos desta viagem. Quando anexar, eles aparecem aqui para baixar e compartilhar.</div>`}
       <button class="btn btn-primary" id="btnFinalizarViagem">${ic('flag', 16)} Finalizar viagem</button>`
     : `<div class="card em-breve-box"><div class="ic-grande">${ic('truck', 34)}</div><div class="card-dark-title">Nenhuma viagem em andamento</div><div class="card-dark-sub">Quando o escritório abrir uma viagem para você, ela aparece aqui com origem, destino e documentos.</div></div>`,
   });
   const btn = document.getElementById('btnFinalizarViagem');
   if(btn) btn.addEventListener('click', () => { if(confirm('Finalizar esta viagem? Confirme só depois da entrega.')) finalizarViagem(viagem.id); });
+  if(arquivos.length) ligarAcoesArquivo(document.querySelector('.m-content') || document, arquivos, () => `Viagem ${viagem.origem || ''} para ${viagem.destino || ''}`.trim());
 }
 
 async function finalizarViagem(viagemId){
@@ -811,12 +816,16 @@ async function buscarDocumentosMotorista(){
   const conjunto = await carregarMeuConjunto();
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
   const campos = 'id, tipo, numero, validade, status, arquivo_url, qr_conteudo, referente_id';
-  const [meus, veic, emp] = await Promise.all([
+  // viagens: a em andamento e as últimas concluídas (os documentos delas continuam à mão)
+  const { data: viagens } = await sb.from('viagem').select('id, origem, destino, status, criado_em').eq('motorista_id', session.user.id).order('criado_em', { ascending: false }).limit(10);
+  const viagemIds = (viagens || []).map(v => v.id);
+  const [meus, veic, emp, viag] = await Promise.all([
     sb.from('documento').select(campos).eq('referente_a', 'motorista').eq('referente_id', session.user.id).order('tipo'),
     veiculoIds.length ? sb.from('documento').select(campos).eq('referente_a', 'veiculo').in('referente_id', veiculoIds).order('tipo') : Promise.resolve({ data: [] }),
     sb.from('documento').select(campos).eq('referente_a', 'empresa').order('tipo'),
+    viagemIds.length ? sb.from('documento').select(campos).eq('referente_a', 'viagem').in('referente_id', viagemIds).order('tipo') : Promise.resolve({ data: [] }),
   ]);
-  return { meus: { data: meus.data || [] }, veic: { data: veic.data || [] }, emp: { data: emp.data || [] } };
+  return { meus: { data: meus.data || [] }, veic: { data: veic.data || [] }, emp: { data: emp.data || [] }, viag: { data: viag.data || [] }, viagens: viagens || [] };
 }
 
 async function loadDocumentosMotorista(){
@@ -824,27 +833,31 @@ async function loadDocumentosMotorista(){
   const veiculoIds = veiculosDoConjunto(conjunto).map(v => v.veiculo_id);
   const placaPorVeiculo = {};
   veiculosDoConjunto(conjunto).forEach(ci => { placaPorVeiculo[ci.veiculo_id] = ci.veiculo.placa; });
-  const { meus, veic, emp } = await dadosTela('documentos', buscarDocumentosMotorista, () => { if(motoristaScreen === 'documentos') loadDocumentosMotorista(); });
+  const dados = await dadosTela('documentos', buscarDocumentosMotorista, () => { if(motoristaScreen === 'documentos') loadDocumentosMotorista(); });
+  const { meus, veic, emp } = dados;
+  const viag = dados.viag || { data: [] };
+  const rotaViagem = Object.fromEntries((dados.viagens || []).map(v => [v.id, `Viagem ${v.origem || '?'} → ${v.destino || '?'}${v.status === 'em_andamento' ? ' (atual)' : ''}`]));
+  const primeiroNome = usuarioAtual.nome ? usuarioAtual.nome : '';
   const listas = {
-    meus: { docs: meus.data || [], vazio: 'Nenhum documento seu cadastrado ainda — peça ao escritório para cadastrar.', sub: () => '', editar: true },
-    veiculo: { docs: veic.data || [], vazio: veiculoIds.length ? 'Nenhum documento dos veículos do seu conjunto ainda.' : 'Você ainda não tem um conjunto vinculado.', sub: (d) => placaPorVeiculo[d.referente_id] || '', editar: true },
-    empresa: { docs: emp.data || [], vazio: 'Nenhum documento da empresa cadastrado.', sub: () => '', editar: false },
+    meus: { docs: meus.data || [], vazio: 'Nenhum documento seu cadastrado ainda — peça ao escritório para cadastrar.', sub: () => '', nome: () => primeiroNome, validade: true },
+    veiculo: { docs: veic.data || [], vazio: veiculoIds.length ? 'Nenhum documento dos veículos do seu conjunto ainda.' : 'Você ainda não tem um conjunto vinculado.', sub: (d) => placaPorVeiculo[d.referente_id] || '', nome: (d) => placaPorVeiculo[d.referente_id] || '', validade: true },
+    empresa: { docs: emp.data || [], vazio: 'Nenhum documento da empresa cadastrado.', sub: () => '', nome: () => usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '', validade: true },
+    viagem: { docs: viag.data || [], vazio: 'Nenhum documento de viagem. Quando o escritório anexar o CT-e, MDF-e ou nota da sua viagem, aparece aqui.', sub: (d) => rotaViagem[d.referente_id] || '', nome: (d) => (rotaViagem[d.referente_id] || '').replace(' (atual)', '').replace(' → ', ' para '), validade: false },
   };
   const atual = listas[docAbaMotorista] || listas.meus;
-  const todos = [...listas.meus.docs, ...listas.veiculo.docs, ...listas.empresa.docs];
+  const nomeDoc = (d) => { for(const l of Object.values(listas)) if(l.docs.includes(d)) return l.nome(d); return ''; };
+  const todos = Object.values(listas).flatMap(l => l.docs);
 
   montarTelaMotorista({
     header: headerVoltar('Documentos'),
     conteudo: `
       <div class="doc-tabs">
-        ${[['meus', 'Meus'], ['veiculo', 'Veículo'], ['empresa', 'Empresa']].map(([k, l]) => `<button class="${docAbaMotorista === k ? 'active' : ''}" data-aba="${k}">${l} (${listas[k].docs.length})</button>`).join('')}
+        ${[['meus', 'Meus'], ['veiculo', 'Veículo'], ['empresa', 'Empresa'], ['viagem', 'Viagem']].map(([k, l]) => `<button class="${docAbaMotorista === k ? 'active' : ''}" data-aba="${k}">${l} (${listas[k].docs.length})</button>`).join('')}
       </div>
-      ${atual.docs.length ? `<div class="card lista">${atual.docs.map(d => cardDocumento(d, atual.sub(d), atual.editar)).join('')}</div>` : `<div class="status">${atual.vazio}</div>`}`,
+      ${atual.docs.length ? `<div class="card lista">${atual.docs.map(d => cardDocumento(d, atual.sub(d), atual.validade)).join('')}</div>` : `<div class="status">${atual.vazio}</div>`}`,
   });
   document.querySelectorAll('[data-aba]').forEach(b => b.addEventListener('click', () => { docAbaMotorista = b.dataset.aba; loadDocumentosMotorista(); }));
-  document.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todos)));
-  document.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentosMotorista)));
-  document.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentosMotorista)));
+  ligarAcoesArquivo(document.querySelector('.m-content') || document, todos, nomeDoc);
 }
 
 function iconeVeiculo(tipo){
@@ -887,6 +900,7 @@ function loadPerfilMotorista(){
         <div class="card-dark-sub">${esc(papelLabel[usuarioAtual.papel] || '')} · ${esc(usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '')}</div>
         <div class="card-dark-sub" style="margin-top:6px;">Login: <b style="color:var(--text-primary);">${esc(login)}</b></div>
       </div>
+      <button class="btn btn-outline" id="btnMeusDadosPerfil" style="margin-bottom:10px;">${ic('lock', 16)} Meus dados e privacidade</button>
       <button class="btn btn-outline" id="btnSair">${ic('logout', 16)} Sair deste aparelho</button>
       <div class="section-label" style="margin-top:20px;">Velocidade do app (para o suporte)</div>
       <div class="card lista" style="font-size:12.5px;">${resumoVelocidade().map(([rotulo, valor]) => `
@@ -894,6 +908,7 @@ function loadPerfilMotorista(){
       <div class="li-sub" style="text-align:center; margin-bottom:10px;">Use o app por alguns minutos e tire um print desta tela para o suporte.</div>`,
   });
   document.getElementById('btnSair').addEventListener('click', doLogout);
+  document.getElementById('btnMeusDadosPerfil').addEventListener('click', () => { motoristaScreen = 'privacidade'; loadShellMotorista(); window.scrollTo(0, 0); });
 }
 
 function loadEmBreveMotorista(recurso){

@@ -186,8 +186,9 @@ async function secaoPainel(el){
         </div><div class="l2" style="margin-top:10px;">Soma de todos os motoristas, a partir dos registros de jornada.</div></div>`)}
     </div>
     ${painel(`Viagens em andamento (${viagens.length})`,
-      viagens.length ? tabela(['Motorista', 'Origem → destino', 'CT-e', 'MDF-e', 'Aberta em'],
-        viagens.map(v => `<tr><td>${esc(v.motorista ? v.motorista.nome : '—')}</td><td>${esc(v.origem || '?')} → ${esc(v.destino || '?')}</td><td class="mono">${esc(v.cte_numero || '—')}</td><td class="mono">${esc(v.mdfe_numero || '—')}</td><td class="sub">${fmtDataHora(v.criado_em)}</td></tr>`))
+      viagens.length ? tabela(['Motorista', 'Origem → destino', 'CT-e', 'MDF-e', 'Aberta em', 'Documentos'],
+        viagens.map(v => { const n = docs.filter(d => d.referente_a === 'viagem' && d.referente_id === v.id).length; return `<tr><td>${esc(v.motorista ? v.motorista.nome : '—')}</td><td>${esc(v.origem || '?')} → ${esc(v.destino || '?')}</td><td class="mono">${esc(v.cte_numero || '—')}</td><td class="mono">${esc(v.mdfe_numero || '—')}</td><td class="sub">${fmtDataHora(v.criado_em)}</td>
+          <td><button class="btn ${n ? 'btn-outline' : 'btn-primary'} btn-sm" data-docs-viagem="${v.id}">${ic('doc', 14)} ${n ? `${n} arquivo${n > 1 ? 's' : ''}` : 'Anexar'}</button></td></tr>`; }))
         : vazio('Nenhuma viagem em andamento.'),
       `<button class="btn btn-primary btn-sm" id="btnNovaViagem">${ic('plus', 15)} Nova viagem</button>`)}
     ${painel('Próximos compromissos (7 dias)',
@@ -205,6 +206,76 @@ async function secaoPainel(el){
   el.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => { screen = b.dataset.ir; loadEscritorio(); }));
   el.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist))));
   document.getElementById('btnNovaViagem').addEventListener('click', () => abrirNovaViagem(usuarios.filter(u => u.papel === 'motorista' && u.ativo)));
+  el.querySelectorAll('[data-docs-viagem]').forEach(b => b.addEventListener('click', () => abrirDocumentosViagem(viagens.find(v => v.id === b.dataset.docsViagem))));
+}
+
+// ---------- documentos da viagem (CT-e, MDF-e, NF-e...) ----------
+const TIPOS_DOC_VIAGEM = ['CT-e', 'MDF-e', 'NF-e', 'Ordem de coleta', 'Comprovante de entrega', 'Outro'];
+// palpite do tipo pelo nome do arquivo (ex.: "MDFe_123.pdf" → MDF-e); a pessoa pode trocar
+function tipoDocViagemPeloNome(nome){
+  const n = String(nome || '').toUpperCase();
+  if(/MDF/.test(n)) return 'MDF-e';
+  if(/CT-?E\b|\bCTE|DACTE/.test(n)) return 'CT-e';
+  if(/NF-?E|DANFE|NOTA/.test(n)) return 'NF-e';
+  if(/COLETA/.test(n)) return 'Ordem de coleta';
+  if(/CANHOTO|ENTREGA|COMPROVANTE/.test(n)) return 'Comprovante de entrega';
+  return 'Outro';
+}
+async function enviarDocumentosViagem(viagemId, arquivos, tipos, aoProgresso){
+  const erros = [];
+  for(let i = 0; i < arquivos.length; i++){
+    if(aoProgresso) aoProgresso(i + 1, arquivos.length);
+    const { error } = await salvarDocumentoNoBanco({ referenteA: 'viagem', referenteId: viagemId, tipo: tipos[i] || tipoDocViagemPeloNome(arquivos[i].name), numero: null, validade: null, file: arquivos[i] });
+    if(error) erros.push(`${arquivos[i].name}: ${error.message}`);
+  }
+  if(window.limparCacheTelas) limparCacheTelas();
+  return erros;
+}
+
+async function abrirDocumentosViagem(v){
+  if(!v) return;
+  const { data } = await sb.from('documento').select('id, tipo, arquivo_url, criado_em').eq('referente_a', 'viagem').eq('referente_id', v.id).order('criado_em');
+  const docs = data || [];
+  const rota = `${v.origem || '?'} → ${v.destino || '?'}`;
+  abrirModal(`Documentos da viagem ${rota}`, `
+    <div class="l2" style="margin-bottom:10px;">${esc(v.motorista ? v.motorista.nome : '')} vê estes arquivos no app (aba Viagem e Documentos → Viagem) e pode baixar ou compartilhar por WhatsApp.</div>
+    ${docs.length ? `<div class="o-table-wrap" style="margin-bottom:14px;"><table class="o-table"><tbody>${docs.map(d => `<tr>
+      <td>${esc(d.tipo)}<div class="sub">${fmtDataHora(d.criado_em)}</div></td>
+      <td style="text-align:right; white-space:nowrap;">${d.arquivo_url ? `<button class="o-dl-btn" data-ver="${d.id}" title="Ver">${ic('eye', 15)}</button>` : ''}
+        <button class="o-dl-btn" data-excluir-doc-viagem="${d.id}" title="Excluir">${ic('x', 15)}</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="l2" style="margin-bottom:12px;">Nenhum arquivo anexado ainda.</div>'}
+    <div class="field-row" style="margin:0;"><label>Anexar arquivos (PDF ou foto — pode escolher vários)</label>
+      <input type="file" id="dvArquivos" accept="application/pdf,image/*" multiple></div>
+    <div id="dvTipos"></div>
+    <div class="err" id="dvErro"></div>
+    <button type="button" id="btnDvEnviar" style="margin-top:12px;" disabled>Anexar</button>`);
+  const input = document.getElementById('dvArquivos'), caixaTipos = document.getElementById('dvTipos'), btn = document.getElementById('btnDvEnviar');
+  input.addEventListener('change', () => {
+    const lista = [...input.files];
+    btn.disabled = !lista.length;
+    caixaTipos.innerHTML = lista.map((f, i) => `<div class="field-row" style="margin:8px 0 0;"><label>${esc(f.name)}</label>
+      <select data-tipo-dv="${i}">${TIPOS_DOC_VIAGEM.map(t => `<option ${t === tipoDocViagemPeloNome(f.name) ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`).join('');
+  });
+  btn.addEventListener('click', async () => {
+    const lista = [...input.files];
+    const tipos = lista.map((f, i) => (caixaTipos.querySelector(`[data-tipo-dv="${i}"]`) || {}).value);
+    btn.disabled = true;
+    const erros = await enviarDocumentosViagem(v.id, lista, tipos, (i, n) => { btn.textContent = `Enviando ${i} de ${n}...`; });
+    if(erros.length){ document.getElementById('dvErro').textContent = 'Alguns arquivos não subiram: ' + erros.join(' · '); btn.disabled = false; btn.textContent = 'Anexar'; return; }
+    mostrarToast(`✅ ${lista.length} arquivo${lista.length > 1 ? 's anexados' : ' anexado'} à viagem`);
+    abrirDocumentosViagem(v);
+    if(screen === 'painel') loadEscritorio();
+  });
+  document.querySelectorAll('#modalGenerico [data-ver]').forEach(b => b.addEventListener('click', () => verArquivo(b.dataset.ver, docs, 'Viagem ' + rota)));
+  document.querySelectorAll('#modalGenerico [data-excluir-doc-viagem]').forEach(b => b.addEventListener('click', async () => {
+    const d = docs.find(x => x.id === b.dataset.excluirDocViagem);
+    if(!d || !confirm(`Excluir o arquivo ${d.tipo} desta viagem?`)) return;
+    if(d.arquivo_url) await sb.storage.from('documentos').remove([d.arquivo_url]);
+    const { error } = await sb.from('documento').delete().eq('id', d.id);
+    if(error){ alert('Não consegui excluir: ' + error.message); return; }
+    if(window.limparCacheTelas) limparCacheTelas();
+    abrirDocumentosViagem(v);
+  }));
 }
 
 function abrirNovaViagem(motoristas){
@@ -219,6 +290,9 @@ function abrirNovaViagem(motoristas){
         <div class="field-row" style="margin:0;"><label>CT-e (opcional)</label><input type="text" id="novaViagemCte"></div>
         <div class="field-row" style="margin:0;"><label>MDF-e (opcional)</label><input type="text" id="novaViagemMdfe"></div>
       </div>
+      <div class="field-row" style="margin:0;"><label>Arquivos da viagem — CT-e, MDF-e, NF-e (opcional, pode escolher vários)</label>
+        <input type="file" id="novaViagemArquivos" accept="application/pdf,image/*" multiple></div>
+      <div class="l2" style="margin-top:-4px;">O tipo de cada arquivo é reconhecido pelo nome (ex.: "MDFe_123.pdf"); dá para conferir depois no botão Documentos da viagem.</div>
       <button type="submit">Criar viagem</button>
     </form>`);
   document.getElementById('formNovaViagem').addEventListener('submit', criarViagem);
@@ -243,7 +317,7 @@ async function criarViagem(e){
     .maybeSingle();
   const cavaloItem = conjunto && conjunto.conjunto_item ? conjunto.conjunto_item.find(ci => ci.ordem === 1) : null;
 
-  const { error } = await sb.from('viagem').insert({
+  const { data: viagem, error } = await sb.from('viagem').insert({
     transportadora_id: usuarioAtual.transportadora_id,
     motorista_id: motoristaId,
     veiculo_id: cavaloItem ? cavaloItem.veiculo_id : null,
@@ -252,11 +326,16 @@ async function criarViagem(e){
     cte_numero: cte || null,
     mdfe_numero: mdfe || null,
     status: 'em_andamento'
-  });
+  }).select('id').single();
 
   if(error){ alert('Erro ao criar viagem: ' + error.message); btn.disabled = false; btn.textContent = 'Criar viagem'; return; }
+  const arquivos = [...document.getElementById('novaViagemArquivos').files];
+  if(arquivos.length && viagem){
+    const erros = await enviarDocumentosViagem(viagem.id, arquivos, [], (i, n) => { btn.textContent = `Enviando arquivo ${i} de ${n}...`; });
+    if(erros.length) alert('A viagem foi criada, mas alguns arquivos não subiram:\n' + erros.join('\n'));
+  }
   fecharModal();
-  mostrarToast('✅ Viagem criada');
+  mostrarToast(arquivos.length ? `✅ Viagem criada com ${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''}` : '✅ Viagem criada');
   loadEscritorio();
 }
 

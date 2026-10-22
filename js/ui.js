@@ -326,6 +326,7 @@ function ic(nome, tamanho = 18, cor = 'currentColor'){
     zoomout:'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-4.2-4.2M8 11h6',
     expand:'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
     ext:'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+    share:'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM8.6 13.5l6.8 4M15.4 6.5l-6.8 4',
   }[nome] || '';
   return `<svg width="${tamanho}" height="${tamanho}" viewBox="0 0 24 24" fill="none" stroke="${cor}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p.split('M').filter(Boolean).map(d => '<path d="M' + d + '"/>').join('')}</svg>`;
 }
@@ -634,6 +635,49 @@ async function desenharArquivo({ file, url, tipo }, { maxPaginas = 20, larguraPa
   return { el: img, largura: img.naturalWidth, altura: img.naturalHeight };
 }
 
+// ---------- baixar e compartilhar arquivos (WhatsApp etc.) ----------
+// O arquivo vai no formato original: PDF como PDF, foto como foto.
+const EXTENSAO_TIPO = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/heic': '.heic', 'video/mp4': '.mp4', 'video/quicktime': '.mov' };
+function nomeArquivoAmigavel(nome){ return String(nome || 'documento').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w .()-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'documento'; }
+async function arquivoDoItem(item){
+  if(item._arquivo) return item._arquivo;
+  if(item.file) return (item._arquivo = item.file);
+  const resp = await fetch(item.url);
+  if(!resp.ok) throw new Error('Não consegui baixar o arquivo (' + resp.status + ').');
+  const blob = await resp.blob();
+  const tipo = blob.type && blob.type !== 'application/octet-stream' ? blob.type : (/pdf/i.test(item.tipo || '') ? 'application/pdf' : 'image/jpeg');
+  return (item._arquivo = new File([blob], nomeArquivoAmigavel(item.nome) + (EXTENSAO_TIPO[tipo] || ''), { type: tipo }));
+}
+const podeCompartilharArquivos = () => !!(navigator.share && navigator.canShare);
+async function baixarArquivoItem(item){
+  const f = await arquivoDoItem(item);
+  const url = URL.createObjectURL(f);
+  const a = document.createElement('a'); a.href = url; a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+// O celular só abre a tela de compartilhar logo depois de um toque; se o download demorou e
+// o toque "venceu", mostra um botão para tocar de novo (o arquivo já está pronto)
+async function compartilharArquivoItem(item){
+  const f = await arquivoDoItem(item);
+  if(!(navigator.canShare && navigator.canShare({ files: [f] }))){ await baixarArquivoItem(item); mostrarToast('Este aparelho não compartilha arquivos direto — o arquivo foi baixado.'); return; }
+  try{ await navigator.share({ files: [f], title: f.name }); }
+  catch(e){
+    if(e && e.name === 'AbortError') return;   // a pessoa fechou a tela de compartilhar
+    if(e && e.name === 'NotAllowedError'){
+      document.body.insertAdjacentHTML('beforeend', `<div id="compartilharDeNovo" class="aviso-privacidade" style="z-index:96;"><div class="aviso-privacidade-caixa" style="max-width:360px; text-align:center;">
+        <div class="card-dark-title" style="margin-bottom:6px;">Arquivo pronto</div><div class="l2" style="margin-bottom:14px;">${esc(f.name)}</div>
+        <button type="button" id="btnCompartilharAgora" style="width:100%;">Compartilhar</button>
+        <button type="button" class="btn-small" id="btnCompartilharFechar" style="width:100%; margin-top:8px;">Fechar</button></div></div>`);
+      const fechar = () => { const m = document.getElementById('compartilharDeNovo'); if(m) m.remove(); };
+      document.getElementById('btnCompartilharFechar').addEventListener('click', fechar);
+      document.getElementById('btnCompartilharAgora').addEventListener('click', () => { navigator.share({ files: [f], title: f.name }).catch(() => {}); fechar(); });
+      return;
+    }
+    throw e;
+  }
+}
+
 // Tela cheia com zoom. itens: [{ file } ou { url, tipo, nome }]; setas quando houver mais de um.
 async function abrirVisualizador(itens, inicio = 0, titulo = ''){
   fecharVisualizador();
@@ -645,7 +689,8 @@ async function abrirVisualizador(itens, inicio = 0, titulo = ''){
         <button type="button" id="visMenos" title="Diminuir">${ic('zoomout', 20)}</button>
         <button type="button" id="visMais" title="Aumentar">${ic('zoomin', 20)}</button>
         <button type="button" id="visAjustar" title="Ajustar à tela">${ic('expand', 20)}</button>
-        <button type="button" id="visAbrir" title="Abrir o arquivo original">${ic('ext', 20)}</button>
+        <button type="button" id="visBaixar" title="Baixar no aparelho">${ic('download', 20)}</button>
+        ${podeCompartilharArquivos() ? `<button type="button" id="visCompartilhar" title="Compartilhar (WhatsApp, e-mail...)">${ic('share', 20)}</button>` : `<button type="button" id="visAbrir" title="Abrir o arquivo original">${ic('ext', 20)}</button>`}
         <button type="button" id="visFechar" title="Fechar">${ic('x', 22)}</button>
       </div>
       <div class="vis-palco" id="visPalco"><div class="vis-status">Carregando...</div></div>
@@ -668,6 +713,7 @@ async function abrirVisualizador(itens, inicio = 0, titulo = ''){
       const r = await desenharArquivo(item);
       if(!document.getElementById('visualizador') || itens[atual] !== item) return;
       palco.innerHTML = '';
+      if(item.url) arquivoDoItem(item).catch(() => {});   // já deixa pronto para baixar/compartilhar na hora
       if(r.video){ r.el.className = 'vis-video'; palco.appendChild(r.el); return; }
       const conteudo = document.createElement('div'); conteudo.appendChild(r.el); palco.appendChild(conteudo);
       controle = ativarZoom(palco, conteudo, { largura: r.largura, altura: r.altura, modo: r.paginas > 1 ? 'largura' : 'contem', larguraMax: 1000 });
@@ -680,7 +726,12 @@ async function abrirVisualizador(itens, inicio = 0, titulo = ''){
   document.getElementById('visMais').addEventListener('click', () => controle && controle.mais());
   document.getElementById('visMenos').addEventListener('click', () => controle && controle.menos());
   document.getElementById('visAjustar').addEventListener('click', () => controle && controle.ajustar());
-  document.getElementById('visAbrir').addEventListener('click', () => { if(urlAtual) window.open(urlAtual, '_blank'); });
+  const bAbrir = document.getElementById('visAbrir');
+  if(bAbrir) bAbrir.addEventListener('click', () => { if(urlAtual) window.open(urlAtual, '_blank'); });
+  const acao = (fn) => async () => { try{ await fn(itens[atual]); } catch(e){ alert(e.message || 'Não consegui preparar o arquivo.'); } };
+  document.getElementById('visBaixar').addEventListener('click', acao(baixarArquivoItem));
+  const bComp = document.getElementById('visCompartilhar');
+  if(bComp) bComp.addEventListener('click', acao(compartilharArquivoItem));
   if(itens.length > 1){ document.getElementById('visAnt').addEventListener('click', () => ir(-1)); document.getElementById('visProx').addEventListener('click', () => ir(1)); }
   await mostrar();
 }

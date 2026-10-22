@@ -77,22 +77,23 @@ async function processarQrLido(docId, conteudo, onSalvo){
 let documentosSubtela = 'lista';
 let documentosFiltro = 'todos';
 
-// Linha de documento no app do motorista (lista escura, no estilo do protótipo)
-function cardDocumento(d, subtitulo, podeEditar = true){
+// Linha de documento no app do motorista (lista escura, no estilo do protótipo).
+// O motorista só vê, baixa e compartilha — anexar/trocar arquivo é do escritório.
+function cardDocumento(d, subtitulo, comValidade = true){
   return `
     <div class="list-item" style="align-items:flex-start;">
       <div class="li-ic">${ic('doc', 16)}</div>
       <div class="li-body">
         <div class="li-title">${esc(d.tipo)}</div>
-        <div class="li-sub">${subtitulo ? esc(subtitulo) + ' · ' : ''}${d.numero ? 'nº ' + esc(d.numero) + ' · ' : ''}${esc(textoVencimento(d))}</div>
-        ${d.qr_conteudo ? `<div class="li-sub">QR Code lido ✓</div>` : ''}
+        <div class="li-sub">${[subtitulo ? esc(subtitulo) : '', d.numero ? 'nº ' + esc(d.numero) : '', comValidade ? esc(textoVencimento(d)) : ''].filter(Boolean).join(' · ')}</div>
         <div class="li-acoes">
-          ${d.arquivo_url ? `<button class="btn-small" data-ver="${d.id}">${ic('eye', 14)} Ver</button>` : '<span class="li-sub">Sem arquivo anexado</span>'}
-          ${podeEditar ? `<label class="file-label">${ic('upload', 14)} ${d.arquivo_url ? 'Substituir' : 'Anexar'}<input type="file" accept="application/pdf,image/*" data-anexar="${d.id}"></label>
-          <button class="btn-small" data-qr="${d.id}">${ic('qr', 14)} QR</button>` : ''}
+          ${d.arquivo_url ? `<button class="btn-small" data-ver="${d.id}">${ic('eye', 14)} Ver</button>
+          <button class="btn-small" data-baixar="${d.id}">${ic('download', 14)} Baixar</button>
+          ${podeCompartilharArquivos() ? `<button class="btn-small" data-compartilhar="${d.id}">${ic('share', 14)} Compartilhar</button>` : ''}`
+          : '<span class="li-sub">Arquivo ainda não anexado pelo escritório</span>'}
         </div>
       </div>
-      <div class="li-row-end">${pillDoc(d)}</div>
+      ${comValidade ? `<div class="li-row-end">${pillDoc(d)}</div>` : ''}
     </div>`;
 }
 
@@ -100,18 +101,21 @@ async function loadDocumentos(){
   if(documentosSubtela === 'manual'){ loadDocumentosManual(); return; }
 
   const el = document.getElementById('screenContent');
-  const [{ data: docs, error }, { data: motoristas }, { data: veiculos }] = await Promise.all([
+  const [{ data: docs, error }, { data: motoristas }, { data: veiculos }, { data: viagens }] = await Promise.all([
     sb.from('documento').select('id, referente_a, referente_id, tipo, numero, validade, status, arquivo_url, qr_conteudo, criado_em').order('tipo'),
     sb.from('usuario').select('id, nome').eq('papel', 'motorista').order('nome'),
     sb.from('veiculo').select('id, placa').order('placa'),
+    sb.from('viagem').select('id, origem, destino'),
   ]);
   if(error){ el.innerHTML = `<div class="status">Erro ao carregar documentos: ${esc(error.message)}</div>`; return; }
 
   const motoristaNome = Object.fromEntries((motoristas||[]).map(m => [m.id, m.nome]));
   const veiculoPlaca = Object.fromEntries((veiculos||[]).map(v => [v.id, v.placa]));
-  const nomeRef = (d) => d.referente_a === 'empresa' ? 'Empresa' : d.referente_a === 'motorista' ? (motoristaNome[d.referente_id] || '—') : (veiculoPlaca[d.referente_id] || '—');
+  const viagemRota = Object.fromEntries((viagens||[]).map(v => [v.id, `${v.origem || '?'} → ${v.destino || '?'}`]));
+  const nomeRef = (d) => d.referente_a === 'empresa' ? 'Empresa' : d.referente_a === 'motorista' ? (motoristaNome[d.referente_id] || '—')
+    : d.referente_a === 'viagem' ? 'Viagem ' + (viagemRota[d.referente_id] || '') : (veiculoPlaca[d.referente_id] || '—');
   const todosDocs = docs || [];
-  const filtros = [['todos', 'Todos'], ['empresa', 'Empresa'], ['motorista', 'Motoristas'], ['veiculo', 'Veículos'], ['alerta', 'Vencidos / a vencer']];
+  const filtros = [['todos', 'Todos'], ['empresa', 'Empresa'], ['motorista', 'Motoristas'], ['veiculo', 'Veículos'], ['viagem', 'Viagens'], ['alerta', 'Vencidos / a vencer']];
   const doFiltro = todosDocs
     .filter(d => documentosFiltro === 'todos' || (documentosFiltro === 'alerta' ? statusDocumento(d) !== 'ok' : d.referente_a === documentosFiltro));
   const porNome = porTexto(nomeRef);
@@ -125,7 +129,7 @@ async function loadDocumentos(){
     ['vence_longe', 'Vence por último', (a, b) => porData(d => d.validade, -1)(a, b) || porNome(a, b)],
     ['tipo', 'Tipo de documento (A a Z)', (a, b) => porTexto(d => d.tipo)(a, b) || porNome(a, b)],
   ];
-  const textoDoc = (d) => [nomeRef(d), d.tipo, d.numero, { empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo' }[d.referente_a], ROTULO_STATUS_DOC[statusDocumento(d)]].join(' ');
+  const textoDoc = (d) => [nomeRef(d), d.tipo, d.numero, { empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo', viagem:'Documento de viagem' }[d.referente_a], ROTULO_STATUS_DOC[statusDocumento(d)]].join(' ');
   let visiveis = aplicarLista('documentos', doFiltro, ordens, textoDoc);
   const contagem = (k) => k === 'todos' ? todosDocs.length : k === 'alerta' ? todosDocs.filter(d => statusDocumento(d) !== 'ok').length : todosDocs.filter(d => d.referente_a === k).length;
 
@@ -155,7 +159,7 @@ async function loadDocumentos(){
     document.getElementById('docTitulo').textContent = `Documentos (${visiveis.length})`;
     lista.innerHTML = visiveis.length ? `<div class="o-table-wrap"><table class="o-table"><thead><tr><th>Referente a</th><th>Documento</th><th>Validade</th><th>Status</th><th>Arquivo</th></tr></thead><tbody>
         ${visiveis.map(d => `<tr>
-          <td>${esc(nomeRef(d))}<div class="sub">${{ empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo' }[d.referente_a] || ''}</div></td>
+          <td>${esc(nomeRef(d))}<div class="sub">${{ empresa:'Empresa', motorista:'Motorista', veiculo:'Veículo', viagem:'Documento de viagem' }[d.referente_a] || ''}</div></td>
           <td>${esc(d.tipo)}${d.numero ? `<div class="sub mono">nº ${esc(d.numero)}</div>` : ''}${d.qr_conteudo ? '<div class="sub">QR Code lido ✓</div>' : ''}</td>
           <td class="sub">${esc(textoVencimento(d))}</td>
           <td>${badgeDoc(d)}</td>
@@ -166,7 +170,7 @@ async function loadDocumentos(){
             <button class="o-dl-btn" data-editar-doc="${d.id}" title="Editar ou excluir">${ic('gear', 15)}</button>
           </div></td></tr>`).join('')}
       </tbody></table></div>` : `<div class="o-empty-note">${estadoListas.documentos.busca ? 'Nenhum documento encontrado nesta pesquisa.' : 'Nenhum documento neste filtro.'}</div>`;
-    lista.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => verArquivo(btn.dataset.ver, todosDocs)));
+    lista.querySelectorAll('[data-ver]').forEach(btn => btn.addEventListener('click', () => { const d = todosDocs.find(x => x.id === btn.dataset.ver); verArquivo(btn.dataset.ver, todosDocs, d && d.referente_a !== 'empresa' ? nomeRef(d) : ''); }));
     lista.querySelectorAll('[data-anexar]').forEach(inp => inp.addEventListener('change', (e) => anexarArquivoComLeitura(inp.dataset.anexar, e.target.files[0], loadDocumentos)));
     lista.querySelectorAll('[data-qr]').forEach(btn => btn.addEventListener('click', () => abrirScannerQR(btn.dataset.qr, loadDocumentos)));
     lista.querySelectorAll('[data-editar-doc]').forEach(btn => btn.addEventListener('click', () => {
@@ -1028,12 +1032,36 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
   });
 }
 
-async function verArquivo(docId, docs){
-  const doc = (docs||[]).find(d => String(d.id) === String(docId));
-  if(!doc || !doc.arquivo_url) return;
+// Monta o item do arquivo (link temporário de 5 min + nome amigável, ex.: "CNH - Carlos Alves.pdf")
+async function itemArquivoDocumento(doc, complemento){
   const { data, error } = await sb.storage.from('documentos').createSignedUrl(doc.arquivo_url, 300);
-  if(error){ alert('Erro ao abrir arquivo: ' + error.message); return; }
+  if(error) throw new Error('Erro ao abrir arquivo: ' + error.message);
   registrarAcessoArquivo('documento', doc.id);
   const tipo = /\.pdf$/i.test(doc.arquivo_url) ? 'application/pdf' : /\.(mp4|mov|webm)$/i.test(doc.arquivo_url) ? 'video' : 'imagem';
-  abrirVisualizador([{ url: data.signedUrl, tipo }], 0, doc.tipo);
+  return { url: data.signedUrl, tipo, nome: [doc.tipo, complemento].filter(Boolean).join(' - ') };
+}
+async function verArquivo(docId, docs, complemento = ''){
+  const doc = (docs||[]).find(d => String(d.id) === String(docId));
+  if(!doc || !doc.arquivo_url) return;
+  try{ const item = await itemArquivoDocumento(doc, complemento); abrirVisualizador([item], 0, item.nome); }
+  catch(e){ alert(e.message); }
+}
+// Baixar no aparelho ou compartilhar (WhatsApp, e-mail...) — direto da lista, sem abrir
+async function acaoArquivoDocumento(acao, docId, docs, complemento = '', botao = null){
+  const doc = (docs||[]).find(d => String(d.id) === String(docId));
+  if(!doc || !doc.arquivo_url) return;
+  const textoOriginal = botao ? botao.innerHTML : '';
+  if(botao){ botao.disabled = true; botao.textContent = 'Preparando...'; }
+  try{
+    const item = await itemArquivoDocumento(doc, complemento);
+    if(acao === 'compartilhar') await compartilharArquivoItem(item); else await baixarArquivoItem(item);
+  } catch(e){ alert(e.message || 'Não consegui preparar o arquivo.'); }
+  finally{ if(botao){ botao.disabled = false; botao.innerHTML = textoOriginal; } }
+}
+// Liga os botões Ver / Baixar / Compartilhar de uma lista. complementoDe(doc) = nome da pessoa, placa ou viagem
+function ligarAcoesArquivo(raiz, docs, complementoDe = () => ''){
+  const achar = (id) => (docs || []).find(d => String(d.id) === String(id));
+  raiz.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => verArquivo(b.dataset.ver, docs, complementoDe(achar(b.dataset.ver)))));
+  raiz.querySelectorAll('[data-baixar]').forEach(b => b.addEventListener('click', () => acaoArquivoDocumento('baixar', b.dataset.baixar, docs, complementoDe(achar(b.dataset.baixar)), b)));
+  raiz.querySelectorAll('[data-compartilhar]').forEach(b => b.addEventListener('click', () => acaoArquivoDocumento('compartilhar', b.dataset.compartilhar, docs, complementoDe(achar(b.dataset.compartilhar)), b)));
 }
