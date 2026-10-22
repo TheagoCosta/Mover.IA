@@ -184,7 +184,7 @@ function prepararDestino(destino){
     mecanicoTab = 'chamados'; mecanicoFiltro = 'pendentes';
     if(destino === 'privacidade') setTimeout(abrirMeusDadosModal, 800);
   } else {
-    screen = { agendamentos:'agenda', 'tab:viagem':'painel', documentosMotorista:'documentos', documentosConjunto:'documentos' }[destino] || destino;
+    screen = { agendamentos:'agenda', 'tab:viagem':'viagens', documentosMotorista:'documentos', documentosConjunto:'documentos' }[destino] || destino;
     documentosSubtela = 'lista';
   }
 }

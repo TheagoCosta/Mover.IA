@@ -22,7 +22,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const PAPEIS_GESTAO = ['admin_transportadora', 'gestor', 'admin_mover_ia'];
-const MAX_NOVAS_POR_RODADA = 15;     // o resto fica para a próxima rodada (limite de tempo da função)
+const MAX_NOVAS_POR_RODADA = 30;     // o resto fica para a próxima rodada (limite de tempo da função)
 const MAX_CTES_POR_MANIFESTO = 10;
 
 function jsonResponse(obj: unknown, status = 200) {
@@ -137,6 +137,15 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true, dominio: `${cred.dominio}.bsoft.app`, veiculo_exemplo: veiculos.length > 0, manifestos_periodo: manifestos.length, dias: cfg.dias_retroativos });
     }
 
+    // diagnóstico: só os NOMES dos campos de um CT-e recente (sem valores), para ajustar a leitura de origem/destino
+    if (acao === 'campos') {
+      const r = await lista(api, '/transporte/v1/conhecimentos', { dataInicio: hojeBrasilia(cfg.dias_retroativos), dataFim: hojeBrasilia(), limit: '0,1' });
+      const c = (r[0] ?? {}) as Record<string, unknown>;
+      const estrutura: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(c)) estrutura[k] = v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v as Record<string, unknown>) : typeof v;
+      return jsonResponse({ ok: true, estrutura });
+    }
+
     if (acao !== 'previa' && acao !== 'sincronizar') return jsonResponse({ error: 'Ação inválida.' }, 400);
     const gravar = acao === 'sincronizar';
 
@@ -147,7 +156,9 @@ Deno.serve(async (req: Request) => {
       manifestos.push(...lote);
       if (lote.length < 50) break;
     }
-    manifestos.sort((a, b) => String(a.dtEmissao ?? '').localeCompare(String(b.dtEmissao ?? '')));   // mais antigo primeiro: o mais novo vira a "viagem atual"
+    // mais NOVO primeiro: os recentes nunca ficam para depois por causa do limite de cada rodada
+    const numeroBsoft = (m: Record<string, unknown>) => Number(m.id) || 0;
+    manifestos.sort((a, b) => numeroBsoft(b) - numeroBsoft(a));
 
     // 2) dados do MOVER.IA para achar o motorista
     const [{ data: usuarios }, { data: perfis }, { data: veiculos }, { data: conjuntos }, { data: jaImportadas }] = await Promise.all([
@@ -155,7 +166,7 @@ Deno.serve(async (req: Request) => {
       admin.from('motorista_perfil').select('usuario_id, cpf'),
       admin.from('veiculo').select('id, placa, tipo').eq('transportadora_id', tid),
       admin.from('conjunto').select('motorista_id, conjunto_item(veiculo_id)').eq('transportadora_id', tid).eq('ativo', true),
-      admin.from('viagem').select('id, bsoft_manifesto_id').eq('transportadora_id', tid).not('bsoft_manifesto_id', 'is', null),
+      admin.from('viagem').select('id, bsoft_manifesto_id, motorista_id, origem').eq('transportadora_id', tid).not('bsoft_manifesto_id', 'is', null),
     ]);
     type Motorista = { id: string; nome: string; ativo?: boolean };
     const motoristaPorId = new Map<string, Motorista>(((usuarios ?? []) as Motorista[]).filter(u => u.ativo).map(u => [u.id, u]));
@@ -164,7 +175,13 @@ Deno.serve(async (req: Request) => {
     const veiculoPorPlaca = new Map<string, { id: string; placa: string }>(((veiculos ?? []) as { id: string; placa: string }[]).map(v => [placaNorm(v.placa), v]));
     const motoristaPorVeiculo = new Map<string, string>();
     ((conjuntos ?? []) as { motorista_id: string | null; conjunto_item: { veiculo_id: string }[] }[]).forEach(c => (c.conjunto_item ?? []).forEach((i: { veiculo_id: string }) => { if (c.motorista_id) motoristaPorVeiculo.set(i.veiculo_id, c.motorista_id); }));
-    const viagemPorManifesto = new Map<string, string>(((jaImportadas ?? []) as { id: string; bsoft_manifesto_id: string }[]).map(v => [String(v.bsoft_manifesto_id), v.id]));
+    const importadas = (jaImportadas ?? []) as { id: string; bsoft_manifesto_id: string; motorista_id: string | null; origem: string | null }[];
+    const viagemPorManifesto = new Map<string, string>(importadas.map(v => [String(v.bsoft_manifesto_id), v.id]));
+    const semOrigem = new Set(importadas.filter(v => !v.origem).map(v => v.id));   // importadas antes de ler origem/destino
+    // MDF-e mais novo já importado de cada motorista (o nº do Bsoft cresce com o tempo)
+    const maisNovoPorMotorista = new Map<string, number>();
+    importadas.forEach(v => { if (v.motorista_id) maisNovoPorMotorista.set(v.motorista_id, Math.max(maisNovoPorMotorista.get(v.motorista_id) ?? 0, Number(v.bsoft_manifesto_id) || 0)); });
+    const inicioRodada = Date.now();
 
     const achar = (m: Record<string, unknown>): { motorista: Motorista | null; por: string | null } => {
       const porCpf = motoristaPorCpf.get(digitos(m.motoristaDocumento));
@@ -178,7 +195,7 @@ Deno.serve(async (req: Request) => {
       return { motorista: null, por: null };
     };
 
-    const resumo = { periodo: `${hojeBrasilia(cfg.dias_retroativos)} a ${hojeBrasilia()}`, manifestos: manifestos.length, criadas: 0, ja_importadas: 0, pdfs: 0, sem_motorista: [] as unknown[], erros: [] as string[], itens: [] as unknown[] };
+    const resumo = { periodo: `${hojeBrasilia(cfg.dias_retroativos)} a ${hojeBrasilia()}`, manifestos: manifestos.length, criadas: 0, ja_importadas: 0, pdfs: 0, pendentes: 0, sem_motorista: [] as unknown[], erros: [] as string[], itens: [] as unknown[] };
     let novasNestaRodada = 0;
 
     for (const m of manifestos) {
@@ -193,14 +210,15 @@ Deno.serve(async (req: Request) => {
       if (situacao === 'ja_importada') resumo.ja_importadas++;
       if (situacao === 'sem_motorista') resumo.sem_motorista.push({ manifesto: m.nro, placa: m.placa, motorista_bsoft: m.motorista ?? null });
       if (!gravar || situacao === 'sem_motorista') continue;
-      if (situacao === 'nova' && novasNestaRodada >= MAX_NOVAS_POR_RODADA) continue;
+      if (situacao === 'nova' && novasNestaRodada >= MAX_NOVAS_POR_RODADA) { resumo.pendentes++; continue; }
+      if (Date.now() - inicioRodada > 100000) { resumo.pendentes++; continue; }   // perto do limite de tempo: o resto vai na próxima rodada
 
       try {
         // já importada e com todos os PDFs: nada a fazer (não consulta o Bsoft de novo)
         if (viagemExistente) {
           const { data: d0 } = await admin.from('documento').select('bsoft_ref').eq('referente_a', 'viagem').eq('referente_id', viagemExistente);
           const refs = (d0 ?? []).map(x => String(x.bsoft_ref ?? ''));
-          if (refs.includes(`mdfe:${idBsoft}`) && refs.filter(r => r.startsWith('cte:')).length >= chaves.length) continue;
+          if (refs.includes(`mdfe:${idBsoft}`) && refs.filter(r => r.startsWith('cte:')).length >= chaves.length && !semOrigem.has(viagemExistente)) continue;
         }
         // CT-e do manifesto: número, origem e destino
         const ctes: { id: string; nro: string; origem: string | null; destino: string | null }[] = [];
@@ -208,26 +226,40 @@ Deno.serve(async (req: Request) => {
           const r = await lista(api, '/transporte/v1/conhecimentos', { chaveAcesso: chave, limit: '0,1' });
           const c = r[0] as Record<string, unknown> | undefined;
           if (!c) continue;
-          const local = (d: unknown) => { const x = d as Record<string, unknown> | undefined; return x && x.cidade ? `${x.cidade}${x.estado ? '/' + x.estado : ''}` : null; };
-          ctes.push({ id: String(c.id), nro: String(c.nro ?? ''), origem: local(c.dados_remetente), destino: local(c.dados_destinatario) });
+          // cidade/UF quando o Bsoft manda (dados_remetente/dados_destinatario); senão, o nome de quem envia e de quem recebe
+          const local = (d: unknown, nome: unknown) => {
+            const x = d as Record<string, unknown> | undefined;
+            if (x && x.cidade) return `${x.cidade}${x.estado ? '/' + x.estado : ''}`;
+            return nome ? String(nome).trim().slice(0, 80) || null : null;
+          };
+          ctes.push({ id: String(c.id), nro: String(c.nro ?? ''), origem: local(c.dados_remetente, c.remetente), destino: local(c.dados_destinatario, c.recebedor || c.destinatario) });
         }
 
         let viagemId = viagemExistente;
+        if (viagemId && semOrigem.has(viagemId) && ctes.length) {
+          await admin.from('viagem').update({ origem: ctes.find(c => c.origem)?.origem ?? null, destino: [...ctes].reverse().find(c => c.destino)?.destino ?? null }).eq('id', viagemId);
+          semOrigem.delete(viagemId);
+        }
         if (!viagemId) {
           const cavalo = veiculoPorPlaca.get(placaNorm(m.placa));
+          // o MDF-e mais novo do motorista é a viagem atual; um mais antigo entra já concluído (só histórico e PDFs, sem aviso)
+          const atual = numeroBsoft(m) > (maisNovoPorMotorista.get(motorista!.id) ?? 0);
           const { data: nova, error } = await admin.from('viagem').insert({
             transportadora_id: tid, motorista_id: motorista!.id, veiculo_id: cavalo?.id ?? null,
             origem: ctes.find(c => c.origem)?.origem ?? null, destino: [...ctes].reverse().find(c => c.destino)?.destino ?? null,
             cte_numero: ctes.map(c => c.nro).filter(Boolean).join(', ') || null, mdfe_numero: String(m.nro ?? '') || null,
-            status: 'em_andamento', bsoft_manifesto_id: idBsoft,
+            status: atual ? 'em_andamento' : 'concluida', bsoft_manifesto_id: idBsoft,
           }).select('id').single();
           if (error) throw new Error('viagem: ' + error.message);
           viagemId = (nova as { id: string }).id;
           viagemPorManifesto.set(idBsoft, viagemId);
           novasNestaRodada++; resumo.criadas++;
-          // o MDF-e mais novo vira a viagem atual: as anteriores do mesmo motorista vindas do Bsoft são concluídas
-          await admin.from('viagem').update({ status: 'concluida' }).eq('transportadora_id', tid).eq('motorista_id', motorista!.id)
-            .eq('status', 'em_andamento').not('bsoft_manifesto_id', 'is', null).neq('id', viagemId);
+          if (atual) {
+            maisNovoPorMotorista.set(motorista!.id, numeroBsoft(m));
+            // as viagens anteriores dele vindas do Bsoft são concluídas
+            await admin.from('viagem').update({ status: 'concluida' }).eq('transportadora_id', tid).eq('motorista_id', motorista!.id)
+              .eq('status', 'em_andamento').not('bsoft_manifesto_id', 'is', null).neq('id', viagemId);
+          }
         }
 
         // PDFs (o que faltar — tenta de novo na próxima rodada se falhar)
@@ -260,7 +292,7 @@ Deno.serve(async (req: Request) => {
       const status = resumo.erros.length && !resumo.criadas && !resumo.pdfs ? 'erro' : 'ok';
       const guardado = { ...resumo, itens: undefined, sem_motorista: resumo.sem_motorista.slice(0, 30), erros: resumo.erros.slice(0, 30) };
       await admin.from('integracao_bsoft').update({ ultima_execucao: new Date().toISOString(), ultimo_status: status, ultimo_resumo: guardado }).eq('transportadora_id', tid);
-      await admin.from('sincronizacao_log').insert({ transportadora_id: tid, status, registros_processados: resumo.criadas, erro: resumo.erros.length ? resumo.erros.slice(0, 5).join(' | ') : null });
+      await admin.from('sincronizacao_log').insert({ transportadora_id: tid, status: status === 'ok' ? 'sucesso' : 'erro', registros_processados: resumo.criadas, erro: resumo.erros.length ? resumo.erros.slice(0, 5).join(' | ') : null });
     }
     return jsonResponse({ ok: true, acao, ...resumo });
   } catch (e) {

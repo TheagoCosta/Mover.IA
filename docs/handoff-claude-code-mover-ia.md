@@ -18,7 +18,7 @@ SaaS multi-empresa ("Gestão para quem move o Brasil") para transportadoras: doc
 ## 2. Arquitetura
 
 - **Frontend sem build:** `index.html` + `css/app.css` + `js/*.js` (scripts clássicos, todas as funções globais — um arquivo chama funções dos outros). Bibliotecas por CDN: supabase-js 2.117.2 (versão fixa, no `index.html`); jsQR, pdf.js 3.11.174 e tesseract.js 5.1.1 são **baixados só quando usados** (`carregarBiblioteca()` / `usarPdfJs()` em `js/ui.js`) — não voltar a colocá-los no `<head>`, isso deixava o celular lento. Fontes Oswald/Inter/JetBrains Mono (Google Fonts).
-- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261022c` — também em `privacidade.html`) para os celulares baixarem a versão nova.
+- **Ao publicar mudança de JS/CSS, trocar o `?v=` no `index.html`** (hoje `20261023a` — também em `privacidade.html`) para os celulares baixarem a versão nova.
 - **App instalável (PWA):** `manifest.webmanifest` + `sw.js` (service worker). A página abre **na hora com a cópia guardada** e a nova é buscada por trás; o app confere a versão publicada (`conferirVersaoNova()` em `ui.js`, via `?verificar=`) e mostra o aviso "Atualizar" (`?atualizar=` faz o service worker buscar da internet). Medidor de velocidade no Perfil do motorista (`resumoVelocidade()`); arquivos com `?v=` e CDN de versão fixa ficam guardados de vez; Supabase nunca é guardado. **Por isso o `?v=` é obrigatório** — sem trocar, o celular continua com o arquivo antigo. Mudou o `sw.js`? Trocar `CACHE` (`moveria-v1` → `v2`). Botão "Instalar o app no celular" na aba Mais do motorista (`instalarApp()` em `ui.js`). O navegador embutido do Claude não registra service worker; a lógica foi testada simulando o navegador no Node.
 - **Backend:** Supabase `otllslhjbyjtktxyvezy` (Postgres + Auth + Storage + Edge Functions). O Claude acessa pelo **conector oficial do Supabase** (MCP) — o Thiago conecta em Configurações → Conectores do app do Claude. Com ele o Claude lê o banco, aplica migrações e publica funções.
 - **Hospedagem:** GitHub `TheagoCosta/Mover.IA`, branch `main` → **GitHub Pages: https://theagocosta.github.io/Mover.IA/** (maiúsculas importam; `/mover-ia/` dá 404). O Netlify antigo está pausado/abandonado.
@@ -140,3 +140,10 @@ O plano gratuito pausa o projeto após dias sem uso (aconteceu em 13/10: ningué
 ## Correções do escritório (22/10)
 - Escritório corrige/exclui: abastecimento (engrenagem na lista; média recalculada por gatilho, inclusive a do seguinte do veículo), jornada (corrigir horários/encerrar e excluir, no detalhe), checklist (só excluir — é assinado), chamado de oficina (engrenagem; excluir apaga as mídias do bucket `oficina`). Toda correção/exclusão do escritório vai para o Registro de acessos (`trg_registro_operacao`). Migração `20261022_04_edicao_exclusao_registros.sql`.
 - A integração Bsoft só LÊ do Bsoft: nada do MOVER.IA é enviado para lá.
+
+
+## Bsoft — ajustes (23/10) e seção Viagens
+- Importa do MDF-e mais NOVO para o mais antigo (até 30 por rodada; o resto na próxima). O mais novo de cada motorista fica em andamento; os anteriores entram concluídos (sem aviso — `trg_notif_viagem_nova` só avisa `em_andamento`).
+- O Bsoft da ChavesLog não manda cidade no CT-e: origem/destino = remetente → recebedor/destinatário.
+- `sincronizacao_log.status` aceita `sucesso`/`erro`.
+- Seção **Viagens** no escritório (em andamento/concluídas/todas, pesquisa, concluir/reabrir, arquivos, nova viagem).

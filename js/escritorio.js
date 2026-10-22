@@ -6,6 +6,7 @@ const SECOES_ESCRITORIO = [
   { k:'painel',        l:'Painel',        i:'home',    meta:() => `Visão geral da frota — hoje, ${hojeExtenso()}` },
   { k:'motoristas',    l:'Motoristas',    i:'user',    meta:() => 'Documentação e situação de todos os motoristas' },
   { k:'veiculos',      l:'Veículos',      i:'truck',   meta:() => 'Conjuntos e documentação da frota' },
+  { k:'viagens',       l:'Viagens',       i:'map',     meta:() => 'Viagens em andamento e concluídas — MDF-e, CT-e e arquivos' },
   { k:'abastecimento', l:'Abastecimento', i:'fuel',    meta:() => 'Abastecimentos registrados, litros e gastos em posto' },
   { k:'consumo',       l:'Consumo',       i:'chart',   meta:() => 'Média de consumo por veículo e por motorista, evolução e alertas' },
   { k:'oficina',       l:'Oficina',       i:'wrench',  meta:() => 'Chamados de manutenção — motoristas, mecânico e oficinas externas' },
@@ -58,7 +59,7 @@ function loadEscritorio(){
 
   document.getElementById('btnSair').addEventListener('click', doLogout);
   document.getElementById('btnSinoEscritorio').addEventListener('click', () => abrirNotificacoesJanela((destino) => {
-    const secao = { agendamentos:'agenda', capacitacoes:'capacitacoes', 'tab:viagem':'painel' }[destino] || destino;
+    const secao = { agendamentos:'agenda', capacitacoes:'capacitacoes', 'tab:viagem':'viagens' }[destino] || destino;
     if(SECOES_ESCRITORIO.some(s => s.k === secao)){ screen = secao; loadEscritorio(); }
   }));
   atualizarSinos();
@@ -71,7 +72,7 @@ function loadEscritorio(){
 
   const el = document.getElementById('screenContent');
   const renderizar = {
-    painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, abastecimento: secaoAbastecimento, consumo: secaoConsumo,
+    painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, viagens: secaoViagens, abastecimento: secaoAbastecimento, consumo: secaoConsumo,
     oficina: secaoOficina, jornadas: secaoJornadas, checklists: secaoChecklists, documentos: () => loadDocumentos(),
     capacitacoes: secaoCapacitacoes, agenda: secaoAgenda, usuarios: secaoUsuarios, privacidade: secaoPrivacidade, integracao: secaoIntegracao, config: secaoConfig,
   }[screen];
@@ -209,6 +210,83 @@ async function secaoPainel(el){
   el.querySelectorAll('[data-docs-viagem]').forEach(b => b.addEventListener('click', () => abrirDocumentosViagem(viagens.find(v => v.id === b.dataset.docsViagem))));
 }
 
+// ---------------------------------------------------------------------
+// VIAGENS — em andamento e concluídas (manuais e vindas do Bsoft)
+// ---------------------------------------------------------------------
+let filtroViagens = 'em_andamento';
+const ROTULO_VIAGEM = { em_andamento: ['blue', 'Em andamento'], concluida: ['green', 'Concluída'] };
+
+async function secaoViagens(el){
+  const [viagens, docs, usuarios] = await Promise.all([
+    consultar(sb.from('viagem').select('id, origem, destino, cte_numero, mdfe_numero, status, criado_em, bsoft_manifesto_id, motorista_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa)').order('criado_em', { ascending:false }).limit(500)),
+    consultar(sb.from('documento').select('referente_id').eq('referente_a', 'viagem')),
+    qUsuarios(),
+  ]);
+  const nDocs = {};
+  docs.forEach(d => { nDocs[d.referente_id] = (nDocs[d.referente_id] || 0) + 1; });
+  const emAndamento = viagens.filter(v => v.status === 'em_andamento');
+  const motoristasEmViagem = new Set(emAndamento.map(v => v.motorista_id).filter(Boolean)).size;
+  const doFiltro = filtroViagens === 'todas' ? viagens : viagens.filter(v => v.status === filtroViagens);
+  const nomeMot = (v) => v.motorista ? v.motorista.nome : '';
+  const ordens = [
+    ['recentes', 'Mais recentes primeiro', porData(v => v.criado_em, -1)],
+    ['antigas', 'Mais antigas primeiro', porData(v => v.criado_em, 1)],
+    ['motorista', 'Motorista de A a Z', (a, b) => porTexto(nomeMot)(a, b) || porData(v => v.criado_em, -1)(a, b)],
+    ['placa', 'Placa de A a Z', (a, b) => porTexto(v => v.veiculo ? v.veiculo.placa : 'zzz')(a, b) || porData(v => v.criado_em, -1)(a, b)],
+  ];
+  const textoViagem = (v) => [nomeMot(v), v.veiculo ? v.veiculo.placa : '', v.origem, v.destino, v.mdfe_numero, v.cte_numero, fmtDataHora(v.criado_em)].join(' ');
+  let visiveis = doFiltro;
+
+  el.innerHTML = `
+    <div class="kpi-row tres">
+      ${kpi(emAndamento.length, 'Viagens em andamento', `${motoristasEmViagem} motorista${motoristasEmViagem === 1 ? '' : 's'} em viagem`)}
+      ${kpi(viagens.filter(v => v.bsoft_manifesto_id).length, 'Vindas do Bsoft', 'MDF-e importados com os PDFs')}
+      ${kpi(emAndamento.filter(v => !nDocs[v.id]).length, 'Em andamento sem arquivo', 'Anexe o MDF-e/CT-e em Documentos', emAndamento.some(v => !nDocs[v.id]) ? 'ambar' : 'verde')}
+    </div>
+    <div class="doc-tabs" style="max-width:460px;">
+      ${[['em_andamento', 'Em andamento'], ['concluida', 'Concluídas'], ['todas', 'Todas']].map(([k, l]) => `<button class="${filtroViagens === k ? 'active' : ''}" data-filtro-viagem="${k}">${l} (${k === 'todas' ? viagens.length : viagens.filter(v => v.status === k).length})</button>`).join('')}
+    </div>
+    ${barraLista('viagens', ordens, 'Pesquisar por motorista, placa, MDF-e, CT-e, origem ou destino')}
+    <div id="listaViagens"></div>`;
+
+  function desenhar(){
+    visiveis = aplicarLista('viagens', doFiltro, ordens, textoViagem);
+    const caixa = document.getElementById('listaViagens');
+    caixa.innerHTML = painel(`Viagens (${visiveis.length})`,
+      visiveis.length ? tabela(['Aberta em', 'Motorista', 'Placa', 'Origem → destino', 'MDF-e', 'CT-e', 'Arquivos', 'Situação', ''],
+        visiveis.map(v => { const [cor, txt] = ROTULO_VIAGEM[v.status] || ['grey', v.status]; const n = nDocs[v.id] || 0; return `<tr>
+          <td class="sub">${fmtDataHora(v.criado_em)}${v.bsoft_manifesto_id ? '<div class="sub">Bsoft</div>' : ''}</td>
+          <td>${esc(nomeMot(v) || '—')}</td>
+          <td class="mono">${esc(v.veiculo ? v.veiculo.placa : '—')}</td>
+          <td style="max-width:300px;">${esc(v.origem || '?')} → ${esc(v.destino || '?')}</td>
+          <td class="mono">${esc(v.mdfe_numero || '—')}</td>
+          <td class="mono" style="max-width:140px;">${esc(v.cte_numero || '—')}</td>
+          <td><button class="btn ${n ? 'btn-outline' : 'btn-primary'} btn-sm" data-docs-viagem="${v.id}">${ic('doc', 14)} ${n ? n : 'Anexar'}</button></td>
+          <td>${badge(cor, txt)}</td>
+          <td><button class="btn btn-outline btn-sm" data-status-viagem="${v.id}">${v.status === 'em_andamento' ? 'Concluir' : 'Reabrir'}</button></td></tr>`; }))
+        : vazio(estadoListas.viagens && estadoListas.viagens.busca ? 'Nenhuma viagem encontrada nesta pesquisa.' : filtroViagens === 'em_andamento' ? 'Nenhuma viagem em andamento.' : 'Nenhuma viagem por aqui.'),
+      `<button class="btn btn-primary btn-sm" id="btnNovaViagemSecao">${ic('plus', 15)} Nova viagem</button>${visiveis.length ? botaoExportar('btnCsvViagens') : ''}`);
+    caixa.querySelectorAll('[data-docs-viagem]').forEach(b => b.addEventListener('click', () => abrirDocumentosViagem(viagens.find(v => v.id === b.dataset.docsViagem))));
+    caixa.querySelectorAll('[data-status-viagem]').forEach(b => b.addEventListener('click', async () => {
+      const v = viagens.find(x => x.id === b.dataset.statusViagem);
+      const novo = v.status === 'em_andamento' ? 'concluida' : 'em_andamento';
+      if(!confirm(novo === 'concluida' ? `Concluir a viagem de ${nomeMot(v)} (${v.origem || '?'} → ${v.destino || '?'})?` : 'Reabrir esta viagem? Ela volta a aparecer como viagem atual no app do motorista.')) return;
+      const { error } = await sb.from('viagem').update({ status: novo }).eq('id', v.id);
+      if(error){ alert('Não consegui alterar: ' + error.message); return; }
+      if(window.limparCacheTelas) limparCacheTelas();
+      mostrarToast(novo === 'concluida' ? '✅ Viagem concluída' : 'Viagem reaberta');
+      secaoViagens(el);
+    }));
+    document.getElementById('btnNovaViagemSecao').addEventListener('click', () => abrirNovaViagem(usuarios.filter(u => u.papel === 'motorista' && u.ativo)));
+    const csv = document.getElementById('btnCsvViagens');
+    if(csv) csv.addEventListener('click', () => baixarCSV('viagens', ['Aberta em', 'Motorista', 'Placa', 'Origem', 'Destino', 'MDF-e', 'CT-e', 'Arquivos', 'Situação', 'Vinda do Bsoft'],
+      visiveis.map(v => [fmtDataHora(v.criado_em), nomeMot(v), v.veiculo ? v.veiculo.placa : '', v.origem || '', v.destino || '', v.mdfe_numero || '', v.cte_numero || '', nDocs[v.id] || 0, (ROTULO_VIAGEM[v.status] || ['', v.status])[1], v.bsoft_manifesto_id ? 'Sim' : 'Não'])));
+  }
+  desenhar();
+  ligarBarraLista(el, 'viagens', desenhar);
+  el.querySelectorAll('[data-filtro-viagem]').forEach(b => b.addEventListener('click', () => { filtroViagens = b.dataset.filtroViagem; secaoViagens(el); }));
+}
+
 // ---------- documentos da viagem (CT-e, MDF-e, NF-e...) ----------
 const TIPOS_DOC_VIAGEM = ['CT-e', 'MDF-e', 'NF-e', 'Ordem de coleta', 'Comprovante de entrega', 'Outro'];
 // palpite do tipo pelo nome do arquivo (ex.: "MDFe_123.pdf" → MDF-e); a pessoa pode trocar
@@ -264,7 +342,7 @@ async function abrirDocumentosViagem(v){
     if(erros.length){ document.getElementById('dvErro').textContent = 'Alguns arquivos não subiram: ' + erros.join(' · '); btn.disabled = false; btn.textContent = 'Anexar'; return; }
     mostrarToast(`✅ ${lista.length} arquivo${lista.length > 1 ? 's anexados' : ' anexado'} à viagem`);
     abrirDocumentosViagem(v);
-    if(screen === 'painel') loadEscritorio();
+    if(screen === 'painel' || screen === 'viagens') loadEscritorio();
   });
   document.querySelectorAll('#modalGenerico [data-ver]').forEach(b => b.addEventListener('click', () => verArquivo(b.dataset.ver, docs, 'Viagem ' + rota)));
   document.querySelectorAll('#modalGenerico [data-excluir-doc-viagem]').forEach(b => b.addEventListener('click', async () => {
@@ -720,7 +798,7 @@ async function secaoIntegracao(el){
     ${(resumo.sem_motorista || []).length ? painel('MDF-e sem motorista encontrado (última sincronização)', `<div class="o-panel-body"><div class="l2" style="margin-bottom:8px;">Confira se o CPF do motorista está no cadastro dele (Motoristas → clicar no motorista) ou se a placa está no conjunto certo.</div></div>
       ${tabela(['MDF-e', 'Placa', 'Motorista no Bsoft'], resumo.sem_motorista.map(s => `<tr><td class="mono">${esc(s.manifesto)}</td><td class="mono">${esc(s.placa || '—')}</td><td>${esc(s.motorista_bsoft || '—')}</td></tr>`))}`) : ''}
     ${painel(`Histórico de sincronizações (${logs.length})`, logs.length ? tabela(['Quando', 'Situação', 'Viagens novas', 'Observação'],
-      logs.map(l => `<tr><td class="sub">${fmtDataHora(l.executado_em)}</td><td>${l.status === 'ok' ? badge('green', 'OK') : badge('red', 'Erro')}</td><td>${l.registros_processados ?? 0}</td><td class="sub" style="max-width:480px;">${esc(l.erro || '')}</td></tr>`))
+      logs.map(l => `<tr><td class="sub">${fmtDataHora(l.executado_em)}</td><td>${l.status === 'ok' || l.status === 'sucesso' ? badge('green', 'OK') : badge('red', 'Erro')}</td><td>${l.registros_processados ?? 0}</td><td class="sub" style="max-width:480px;">${esc(l.erro || '')}</td></tr>`))
       : vazio('Nenhuma sincronização ainda.'))}`;
 
   const recarregar = document.getElementById('btnBsoftRecarregar');
