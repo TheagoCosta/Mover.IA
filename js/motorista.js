@@ -1,5 +1,5 @@
 // MOVER.IA — app do motorista (visual do protótipo: abas Início, Jornada,
-// Checklist, Viagem e Mais). Conjunto, jornada, viagem, abastecimento,
+// Checklist e Viagem; o resto abre pelos quadrados do Início). Conjunto, jornada, viagem, abastecimento,
 // documentos e checklist.
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
@@ -152,7 +152,6 @@ const ABAS_MOTORISTA = [
   { k:'jornada', l:'Jornada', i:'clock' },
   { k:'checklist', l:'Checklist', i:'checksq' },
   { k:'viagem', l:'Viagem', i:'truck' },
-  { k:'mais', l:'Mais', i:'dots' },
 ];
 
 function headerPrincipal(titulo, sub, direita = ''){
@@ -219,7 +218,7 @@ async function abrirTelaMotorista(){
     privacidade: loadPrivacidadeMotorista,
   };
   // Início: a consulta única já traz a situação do checklist (sem esperar outra ida ao servidor)
-  const vaiParaInicio = !subtelas[motoristaScreen] && !motoristaScreen.startsWith('emBreve:') && !['jornada', 'checklist', 'viagem', 'mais'].includes(motoristaTab);
+  const vaiParaInicio = !subtelas[motoristaScreen] && !motoristaScreen.startsWith('emBreve:') && !['jornada', 'checklist', 'viagem'].includes(motoristaTab);
   if(vaiParaInicio){ motoristaScreen = 'home'; motoristaTab = 'inicio'; return loadAbaInicio(); }
 
   await atualizarTravaChecklist();
@@ -233,7 +232,6 @@ async function abrirTelaMotorista(){
   if(motoristaTab === 'jornada') return loadAbaJornada();
   if(motoristaTab === 'checklist') return loadChecklistMotorista();
   if(motoristaTab === 'viagem') return loadAbaViagem();
-  if(motoristaTab === 'mais') return loadAbaMais();
   return loadAbaInicio();
 }
 
@@ -399,9 +397,17 @@ function desenharInicio(d){
         ${tile('oficina', 'wrench', 'Oficina', chamadosAbertos ? `${chamadosAbertos} em aberto` : 'Avisar um problema')}
         ${tile('agendamentos', 'cal', 'Agendamentos', proximoAg ? `${agendamentos.length} próximo${agendamentos.length > 1 ? 's' : ''} · ${fmtDataCurta(proximoAg.data_prevista)}` : 'Nenhum marcado')}
         ${tile('capacitacoes', 'award', 'Capacitações', alertas.some(a => a.origem === 'Capacitação') ? 'Renovação pendente' : 'Meus treinamentos')}
+        ${tile('conjunto', 'truck', 'Meu conjunto', cavalo || 'Cavalo e carretas')}
+        ${tile('historicoJornada', 'clock', 'Jornadas anteriores', 'Linha do tempo')}
+        ${tile('notificacoes', 'bell', 'Notificações', naoLidas ? `${naoLidas} não lida${naoLidas > 1 ? 's' : ''}` : 'Avisos do escritório')}
+        ${tile('perfil', 'user', 'Meu perfil', primeiroNome)}
+        ${tile('privacidade', 'lock', 'Meus dados', 'Privacidade')}
+        ${appInstalado() ? '' : `<div class="quick-tile" id="btnInstalarApp">${ic('download', 20)}<div class="lbl">Instalar o app</div><div class="meta">Abre direto da tela inicial</div></div>`}
       </div>`,
   });
   ligarCartaoAvisos();
+  const instalar = document.getElementById('btnInstalarApp');
+  if(instalar) instalar.addEventListener('click', instalarApp);
 }
 
 function saudacaoHorario(){
@@ -747,10 +753,6 @@ async function loadAbaViagem(){
   const viagem = await dadosTela('viagem', carregarViagemAtual, () => { if(motoristaScreen === 'home' && motoristaTab === 'viagem') loadAbaViagem(); });
   // arquivos anexados pelo escritório (CT-e, MDF-e, nota...) — o motorista vê, baixa e compartilha
   const arquivos = viagem ? ((await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'viagem').eq('referente_id', viagem.id).order('tipo')).data || []) : [];
-  const docItem = (nome, numero) => `
-    <div class="list-item"><div class="li-ic">${ic('doc', 16)}</div>
-      <div class="li-body"><div class="li-title">${nome}</div><div class="li-sub">${numero ? 'nº ' + esc(numero) : 'Número não informado pelo escritório'}</div></div>
-      ${numero ? pillStatus('green', 'OK') : pillStatus('amber', 'Pendente')}</div>`;
 
   montarTelaMotorista({
     tab: 'viagem',
@@ -766,9 +768,7 @@ async function loadAbaViagem(){
         </div>
       </div>
       <div class="section-label">Documentos da viagem</div>
-      <div class="card lista">${docItem('CT-e', viagem.cte_numero)}${docItem('MDF-e', viagem.mdfe_numero)}</div>
-      ${arquivos.length ? `<div class="section-label">Arquivos para baixar e compartilhar</div>
-        <div class="card lista">${arquivos.map(d => cardDocumento(d, '', false)).join('')}</div>`
+      ${arquivos.length ? `<div class="card lista">${arquivos.map(d => cardDocumento(d, '', false)).join('')}</div>`
         : `<div class="card-dark-sub" style="margin:-4px 0 14px;">O escritório ainda não anexou os arquivos desta viagem. Quando anexar, eles aparecem aqui para baixar e compartilhar.</div>`}
       <button class="btn btn-primary" id="btnFinalizarViagem">${ic('flag', 16)} Finalizar viagem</button>`
     : `<div class="card em-breve-box"><div class="ic-grande">${ic('truck', 34)}</div><div class="card-dark-title">Nenhuma viagem em andamento</div><div class="card-dark-sub">Quando o escritório abrir uma viagem para você, ela aparece aqui com origem, destino e documentos.</div></div>`,
@@ -786,40 +786,8 @@ async function finalizarViagem(viagemId){
 }
 
 // ---------------------------------------------------------------------
-// Aba MAIS e subtelas
+// Subtelas (abertas pelos quadrados do Início)
 // ---------------------------------------------------------------------
-function loadAbaMais(){
-  const itens = [
-    { ir:'documentos', l:'Documentos', i:'doc', m:'Meus, do veículo e da empresa' },
-    { ir:'conjunto', l:'Meu conjunto', i:'truck', m:'Cavalo, carretas e dolly' },
-    { ir:'abastecimento', l:'Abastecimentos', i:'fuel', m:'Registrar e ver o consumo médio' },
-    { ir:'historicoJornada', l:'Jornadas anteriores', i:'clock', m:'Linha do tempo e assinaturas' },
-    { ir:'oficina', l:'Oficina / Manutenção', i:'wrench', m:'Avisar um problema e acompanhar o conserto' },
-    { ir:'agendamentos', l:'Agendamentos', i:'cal', m:'Revisões, exames e compromissos' },
-    { ir:'capacitacoes', l:'Capacitações', i:'award', m:'Treinamentos e certificados' },
-    { ir:'notificacoes', l:'Notificações', i:'bell', m:'Avisos do escritório e da oficina' },
-    { ir:'perfil', l:'Meu perfil', i:'user', m:usuarioAtual.nome },
-    { ir:'privacidade', l:'Meus dados e privacidade', i:'lock', m:'Ver, baixar ou corrigir seus dados' },
-  ];
-  montarTelaMotorista({
-    tab: 'mais',
-    header: headerPrincipal('Mais', usuarioAtual.nome),
-    conteudo: `${appInstalado() ? '' : `
-      <div class="card lista"><div class="list-item clickable" id="btnInstalarApp">
-        <div class="li-ic">${ic('download', 16)}</div>
-        <div class="li-body"><div class="li-title">Instalar o app no celular</div><div class="li-sub">Abre mais rápido, direto da tela inicial</div></div>
-        <div class="chev">${ic('chev', 16)}</div>
-      </div></div>`}
-      <div class="card lista">${itens.map(it => `
-      <div class="list-item clickable" data-ir="${it.ir}">
-        <div class="li-ic">${ic(it.i, 16)}</div>
-        <div class="li-body"><div class="li-title">${it.l}</div><div class="li-sub">${esc(it.m)}</div></div>
-        <div class="chev">${ic('chev', 16)}</div>
-      </div>`).join('')}</div>`,
-  });
-  const instalar = document.getElementById('btnInstalarApp');
-  if(instalar) instalar.addEventListener('click', instalarApp);
-}
 
 async function buscarDocumentosMotorista(){
   const conjunto = await carregarMeuConjunto();

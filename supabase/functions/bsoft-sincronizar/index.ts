@@ -3,8 +3,9 @@
 //
 // Lê os MDF-e (manifestos) emitidos no Bsoft, acha o motorista no MOVER.IA (pelo CPF ou pela
 // placa do conjunto), cria a viagem no app dele e anexa os PDFs do DAMDFE e dos DACTE — o
-// motorista recebe o aviso e pode baixar/compartilhar. SÓ LÊ do Bsoft (a API não tem ambiente
-// de testes; nada é gravado lá). Documentação: https://docs.bsoft.app
+// motorista recebe o aviso e pode baixar/compartilhar. A sincronização SÓ LÊ do Bsoft (a API não
+// tem ambiente de testes). A única gravação é o abastecimento, um por vez, quando o escritório
+// clica em "Enviar ao Bsoft" e confirma. Documentação: https://docs.bsoft.app
 //
 // Credenciais do Bsoft = segredos desta função, cadastrados pelo Thiago no painel do Supabase
 // (Edge Functions → Secrets): BSOFT_DOMINIO (só o começo de xxx.bsoft.app), BSOFT_USUARIO
@@ -14,6 +15,8 @@
 //   • o escritório logado (gestão da transportadora com a integração habilitada)
 //   • o agendamento do banco (pg_cron), com o segredo da tabela integracao_segredo
 // Ações: status | testar | previa (mostra o que seria importado, sem gravar) | sincronizar
+//        abastecimento_preparar (só lê: acha veículo, motorista, posto, possíveis repetidos)
+//        abastecimento_enviar (grava; só o escritório logado, nunca o agendamento)
 // =====================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -38,7 +41,8 @@ function iguais(a: string, b: string) {
   return d === 0;
 }
 const digitos = (s: unknown) => String(s ?? '').replace(/\D/g, '');
-const placaNorm = (s: unknown) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// "FXV-4I34/SP" (como o Bsoft escreve) e "FXV4I34" viram a mesma placa
+const placaNorm = (s: unknown) => String(s ?? '').toUpperCase().replace(/\/[A-Z]{2}\s*$/, '').replace(/[^A-Z0-9]/g, '');
 const b64utf8 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 const nomeArquivo = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.-]+/g, '_').slice(0, 80);
 
@@ -91,7 +95,10 @@ function criarApi(c: { dominio: string; usuario: string; senha: string }) {
     if (!resp.ok) throw new ErroBsoft(resp.status, dados && typeof dados === 'object' && 'message' in (dados as Record<string, unknown>) ? String((dados as Record<string, unknown>).message) : `erro ${resp.status}`);
     return dados;
   }
-  return { get, consultaPost };
+  // GRAVA no Bsoft (produção, sem ambiente de testes). Só a ação abastecimento_enviar usa, depois que
+  // o escritório confere e confirma na tela.
+  const gravarNoBsoft = consultaPost;
+  return { get, consultaPost, gravarNoBsoft };
 }
 
 // ---------- endereços pelo XML do CT-e ----------
@@ -187,58 +194,138 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true, dominio: `${cred.dominio}.bsoft.app`, veiculo_exemplo: veiculos.length > 0, manifestos_periodo: manifestos.length, dias: cfg.dias_retroativos });
     }
 
-    // diagnóstico: só os NOMES dos campos de um CT-e recente (sem valores), para ajustar a leitura de origem/destino
-    if (acao === 'campos') {
-      const r = await lista(api, '/transporte/v1/conhecimentos', { dataInicio: hojeBrasilia(cfg.dias_retroativos), dataFim: hojeBrasilia(), limit: '0,1' });
-      const c = (r[0] ?? {}) as Record<string, unknown>;
-      const estrutura: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(c)) estrutura[k] = v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v as Record<string, unknown>) : typeof v;
-      return jsonResponse({ ok: true, estrutura });
+    // diagnóstico (SÓ LEITURA): como os abastecimentos já lançados no Bsoft estão preenchidos (nomes dos campos e exemplos sem CPF)
+    if (acao === 'amostra_abastecimentos') {
+      const semDocs = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'string' && /\d{3}\.?\d{3}\.?\d{3}-?\d{2}/.test(v) ? '[cpf]' : v]));
+      const seguro = async (fn: () => Promise<unknown>) => { try { return await fn(); } catch (e) { return { erro: (e as Error).message }; } };
+      const periodo = { dtInicio: hojeBrasilia(10), dtFim: hojeBrasilia() };
+      const [posto, proprios, filtroEquip] = await Promise.all([
+        seguro(() => lista(api, '/manutencao/v1/abastecimentos', { ...periodo, limit: '0,3' })),
+        seguro(() => lista(api, '/manutencao/v1/abastecimentosProprios', { ...periodo, limit: '0,3' })),
+        seguro(() => lista(api, '/manutencao/v1/equipamentos', { equipamento: String(body?.placa ?? ''), limit: '0,5' })),
+      ]);
+      const limpa = (x: unknown) => Array.isArray(x) ? (x as Record<string, unknown>[]).map(semDocs) : x;
+      return jsonResponse({ ok: true, posto: limpa(posto), proprios: limpa(proprios), filtro_equipamento: limpa(filtroEquip) });
     }
 
-    // levantamento (SÓ LEITURA) do que o envio de abastecimento ao Bsoft vai precisar: combustíveis,
-    // tipos de documento, rateios, almoxarifados, quantos veículos e motoristas do MOVER.IA existem lá
-    if (acao === 'opcoes_abastecimento') {
-      const seguro = async (fn: () => Promise<unknown>) => { try { return await fn(); } catch (e) { return { erro: (e as Error).message }; } };
-      const todos = async (caminho: string, params: Record<string, string> = {}) => {
-        const saida: Record<string, unknown>[] = [];
-        for (let p = 0; p < 20; p++) {
-          const lote = await lista(api, caminho, { ...params, limit: `${p * 100},100` });
-          saida.push(...lote);
-          if (lote.length < 100) break;
+    // ---------- abastecimento → Bsoft ----------
+    if (acao === 'abastecimento_preparar' || acao === 'abastecimento_enviar') {
+      if (typeof body?.segredo === 'string') return jsonResponse({ error: 'Só o escritório logado envia abastecimentos.' }, 403);
+      const { data: a } = await admin.from('abastecimento')
+        .select('id, tipo, data, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, posto, nota_numero, bsoft_ref, motorista_id, veiculo:veiculo_id(id, placa)')
+        .eq('id', String(body?.abastecimento_id ?? '')).eq('transportadora_id', tid).maybeSingle();
+      if (!a) return jsonResponse({ ok: false, error: 'Abastecimento não encontrado.' });
+      const ab = a as unknown as { id: string; tipo: string | null; data: string; km: number; litros: number; arla_litros: number | null; preco_litro_diesel: number | null; preco_litro_arla: number | null; posto: string | null; nota_numero: string | null; bsoft_ref: string | null; motorista_id: string | null; veiculo: { id: string; placa: string } | null };
+      const interno = ab.tipo === 'interno';
+      const quando = new Date(new Date(ab.data).getTime() - 3 * 3600000).toISOString();   // horário de Brasília
+      const dia = quando.slice(0, 10);
+
+      if (acao === 'abastecimento_preparar') {
+        const seguro = async <T>(fn: () => Promise<T>, padrao: T) => { try { return await fn(); } catch (_e) { return padrao; } };
+        const todos = async (caminho: string, params: Record<string, string> = {}, paginas = 30) => {
+          const saida: Record<string, unknown>[] = [];
+          for (let p = 0; p < paginas; p++) {
+            const lote = await lista(api, caminho, { ...params, limit: `${p * 100},100` });
+            saida.push(...lote);
+            if (lote.length < 100) break;
+          }
+          return saida;
+        };
+        // veículo: tenta o filtro pela placa; se não vier, procura na lista inteira
+        const acharEquipamento = async () => {
+          if (!ab.veiculo) return null;
+          const alvo = placaNorm(ab.veiculo.placa);
+          const ok = (e: Record<string, unknown>) => placaNorm(e.equipamento) === alvo;
+          let e = (await seguro(() => lista(api, '/manutencao/v1/equipamentos', { equipamento: ab.veiculo!.placa, limit: '0,20' }), [])).find(ok);
+          if (!e) e = (await todos('/manutencao/v1/equipamentos')).find(ok);
+          return e ? { id: String(e.id), nome: String(e.equipamento) } : null;
+        };
+        const acharMotorista = async () => {
+          if (!ab.motorista_id) return null;
+          const { data: p } = await admin.from('motorista_perfil').select('cpf').eq('usuario_id', ab.motorista_id).maybeSingle();
+          const cpf = digitos(p?.cpf);
+          if (cpf.length !== 11) return null;
+          const r = await seguro(() => lista(api, '/pessoas/v1/pessoas/fisicas', { grupo: 'motoristas', cpf }), []);
+          const m = r.find(x => digitos(x.cpf) === cpf);
+          return m ? { id: String(m.id), nome: String(m.nome ?? '') } : null;
+        };
+        const [equipamento, motorista, combustiveis, almoxarifados, fornecedores, lancados] = await Promise.all([
+          acharEquipamento(), acharMotorista(),
+          seguro(() => lista(api, '/manutencao/v1/combustiveis', {}), []),
+          interno ? seguro(() => todos('/estoque/v1/almoxarifados'), []) : Promise.resolve([]),
+          seguro(() => todos('/pessoas/v1/pessoas/juridicas', { grupo: 'fornecedores' }, 10), []),
+          seguro(() => lista(api, interno ? '/manutencao/v1/abastecimentosProprios' : '/manutencao/v1/abastecimentos', { dtInicio: dia, dtFim: dia, limit: '0,200' }), []),
+        ]);
+        const nomeForn = (f: Record<string, unknown>) => String(f.nomeFantasia || f.razaoSocial || f.nome || '').trim();
+        // sugestão de posto: o fornecedor com mais palavras em comum com o que o motorista digitou
+        const palavras = (s: string) => new Set(s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().split(/[^A-Z0-9]+/).filter(w => w.length >= 3 && !['LTDA', 'POSTO', 'POSTOS', 'AUTO', 'REDE', 'COMERCIO'].includes(w)));
+        let sugestao: string | null = null;
+        if (!interno && ab.posto) {
+          const alvo = palavras(ab.posto);
+          let melhor = 0;
+          for (const f of fornecedores) {
+            const n = [...palavras(nomeForn(f) + ' ' + String(f.razaoSocial ?? ''))].filter(w => alvo.has(w)).length;
+            if (n > melhor) { melhor = n; sugestao = String(f.id); }
+          }
         }
-        return saida;
-      };
-      const [combustiveis, tiposDoc, rateios, almoxarifados, equipamentos, motoristasBsoft, fornecedores] = await Promise.all([
-        seguro(() => lista(api, '/manutencao/v1/combustiveis', {})),
-        seguro(() => api.get('/financeiro/v1/tiposDocumentos')),
-        seguro(() => todos('/financeiro/v1/rateios')),
-        seguro(() => todos('/estoque/v1/almoxarifados')),
-        seguro(() => todos('/manutencao/v1/equipamentos')),
-        seguro(() => todos('/pessoas/v1/pessoas/fisicas', { grupo: 'motoristas' })),
-        seguro(() => todos('/pessoas/v1/pessoas/juridicas', { grupo: 'fornecedores' })),
-      ]);
-      const [{ data: nossosVeiculos }, { data: nossosPerfis }, { data: nossosMot }] = await Promise.all([
-        admin.from('veiculo').select('placa, tipo').eq('transportadora_id', tid).eq('ativo', true),
-        admin.from('motorista_perfil').select('usuario_id, cpf'),
-        admin.from('usuario').select('id').eq('transportadora_id', tid).eq('papel', 'motorista').eq('ativo', true),
-      ]);
-      const placasEquip = new Set((Array.isArray(equipamentos) ? equipamentos : []).map(e => placaNorm((e as Record<string, unknown>).equipamento)));
-      const cavalos = ((nossosVeiculos ?? []) as { placa: string; tipo: string }[]).filter(v => v.tipo === 'cavalo');
-      const cpfsBsoft = new Set((Array.isArray(motoristasBsoft) ? motoristasBsoft : []).map(m => digitos((m as Record<string, unknown>).cpf)));
-      const idsMot = new Set(((nossosMot ?? []) as { id: string }[]).map(m => m.id));
-      const cpfsNossos = ((nossosPerfis ?? []) as { usuario_id: string; cpf: string | null }[]).filter(p => idsMot.has(p.usuario_id) && digitos(p.cpf).length === 11).map(p => digitos(p.cpf));
-      return jsonResponse({
-        ok: true,
-        combustiveis, tipos_documento: tiposDoc,
-        rateios: Array.isArray(rateios) ? (rateios as Record<string, unknown>[]).map(r => ({ cod: r.codRateio, descricao: r.descricao })) : rateios,
-        almoxarifados: Array.isArray(almoxarifados) ? (almoxarifados as Record<string, unknown>[]).map(a => ({ id: a.id, descricao: a.descricao ?? a.nome })) : almoxarifados,
-        fornecedores: Array.isArray(fornecedores) ? { total: fornecedores.length, nomes: (fornecedores as Record<string, unknown>[]).map(f => f.nomeFantasia || f.razaoSocial).slice(0, 80) } : fornecedores,
-        equipamentos_total: Array.isArray(equipamentos) ? equipamentos.length : equipamentos,
-        cavalos_mover: cavalos.length, cavalos_achados_no_bsoft: cavalos.filter(v => placasEquip.has(placaNorm(v.placa))).length,
-        cavalos_nao_achados: cavalos.filter(v => !placasEquip.has(placaNorm(v.placa))).map(v => v.placa),
-        motoristas_mover: cpfsNossos.length, motoristas_achados_no_bsoft: cpfsNossos.filter(c => cpfsBsoft.has(c)).length,
-      });
+        // já lançados no Bsoft para o mesmo veículo no mesmo dia (no posto o veículo vem em "equipamento"; nos próprios, em "descricao")
+        const repetidos = equipamento ? lancados.filter(x => placaNorm(x.equipamento ?? x.descricao) === placaNorm(equipamento.nome) && String(x.dtAbastecimento ?? '').slice(0, 10) === dia)
+          .map(x => ({ numero: x.codigo_agrupamento ?? x.numeroControle ?? x.id, litros: x.ltsAbastecidos, usuario: x.usuario ?? null })) : [];
+        return jsonResponse({
+          ok: true, interno, ja_enviado: ab.bsoft_ref, dia,
+          equipamento, motorista,
+          combustiveis: combustiveis.map(c => ({ id: String(c.id ?? c.codigo ?? ''), nome: String(c.descricao ?? c.combustivel ?? c.nome ?? '') })).filter(c => c.id),
+          almoxarifados: almoxarifados.map(x => ({ id: String(x.id), nome: String(x.descricao ?? x.nome ?? '') })),
+          fornecedores: fornecedores.map(f => ({ id: String(f.id), nome: nomeForn(f), cidade: f.cidade ?? null, uf: f.uf ?? f.estado ?? null })).filter(f => f.id && f.nome),
+          sugestao_fornecedor: sugestao, repetidos,
+        });
+      }
+
+      // abastecimento_enviar: grava de verdade no Bsoft
+      if (ab.bsoft_ref) return jsonResponse({ ok: false, error: 'Este abastecimento já foi enviado ao Bsoft (' + ab.bsoft_ref + ').' });
+      const d = (body?.dados ?? {}) as Record<string, unknown>;
+      const txt = (v: unknown) => String(v ?? '').trim();
+      const num = (v: unknown) => { const n = Number(String(v ?? '').replace(',', '.')); return isFinite(n) && n > 0 ? n : null; };
+      if (!/^\d+$/.test(txt(d.equipamentos_id))) return jsonResponse({ ok: false, error: 'Veículo não encontrado no Bsoft.' });
+      if (!interno && !/^\d+$/.test(txt(d.fornecedor_id))) return jsonResponse({ ok: false, error: 'Escolha o posto (fornecedor).' });
+      const itens = [{ rotulo: 'diesel', litros: Number(ab.litros), comb: txt(d.combustivel_id), almox: txt(d.almoxarifado_id), preco: interno ? num(d.valor_unitario) : Number(ab.preco_litro_diesel) || null }];
+      if (Number(ab.arla_litros) > 0) itens.push({ rotulo: 'arla', litros: Number(ab.arla_litros), comb: txt(d.combustivel_arla_id), almox: txt(d.almoxarifado_arla_id), preco: interno ? num(d.valor_unitario_arla) : Number(ab.preco_litro_arla) || null });
+      for (const it of itens) {
+        if (!/^\d+$/.test(it.comb)) return jsonResponse({ ok: false, error: `Escolha o combustível do ${it.rotulo}.` });
+        if (interno && !/^\d+$/.test(it.almox)) return jsonResponse({ ok: false, error: `Escolha o almoxarifado do ${it.rotulo}.` });
+        if (!interno && !it.preco) return jsonResponse({ ok: false, error: `Falta o preço por litro do ${it.rotulo} (corrija o abastecimento antes).` });
+      }
+      const programado = ['S', 'N', 'P', 'SP'].includes(txt(d.programado)) ? txt(d.programado) : 'SP';
+      const comuns: Record<string, unknown> = { equipamentos_id: txt(d.equipamentos_id), leitura: Number(ab.km), tanqueCheio: d.tanque_cheio === false ? 'N' : 'S', observacao: 'Enviado pelo MOVER.IA' };
+      if (/^\d+$/.test(txt(d.motorista_id))) comuns.operadorMotorista_id = txt(d.motorista_id);
+      if (/^\d+$/.test(txt(d.fornecedor_id))) comuns.fornecedor_id = txt(d.fornecedor_id);
+      if (txt(d.cidade)) comuns.localAbastecimento = txt(d.cidade).slice(0, 60);
+      if (/^[A-Za-z]{2}$/.test(txt(d.uf))) comuns.ufAbastecimento = txt(d.uf).toUpperCase();
+      const refs: string[] = [];
+      try {
+        for (const it of itens) {
+          const corpo: Record<string, unknown> = { ...comuns, combustivel_id: it.comb, ltsAbastecidos: it.litros };
+          if (it.preco) { corpo.valorUnitario = Math.round(it.preco * 1000) / 1000; corpo.valorAbastecimento = Math.round(it.litros * it.preco * 100) / 100; }
+          if (interno) {
+            Object.assign(corpo, { dtAbastecimento: `${dia} ${quando.slice(11, 16)}`, almoxarifados_id: it.almox });
+            if (!comuns.localAbastecimento) corpo.localAbastecimento = 'INTERNO';
+          } else {
+            Object.assign(corpo, { dtAbastecimento: dia, programado });
+            if (ab.nota_numero) corpo.nroDoc = String(ab.nota_numero).slice(0, 30);
+            if (txt(d.tipo_documento)) corpo.tipoDocumento_id = txt(d.tipo_documento);
+            if (/^\d+$/.test(txt(d.cod_rateio))) corpo.cod_rateio = txt(d.cod_rateio);
+          }
+          const r = await api.gravarNoBsoft(interno ? '/manutencao/v1/abastecimentosProprios' : '/manutencao/v1/abastecimentos', corpo) as Record<string, unknown> | null;
+          const cod = r ? (r.codAbastecimento ?? r.id ?? r.codigo ?? '') : '';
+          refs.push(`${interno ? 'proprio' : 'posto'}${it.rotulo === 'arla' ? '-arla' : ''}:${cod || '?'}`);
+        }
+      } catch (e) {
+        if (refs.length) await admin.from('abastecimento').update({ bsoft_ref: refs.join(' ').slice(0, 200), bsoft_enviado_em: new Date().toISOString() }).eq('id', ab.id);
+        const msg = (e as Error).message;
+        return jsonResponse({ ok: false, error: refs.length ? `O diesel foi lançado (${refs.join(' ')}), mas o Arla deu erro: ${msg}. Lance o Arla direto no Bsoft.` : 'O Bsoft recusou: ' + msg });
+      }
+      await admin.from('abastecimento').update({ bsoft_ref: refs.join(' ').slice(0, 200), bsoft_enviado_em: new Date().toISOString() }).eq('id', ab.id);
+      return jsonResponse({ ok: true, bsoft_ref: refs.join(' ') });
     }
 
     if (acao !== 'previa' && acao !== 'sincronizar') return jsonResponse({ error: 'Ação inválida.' }, 400);
@@ -290,7 +377,7 @@ Deno.serve(async (req: Request) => {
       return { motorista: null, por: null };
     };
 
-    const resumo = { periodo: `${hojeBrasilia(cfg.dias_retroativos)} a ${hojeBrasilia()}`, manifestos: manifestos.length, criadas: 0, ja_importadas: 0, pdfs: 0, pendentes: 0, sem_motorista: [] as unknown[], erros: [] as string[], itens: [] as unknown[] };
+    const resumo = { periodo: `${hojeBrasilia(cfg.dias_retroativos)} a ${hojeBrasilia()}`, manifestos: manifestos.length, criadas: 0, ja_importadas: 0, pdfs: 0, pendentes: 0, fora_da_frota: 0, sem_motorista: [] as unknown[], erros: [] as string[], itens: [] as unknown[] };
     let novasNestaRodada = 0;
 
     for (const m of manifestos) {
@@ -299,12 +386,15 @@ Deno.serve(async (req: Request) => {
       const { motorista, por } = achar(m);
       const chaves = ((m.documentos as Record<string, unknown>)?.cte as { chaveAcesso?: string }[] ?? []).map(c => c.chaveAcesso).filter(Boolean).slice(0, MAX_CTES_POR_MANIFESTO) as string[];
       const viagemExistente = viagemPorManifesto.get(idBsoft);
-      const situacao = viagemExistente ? 'ja_importada' : motorista ? 'nova' : 'sem_motorista';
+      // só a frota da transportadora: MDF-e com cavalo que não está cadastrado no MOVER.IA (terceiros/agregados) fica de fora
+      const daFrota = veiculoPorPlaca.has(placaNorm(m.placa));
+      const situacao = viagemExistente ? 'ja_importada' : !daFrota ? 'fora_da_frota' : motorista ? 'nova' : 'sem_motorista';
       const item = { manifesto: m.nro, emissao: m.dtEmissao, placa: m.placa, motorista: motorista?.nome ?? null, motorista_bsoft: m.motorista ?? null, achado_por: por, ctes: chaves.length, situacao };
       resumo.itens.push(item);
       if (situacao === 'ja_importada') resumo.ja_importadas++;
+      if (situacao === 'fora_da_frota') resumo.fora_da_frota++;
       if (situacao === 'sem_motorista') resumo.sem_motorista.push({ manifesto: m.nro, placa: m.placa, motorista_bsoft: m.motorista ?? null });
-      if (!gravar || situacao === 'sem_motorista') continue;
+      if (!gravar || situacao === 'sem_motorista' || situacao === 'fora_da_frota') continue;
       if (situacao === 'nova' && novasNestaRodada >= MAX_NOVAS_POR_RODADA) { resumo.pendentes++; continue; }
       if (Date.now() - inicioRodada > 100000) { resumo.pendentes++; continue; }   // perto do limite de tempo: o resto vai na próxima rodada
 

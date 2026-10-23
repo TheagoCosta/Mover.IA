@@ -98,7 +98,7 @@
       { id:'ag2', tipo:'Exame toxicológico', data_prevista:dia(-2), hora:null, local:'Clínica LabSaúde', status:'pendente', observacao:'Levar documento', ciente_em:iso(3000), concluido_em:null, motorista_id:'u-car', veiculo_id:null, motorista:{ nome:U.car.nome }, veiculo:null },
       { id:'ag3', tipo:'Troca de óleo', data_prevista:dia(-20), hora:null, local:null, status:'concluido', observacao:null, ciente_em:null, concluido_em:iso(20000), motorista_id:null, veiculo_id:'v5', motorista:null, veiculo:{ placa:'GBW-8C41' } },
       { id:'ag4', tipo:'Folga', data_prevista:dia(5), data_fim:dia(8), hora:null, local:null, status:'pendente', observacao:'Retorna na segunda', ciente_em:null, concluido_em:null, motorista_id:'u-car', veiculo_id:null, motorista:{ nome:U.car.nome }, veiculo:null },
-    ], calendario_licenciamento: [], motorista_perfil: [],
+    ], calendario_licenciamento: [], motorista_perfil: [], integracao_bsoft: [{ transportadora_id:'t1' }],
   };
 
   const papel = new URLSearchParams(location.search).get('papel') || 'admin_transportadora';

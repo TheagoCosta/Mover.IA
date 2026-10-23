@@ -425,9 +425,16 @@ async function criarViagem(e){
 let filtroAbastecimento = 'todos';
 
 async function secaoAbastecimento(el){
-  const registros = await consultar(sb.from('abastecimento')
-    .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
-    .order('data', { ascending:false }).limit(1000));
+  const [registros, comBsoft] = await Promise.all([
+    consultar(sb.from('abastecimento')
+      .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, bsoft_ref, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
+      .order('data', { ascending:false }).limit(1000)),
+    sb.from('integracao_bsoft').select('transportadora_id').maybeSingle().then(r => !!r.data),
+  ]);
+  // coluna do Bsoft: botão para enviar, ou a marca de que já foi
+  const celulaBsoft = (a) => !comBsoft || !a.tipo ? '' : a.bsoft_ref
+    ? `<span title="${esc(a.bsoft_ref)}">${badge('green', 'No Bsoft')}</span>`
+    : `<button class="btn btn-outline btn-sm" data-bsoft-abast="${a.id}" title="Lançar este abastecimento no Bsoft">Enviar ao Bsoft</button>`;
   const trintaDias = new Date(Date.now() - 30 * 86400000);
   const recentes = registros.filter(a => new Date(a.data) >= trintaDias);
   const mediaGeral = consumoDe(registros).media;   // km rodados ÷ litros (ver js/consumo.js)
@@ -480,7 +487,7 @@ async function secaoAbastecimento(el){
     ${painel('Consumo médio por veículo',
       veiculos.length ? tabela(['Placa', 'Média diesel', 'Média Arla', 'Abastecimentos', 'Diesel (total)', 'Arla (total)', 'Último km'],
         veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td><b>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</b></td><td>${v.mediaArla ? fmtNum(v.mediaArla, 1) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td>${v.arla ? fmtNum(v.arla, 0) + ' L' : '<span class="sub">—</span>'}</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
-        : vazio('Nenhum abastecimento registrado ainda. Os motoristas registram pelo app, em Mais → Abastecimentos.'),
+        : vazio('Nenhum abastecimento registrado ainda. Os motoristas registram pelo app, no quadro Abastecimento do Início.'),
       veiculos.length ? botaoExportar('btnCsvConsumo') : '')}
     <div class="doc-tabs" style="max-width:420px;">
       ${[['todos', 'Todos'], ['interno', 'Internos'], ['externo', 'Externos']].map(([k, l]) => `<button class="${filtroAbastecimento === k ? 'active' : ''}" data-filtro-abast="${k}">${l}</button>`).join('')}
@@ -498,11 +505,12 @@ async function secaoAbastecimento(el){
           <td>${a.arla_litros ? fmtNum(a.arla_litros, 1) + ' L' : '<span class="sub">—</span>'}${a.preco_litro_arla ? `<div class="sub">${fmtReais(a.preco_litro_arla)}/L</div>` : ''}${a.media_arla_calculada ? `<div class="sub">${fmtNum(a.media_arla_calculada, 1)} km/l</div>` : ''}</td>
           <td>${a.media_calculada ? fmtNum(a.media_calculada, 2) + ' km/l' : '<span class="sub">—</span>'}</td>
           <td>${valor ? fmtReais(valor) : '<span class="sub">—</span>'}</td><td>${origem(a)}</td>
-          <td><button class="o-dl-btn" data-editar-abast="${a.id}" title="Corrigir ou excluir">${ic('gear', 15)}</button></td></tr>`; }))
+          <td style="white-space:nowrap;">${celulaBsoft(a)} <button class="o-dl-btn" data-editar-abast="${a.id}" title="Corrigir ou excluir">${ic('gear', 15)}</button></td></tr>`; }))
         : vazio(doFiltro.length ? 'Nenhum abastecimento encontrado nesta pesquisa.' : 'Nada por aqui ainda.'),
       visiveis.length ? botaoExportar('btnCsvAbastecimentos') : '')}`;
     ligarCsvAbast();
     caixa.querySelectorAll('[data-editar-abast]').forEach(b => b.addEventListener('click', () => abrirEditarAbastecimento(registros.find(a => a.id === b.dataset.editarAbast), el)));
+    caixa.querySelectorAll('[data-bsoft-abast]').forEach(b => b.addEventListener('click', () => abrirEnviarBsoft(registros.find(a => a.id === b.dataset.bsoftAbast), el)));
   }
 
   el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
@@ -583,6 +591,109 @@ function abrirEditarAbastecimento(a, el){
     if(error){ erro.textContent = 'Não consegui salvar: ' + error.message; btn.disabled = false; btn.textContent = 'Salvar correção'; return; }
     if(window.limparCacheTelas) limparCacheTelas();
     fecharModal(); mostrarToast('✅ Abastecimento corrigido'); secaoAbastecimento(el);
+  });
+}
+
+// ---------- envio de um abastecimento ao Bsoft ----------
+// Lança de verdade no Bsoft (o Bsoft não tem ambiente de testes e o lançamento vai para o financeiro):
+// primeiro consulta (veículo, motorista, posto, se já existe lançamento no dia), o escritório confere e confirma.
+const ESCOLHAS_BSOFT = 'moveria_bsoft_abast';
+function lerEscolhasBsoft(){ try{ return JSON.parse(localStorage.getItem(ESCOLHAS_BSOFT) || '{}'); } catch(e){ return {}; } }
+function guardarEscolhasBsoft(v){ try{ localStorage.setItem(ESCOLHAS_BSOFT, JSON.stringify(v)); } catch(e){} }
+
+async function abrirEnviarBsoft(a, el){
+  if(!a) return;
+  abrirModal(`Enviar ao Bsoft — ${a.veiculo ? a.veiculo.placa : ''} · ${fmtDataHora(a.data)}`, `<div id="ebCorpo" class="l2">Consultando o Bsoft (veículo, motorista e postos)... pode levar alguns segundos.</div>`);
+  let r;
+  try{ r = await chamarBsoft('abastecimento_preparar', { abastecimento_id: a.id }); }
+  catch(e){ r = { ok: false, error: e.message }; }
+  const corpo = document.getElementById('ebCorpo');
+  if(!corpo) return;
+  if(!r || !r.ok){ corpo.innerHTML = `<div class="err">${esc((r && r.error) || 'Não consegui consultar o Bsoft.')}</div>`; return; }
+  if(r.ja_enviado){ corpo.innerHTML = `Este abastecimento já foi enviado ao Bsoft (${esc(r.ja_enviado)}).`; return; }
+
+  const interno = r.interno, temArla = Number(a.arla_litros) > 0;
+  const salvo = lerEscolhasBsoft();
+  const primeiro = (lista, salvoId, ...testes) => (lista.find(x => x.id === salvoId) || testes.map(t => lista.find(x => t.test(x.nome))).find(Boolean) || {}).id || '';
+  const opcoes = (lista, sel) => `<option value="">— escolha —</option>` + lista.map(x => `<option value="${esc(x.id)}" ${x.id === sel ? 'selected' : ''}>${esc(x.nome)}</option>`).join('');
+  const combDiesel = primeiro(r.combustiveis, salvo.comb, /^DIESEL S-?10$/i, /S-?10/i, /DIESEL/i);
+  const combArla = primeiro(r.combustiveis, salvo.combArla, /ARLA/i);
+  const almDiesel = primeiro(r.almoxarifados, salvo.alm, /DIESEL/i);
+  const almArla = primeiro(r.almoxarifados, salvo.almArla, /ARLA/i);
+  const fornecedores = [...r.fornecedores].sort((x, y) => x.nome.localeCompare(y.nome));
+  const fornSel = r.sugestao_fornecedor || '';
+  const campo = (id, rotulo, html) => `<div class="field-row" style="margin:0;"><label for="${id}">${rotulo}</label>${html}</div>`;
+  const litros = (n) => Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 }) + ' L';
+
+  corpo.innerHTML = `
+    <div class="o-banner" style="margin-bottom:12px;">${ic('alert', 18)}<div class="txt"><b>Isto lança de verdade no Bsoft</b>O abastecimento entra no Bsoft${interno ? ' (Abastecimentos Próprios)' : ' (Abastecimentos de posto) e no financeiro'}. Confira antes de enviar.</div></div>
+    ${r.repetidos.length ? `<div class="err" style="margin-bottom:10px;">Já existe no Bsoft lançamento deste veículo neste dia: ${r.repetidos.map(x => `nº ${esc(x.numero)} — ${litros(x.litros)}${x.usuario ? ' (' + esc(x.usuario) + ')' : ''}`).join('; ')}. Confira para não lançar em dobro.</div>` : ''}
+    <div class="l2" style="margin-bottom:10px;">
+      Veículo no Bsoft: ${r.equipamento ? `<b>${esc(r.equipamento.nome)}</b>` : '<b style="color:var(--red-600,#c0392b);">não encontrado — cadastre a placa no Bsoft</b>'}<br>
+      Motorista no Bsoft: ${r.motorista ? `<b>${esc(r.motorista.nome)}</b>` : 'não encontrado (vai sem motorista)'}<br>
+      Km: <b>${Number(a.km).toLocaleString('pt-BR')}</b> · Diesel: <b>${litros(a.litros)}</b>${temArla ? ` · Arla: <b>${litros(a.arla_litros)}</b>` : ''}${!interno && a.nota_numero ? ` · Nota: <b>${esc(a.nota_numero)}</b>` : ''}
+    </div>
+    <div class="o-form-grid">
+      ${campo('ebComb', 'Combustível do diesel', `<select id="ebComb">${opcoes(r.combustiveis, combDiesel)}</select>`)}
+      ${interno ? campo('ebAlm', 'Almoxarifado do diesel', `<select id="ebAlm">${opcoes(r.almoxarifados, almDiesel)}</select>`)
+        + campo('ebValor', 'R$/litro diesel (opcional)', `<input type="text" inputmode="decimal" id="ebValor" placeholder="vazio = o Bsoft calcula">`) : ''}
+      ${temArla ? campo('ebCombArla', 'Combustível do Arla', `<select id="ebCombArla">${opcoes(r.combustiveis, combArla)}</select>`) : ''}
+      ${temArla && interno ? campo('ebAlmArla', 'Almoxarifado do Arla', `<select id="ebAlmArla">${opcoes(r.almoxarifados, almArla)}</select>`)
+        + campo('ebValorArla', 'R$/litro Arla (opcional)', `<input type="text" inputmode="decimal" id="ebValorArla" placeholder="vazio = o Bsoft calcula">`) : ''}
+      ${campo('ebTanque', 'Tanque cheio', `<select id="ebTanque"><option value="S">Sim</option><option value="N">Não</option></select>`)}
+      ${interno ? '' : campo('ebProg', 'Tipo de pagamento', `<select id="ebProg">
+        ${[['SP', 'Sem programação'], ['S', 'Pago pelo motorista'], ['N', 'Programar pagamento']].map(([k, l]) => `<option value="${k}" ${(salvo.prog || 'SP') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
+    </div>
+    ${interno ? '' : `
+      <div class="field-row" style="margin-top:10px;"><label for="ebBuscaPosto">Posto (fornecedor no Bsoft)${a.posto ? ` — o motorista escreveu: <b>${esc(a.posto)}</b>` : ''}</label>
+        <input type="text" id="ebBuscaPosto" placeholder="Pesquisar posto pelo nome">
+        <select id="ebPosto" size="6" style="margin-top:6px; width:100%;">${fornecedores.map(f => `<option value="${esc(f.id)}" ${f.id === fornSel ? 'selected' : ''}>${esc(f.nome)}${f.cidade ? ' — ' + esc(f.cidade) : ''}</option>`).join('')}</select></div>
+      <div class="o-form-grid">
+        ${campo('ebCidade', 'Cidade do abastecimento', `<input type="text" id="ebCidade">`)}
+        ${campo('ebUf', 'UF', `<input type="text" id="ebUf" maxlength="2" style="text-transform:uppercase;">`)}
+      </div>`}
+    <div class="err" id="ebErro"></div>
+    <button type="button" id="btnEnviarBsoft" style="margin-top:12px;" ${r.equipamento ? '' : 'disabled'}>Enviar ao Bsoft</button>`;
+
+  const $ = (id) => document.getElementById(id);
+  const val = (id) => $(id) ? $(id).value.trim() : '';
+  const posto = $('ebPosto');
+  if(posto){
+    const preencherLocal = () => { const f = fornecedores.find(x => x.id === posto.value); if(f){ if(f.cidade && !val('ebCidade')) $('ebCidade').value = f.cidade; if(f.uf && !val('ebUf')) $('ebUf').value = f.uf; } };
+    posto.addEventListener('change', preencherLocal);
+    preencherLocal();
+    if(posto.selectedOptions[0]) posto.selectedOptions[0].scrollIntoView({ block: 'nearest' });
+    $('ebBuscaPosto').addEventListener('input', () => {
+      const t = textoBusca($('ebBuscaPosto').value);
+      [...posto.options].forEach(o => { o.hidden = t && !textoBusca(o.textContent).includes(t); });
+    });
+  }
+  $('btnEnviarBsoft').addEventListener('click', async () => {
+    const erro = $('ebErro'), btn = $('btnEnviarBsoft');
+    const dados = {
+      equipamentos_id: r.equipamento ? r.equipamento.id : '', motorista_id: r.motorista ? r.motorista.id : '',
+      combustivel_id: val('ebComb'), combustivel_arla_id: val('ebCombArla'),
+      almoxarifado_id: val('ebAlm'), almoxarifado_arla_id: val('ebAlmArla'),
+      valor_unitario: val('ebValor'), valor_unitario_arla: val('ebValorArla'),
+      tanque_cheio: val('ebTanque') !== 'N', programado: val('ebProg'),
+      fornecedor_id: posto ? posto.value : '', cidade: val('ebCidade'), uf: val('ebUf'),
+    };
+    if(!dados.combustivel_id || (temArla && !dados.combustivel_arla_id)){ erro.textContent = 'Escolha o combustível.'; return; }
+    if(interno && (!dados.almoxarifado_id || (temArla && !dados.almoxarifado_arla_id))){ erro.textContent = 'Escolha o almoxarifado.'; return; }
+    if(!interno && !dados.fornecedor_id){ erro.textContent = 'Escolha o posto na lista.'; return; }
+    if(!confirm(`Lançar no Bsoft o abastecimento de ${a.veiculo ? a.veiculo.placa : ''} (${litros(a.litros)} de diesel${temArla ? ' + ' + litros(a.arla_litros) + ' de Arla' : ''})?\n\nIsto grava de verdade no Bsoft.`)) return;
+    guardarEscolhasBsoft({ comb: dados.combustivel_id, combArla: dados.combustivel_arla_id || salvo.combArla, alm: dados.almoxarifado_id || salvo.alm, almArla: dados.almoxarifado_arla_id || salvo.almArla, prog: dados.programado || salvo.prog });
+    btn.disabled = true; btn.textContent = 'Enviando...'; erro.textContent = '';
+    let resp;
+    try{ resp = await chamarBsoft('abastecimento_enviar', { abastecimento_id: a.id, dados }); }
+    catch(e){ resp = { ok: false, error: e.message }; }
+    if(!resp || !resp.ok){
+      erro.textContent = (resp && resp.error) || 'Não consegui enviar.';
+      btn.disabled = false; btn.textContent = 'Enviar ao Bsoft';
+      if(resp && /foi lançado/.test(resp.error || '')) secaoAbastecimento(el);
+      return;
+    }
+    fecharModal(); mostrarToast('✅ Lançado no Bsoft'); secaoAbastecimento(el);
   });
 }
 
@@ -750,17 +861,17 @@ async function abrirDetalheChecklist(checklist, aoExcluir = () => loadEscritorio
 // INTEGRAÇÃO (Bloco 5 do plano)
 // ---------------------------------------------------------------------
 // Fala com a função do servidor (supabase/functions/bsoft-sincronizar). Ela lê o Bsoft — nada é gravado lá.
-async function chamarBsoft(acao){
+async function chamarBsoft(acao, extra = {}){
   const { data } = await sb.auth.getSession();
   const token = data && data.session ? data.session.access_token : null;
   if(!token) throw new Error('Sessão expirada — atualize a página.');
   const resp = await fetch(`${SUPABASE_URL}/functions/v1/bsoft-sincronizar`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
-    body: JSON.stringify({ acao }),
+    body: JSON.stringify({ ...extra, acao }),
   });
   return resp.json();
 }
-const ROTULO_SITUACAO_BSOFT = { nova: ['blue', 'Será importada'], ja_importada: ['green', 'Já no app'], sem_motorista: ['amber', 'Motorista não encontrado'] };
+const ROTULO_SITUACAO_BSOFT = { nova: ['blue', 'Será importada'], ja_importada: ['green', 'Já no app'], sem_motorista: ['amber', 'Motorista não encontrado'], fora_da_frota: ['grey', 'Fora da frota (não importa)'] };
 let resultadoBsoft = null;   // último teste/prévia/sincronização feito nesta tela
 
 async function secaoIntegracao(el){
