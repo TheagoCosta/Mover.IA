@@ -73,7 +73,7 @@
       { id:'k1', criado_em:iso(300), motorista_id:'u-car', respostas:[...Array(22)].map((_, i) => ({ item_id:'i' + (i + 1), resposta: i === 2 ? 'bad' : 'ok' })), motorista:{ nome:U.car.nome }, conjunto:{ id:'c1', conjunto_item:conjunto[0].conjunto_item } },
       { id:'k2', criado_em:iso(3000), motorista_id:'u-car', respostas:[...Array(22)].map((_, i) => ({ item_id:'i' + (i + 1), resposta:'ok' })), motorista:{ nome:U.car.nome }, conjunto:{ id:'c1', conjunto_item:conjunto[0].conjunto_item } },
     ],
-    viagem: [{ id:'vg1', origem:'Paulínia/SP', destino:'Curitiba/PR', cte_numero:'4512', mdfe_numero:null, status:'em_andamento', criado_em:iso(500), motorista_id:'u-car', motorista:{ nome:U.car.nome } }],
+    viagem: [{ id:'vg1', origem:'Paulínia/SP', destino:'Curitiba/PR', cte_numero:'4512', mdfe_numero:null, origem_endereco:'Av. Exemplo, 100 - Centro - Paulínia/SP', destino_endereco:'Rua Teste, 50 - Curitiba/PR', status:'em_andamento', criado_em:iso(500), motorista_id:'u-car', motorista:{ nome:U.car.nome } }],
     abastecimento: [
       { id:'a1', data:iso(600), tipo:'interno', km:214900, litros:178, arla_litros:12, odometro_bomba:88998.3, media_calculada:3.21, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12' }, confirmado:{ nome:'Admin Teste' } },
       { id:'a3', data:iso(3000), tipo:'externo', km:214600, litros:95, arla_litros:null, odometro_bomba:null, posto:'Posto 56, Jundiaí', nota_numero:'000123', media_calculada:2.9, motorista_id:'u-car', veiculo_id:'v1', motorista:{ nome:U.car.nome }, veiculo:{ placa:'GKH-1B12' }, confirmado:null },

@@ -436,3 +436,8 @@ body.tema-escritorio .pill.vencido{color:var(--signal-red-ink); background:var(-
 .md-status{font-size:11.5px; font-weight:700; padding:3px 8px; border-radius:20px; background:var(--signal-amber-bg); color:var(--signal-amber-ink); white-space:nowrap;}
 .md-status.respondida{background:var(--signal-green-bg); color:var(--signal-green-ink);}
 .md-resposta{margin-top:8px; padding-top:8px; border-top:1px dashed var(--border);}
+
+/* botões de mapa na viagem do motorista */
+.trip-mapas{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+.trip-mapas .btn-small{display:inline-flex; align-items:center; gap:6px; text-decoration:none;}
+

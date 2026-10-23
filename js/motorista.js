@@ -75,7 +75,7 @@ function prepararJornada(jornada){
 
 async function carregarViagemAtual(){
   const { data } = await sb.from('viagem')
-    .select('id, origem, destino, cte_numero, mdfe_numero, status, criado_em')
+    .select('id, origem, destino, origem_endereco, destino_endereco, cte_numero, mdfe_numero, status, criado_em')
     .eq('motorista_id', session.user.id)
     .eq('status', 'em_andamento')
     .order('criado_em', { ascending: false })
@@ -734,6 +734,15 @@ async function enviarChecklist(assinaturaBase64){
 // ---------------------------------------------------------------------
 // Aba VIAGEM
 // ---------------------------------------------------------------------
+// Abre o endereço no Google Maps ou no Waze (o celular abre o app que tiver instalado)
+function botoesMapa(endereco){
+  if(!endereco) return '';
+  const q = encodeURIComponent(endereco);
+  return `<div class="trip-mapas">
+    <a class="btn-small" href="https://www.google.com/maps/search/?api=1&query=${q}" target="_blank" rel="noopener">${ic('map', 14)} Google Maps</a>
+    <a class="btn-small" href="https://waze.com/ul?q=${q}&navigate=yes" target="_blank" rel="noopener">${ic('map', 14)} Waze</a>
+  </div>`;
+}
 async function loadAbaViagem(){
   const viagem = await dadosTela('viagem', carregarViagemAtual, () => { if(motoristaScreen === 'home' && motoristaTab === 'viagem') loadAbaViagem(); });
   // arquivos anexados pelo escritório (CT-e, MDF-e, nota...) — o motorista vê, baixa e compartilha
@@ -751,8 +760,8 @@ async function loadAbaViagem(){
         <div class="trip-route">
           <div class="dots"><div class="dot-o"></div><div class="dot-line"></div><div class="dot-d"></div></div>
           <div>
-            <div class="trip-pt"><b>${esc(viagem.origem || 'Origem não informada')}</b><span>Origem</span></div>
-            <div class="trip-pt" style="margin-bottom:0;"><b>${esc(viagem.destino || 'Destino não informado')}</b><span>Destino</span></div>
+            <div class="trip-pt"><b>${esc(viagem.origem || 'Origem não informada')}</b><span>Coleta${viagem.origem_endereco ? ' · ' + esc(viagem.origem_endereco) : ''}</span>${botoesMapa(viagem.origem_endereco)}</div>
+            <div class="trip-pt" style="margin-bottom:0;"><b>${esc(viagem.destino || 'Destino não informado')}</b><span>Entrega${viagem.destino_endereco ? ' · ' + esc(viagem.destino_endereco) : ''}</span>${botoesMapa(viagem.destino_endereco)}</div>
           </div>
         </div>
       </div>

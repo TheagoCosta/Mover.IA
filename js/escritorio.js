@@ -218,7 +218,7 @@ const ROTULO_VIAGEM = { em_andamento: ['blue', 'Em andamento'], concluida: ['gre
 
 async function secaoViagens(el){
   const [viagens, docs, usuarios] = await Promise.all([
-    consultar(sb.from('viagem').select('id, origem, destino, cte_numero, mdfe_numero, status, criado_em, bsoft_manifesto_id, motorista_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa)').order('criado_em', { ascending:false }).limit(500)),
+    consultar(sb.from('viagem').select('id, origem, destino, origem_endereco, destino_endereco, cte_numero, mdfe_numero, status, criado_em, bsoft_manifesto_id, motorista_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa)').order('criado_em', { ascending:false }).limit(500)),
     consultar(sb.from('documento').select('referente_id').eq('referente_a', 'viagem')),
     qUsuarios(),
   ]);
@@ -234,7 +234,7 @@ async function secaoViagens(el){
     ['motorista', 'Motorista de A a Z', (a, b) => porTexto(nomeMot)(a, b) || porData(v => v.criado_em, -1)(a, b)],
     ['placa', 'Placa de A a Z', (a, b) => porTexto(v => v.veiculo ? v.veiculo.placa : 'zzz')(a, b) || porData(v => v.criado_em, -1)(a, b)],
   ];
-  const textoViagem = (v) => [nomeMot(v), v.veiculo ? v.veiculo.placa : '', v.origem, v.destino, v.mdfe_numero, v.cte_numero, fmtDataHora(v.criado_em)].join(' ');
+  const textoViagem = (v) => [nomeMot(v), v.veiculo ? v.veiculo.placa : '', v.origem, v.destino, v.origem_endereco, v.destino_endereco, v.mdfe_numero, v.cte_numero, fmtDataHora(v.criado_em)].join(' ');
   let visiveis = doFiltro;
 
   el.innerHTML = `
@@ -258,7 +258,8 @@ async function secaoViagens(el){
           <td class="sub">${fmtDataHora(v.criado_em)}${v.bsoft_manifesto_id ? '<div class="sub">Bsoft</div>' : ''}</td>
           <td>${esc(nomeMot(v) || '—')}</td>
           <td class="mono">${esc(v.veiculo ? v.veiculo.placa : '—')}</td>
-          <td style="max-width:300px;">${esc(v.origem || '?')} → ${esc(v.destino || '?')}</td>
+          <td style="max-width:320px;">${esc(v.origem || '?')} → ${esc(v.destino || '?')}
+            ${v.origem_endereco ? `<div class="sub">Coleta: ${esc(v.origem_endereco)}</div>` : ''}${v.destino_endereco ? `<div class="sub">Entrega: ${esc(v.destino_endereco)}</div>` : ''}</td>
           <td class="mono">${esc(v.mdfe_numero || '—')}</td>
           <td class="mono" style="max-width:140px;">${esc(v.cte_numero || '—')}</td>
           <td><button class="btn ${n ? 'btn-outline' : 'btn-primary'} btn-sm" data-docs-viagem="${v.id}">${ic('doc', 14)} ${n ? n : 'Anexar'}</button></td>
@@ -288,16 +289,17 @@ async function secaoViagens(el){
 }
 
 // ---------- documentos da viagem (CT-e, MDF-e, NF-e...) ----------
-const TIPOS_DOC_VIAGEM = ['CT-e', 'MDF-e', 'NF-e', 'Ordem de coleta', 'Comprovante de entrega', 'Outro'];
+const TIPOS_DOC_VIAGEM = ['Agendamento', 'CT-e', 'MDF-e', 'NF-e', 'Ordem de coleta', 'Comprovante de entrega', 'Outro'];
 // palpite do tipo pelo nome do arquivo (ex.: "MDFe_123.pdf" → MDF-e); a pessoa pode trocar
 function tipoDocViagemPeloNome(nome){
   const n = String(nome || '').toUpperCase();
+  if(/AGEND/.test(n)) return 'Agendamento';
   if(/MDF/.test(n)) return 'MDF-e';
   if(/CT-?E\b|\bCTE|DACTE/.test(n)) return 'CT-e';
   if(/NF-?E|DANFE|NOTA/.test(n)) return 'NF-e';
   if(/COLETA/.test(n)) return 'Ordem de coleta';
   if(/CANHOTO|ENTREGA|COMPROVANTE/.test(n)) return 'Comprovante de entrega';
-  return 'Outro';
+  return 'Agendamento';   // a maioria dos arquivos extras da viagem é o agendamento
 }
 async function enviarDocumentosViagem(viagemId, arquivos, tipos, aoProgresso){
   const erros = [];

@@ -147,3 +147,6 @@ O plano gratuito pausa o projeto após dias sem uso (aconteceu em 13/10: ningué
 - O Bsoft da ChavesLog não manda cidade no CT-e: origem/destino = remetente → recebedor/destinatário.
 - `sincronizacao_log.status` aceita `sucesso`/`erro`.
 - Seção **Viagens** no escritório (em andamento/concluídas/todas, pesquisa, concluir/reabrir, arquivos, nova viagem).
+- Endereços de coleta/entrega (`viagem.origem_endereco`/`destino_endereco`) vêm do XML do CT-e (`POST eDoc/v1/XMLDocumentosFiscais/CTesEmitidos`): coleta = expedidor ou remetente; entrega = recebedor ou destinatário. App do motorista mostra botões Google Maps/Waze.
+- Tipo de arquivo de viagem "Agendamento" (primeiro da lista e sugestão padrão).
+- Ação somente leitura `opcoes_abastecimento` (combustíveis, rateios, almoxarifados, fornecedores) para preparar o envio de abastecimentos ao Bsoft. Envio AINDA NÃO feito: o Bsoft não tem homologação e o lançamento gera título a pagar — depende das decisões do Thiago. Observação: nenhum cavalo do MOVER.IA foi achado em `manutencao/v1/equipamentos` pelo campo `equipamento` (conferir formato da placa antes de enviar).

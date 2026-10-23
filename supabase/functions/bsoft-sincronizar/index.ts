@@ -77,7 +77,57 @@ function criarApi(c: { dominio: string; usuario: string; senha: string }) {
     }
     return dados;
   }
-  return { get };
+  // POST só para CONSULTAS que a API faz por POST (ex.: XML do CT-e) — nada é gravado no Bsoft
+  async function consultaPost(caminho: string, corpo: unknown) {
+    let resp: Response;
+    try {
+      resp = await fetch(base + caminho, { method: 'POST', headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(corpo), signal: AbortSignal.timeout(30000) });
+    } catch (_e) {
+      throw new ErroBsoft(0, 'Não consegui falar com o Bsoft.');
+    }
+    const texto = await resp.text();
+    let dados: unknown = null;
+    try { dados = texto ? JSON.parse(texto) : null; } catch (_e) { dados = null; }
+    if (!resp.ok) throw new ErroBsoft(resp.status, dados && typeof dados === 'object' && 'message' in (dados as Record<string, unknown>) ? String((dados as Record<string, unknown>).message) : `erro ${resp.status}`);
+    return dados;
+  }
+  return { get, consultaPost };
+}
+
+// ---------- endereços pelo XML do CT-e ----------
+const desfazerEntidades = (s: string) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(Number(n)));
+function tagXml(xml: string | null, tag: string): string | null {
+  if (!xml) return null;
+  const m = xml.match(new RegExp(`<(?:\\w+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:\\w+:)?${tag}>`));
+  return m ? desfazerEntidades(m[1].trim()) : null;
+}
+function enderecoXml(bloco: string | null, tagEnder: string): string | null {
+  const e = tagXml(bloco, tagEnder);
+  if (!e) return null;
+  const v = (t: string) => tagXml(e, t);
+  const rua = [v('xLgr'), v('nro')].filter(Boolean).join(', ');
+  const cep = v('CEP');
+  const partes = [rua, v('xCpl'), v('xBairro'), [v('xMun'), v('UF')].filter(Boolean).join('/'), cep ? 'CEP ' + cep.replace(/^(\d{5})(\d{3})$/, '$1-$2') : null].filter(Boolean);
+  return partes.length ? partes.join(' - ').slice(0, 300) : null;
+}
+// coleta = expedidor (se houver) ou remetente; entrega = recebedor (se houver) ou destinatário
+function locaisDoCte(xml: string) {
+  const exped = tagXml(xml, 'exped'), rem = tagXml(xml, 'rem'), receb = tagXml(xml, 'receb'), dest = tagXml(xml, 'dest');
+  const coleta = exped ? { nome: tagXml(exped, 'xNome'), endereco: enderecoXml(exped, 'enderExped') } : { nome: tagXml(rem, 'xNome'), endereco: enderecoXml(rem, 'enderReme') };
+  const entrega = receb ? { nome: tagXml(receb, 'xNome'), endereco: enderecoXml(receb, 'enderReceb') } : { nome: tagXml(dest, 'xNome'), endereco: enderecoXml(dest, 'enderDest') };
+  return { coleta, entrega };
+}
+async function lerLocaisViagem(api: ReturnType<typeof criarApi>, chaves: string[]) {
+  if (!chaves.length) return null;
+  try {
+    const r = await api.consultaPost('/eDoc/v1/XMLDocumentosFiscais/CTesEmitidos', { chaveAcesso: chaves.slice(0, 50) });
+    const lista = (Array.isArray(r) ? r : []) as { chaveAcesso?: string; xml?: { autorizacao?: string } }[];
+    const xmls = chaves.map(c => lista.find(x => x.chaveAcesso === c)?.xml?.autorizacao).filter(Boolean) as string[];
+    if (!xmls.length) return null;
+    return { coleta: locaisDoCte(xmls[0]).coleta, entrega: locaisDoCte(xmls[xmls.length - 1]).entrega };
+  } catch (_e) {
+    return null;   // sem XML: fica com os nomes do CT-e
+  }
 }
 
 // lista vazia quando o Bsoft responde "nada encontrado" (404) em consultas de lista
@@ -146,6 +196,51 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true, estrutura });
     }
 
+    // levantamento (SÓ LEITURA) do que o envio de abastecimento ao Bsoft vai precisar: combustíveis,
+    // tipos de documento, rateios, almoxarifados, quantos veículos e motoristas do MOVER.IA existem lá
+    if (acao === 'opcoes_abastecimento') {
+      const seguro = async (fn: () => Promise<unknown>) => { try { return await fn(); } catch (e) { return { erro: (e as Error).message }; } };
+      const todos = async (caminho: string, params: Record<string, string> = {}) => {
+        const saida: Record<string, unknown>[] = [];
+        for (let p = 0; p < 20; p++) {
+          const lote = await lista(api, caminho, { ...params, limit: `${p * 100},100` });
+          saida.push(...lote);
+          if (lote.length < 100) break;
+        }
+        return saida;
+      };
+      const [combustiveis, tiposDoc, rateios, almoxarifados, equipamentos, motoristasBsoft, fornecedores] = await Promise.all([
+        seguro(() => lista(api, '/manutencao/v1/combustiveis', {})),
+        seguro(() => api.get('/financeiro/v1/tiposDocumentos')),
+        seguro(() => todos('/financeiro/v1/rateios')),
+        seguro(() => todos('/estoque/v1/almoxarifados')),
+        seguro(() => todos('/manutencao/v1/equipamentos')),
+        seguro(() => todos('/pessoas/v1/pessoas/fisicas', { grupo: 'motoristas' })),
+        seguro(() => todos('/pessoas/v1/pessoas/juridicas', { grupo: 'fornecedores' })),
+      ]);
+      const [{ data: nossosVeiculos }, { data: nossosPerfis }, { data: nossosMot }] = await Promise.all([
+        admin.from('veiculo').select('placa, tipo').eq('transportadora_id', tid).eq('ativo', true),
+        admin.from('motorista_perfil').select('usuario_id, cpf'),
+        admin.from('usuario').select('id').eq('transportadora_id', tid).eq('papel', 'motorista').eq('ativo', true),
+      ]);
+      const placasEquip = new Set((Array.isArray(equipamentos) ? equipamentos : []).map(e => placaNorm((e as Record<string, unknown>).equipamento)));
+      const cavalos = ((nossosVeiculos ?? []) as { placa: string; tipo: string }[]).filter(v => v.tipo === 'cavalo');
+      const cpfsBsoft = new Set((Array.isArray(motoristasBsoft) ? motoristasBsoft : []).map(m => digitos((m as Record<string, unknown>).cpf)));
+      const idsMot = new Set(((nossosMot ?? []) as { id: string }[]).map(m => m.id));
+      const cpfsNossos = ((nossosPerfis ?? []) as { usuario_id: string; cpf: string | null }[]).filter(p => idsMot.has(p.usuario_id) && digitos(p.cpf).length === 11).map(p => digitos(p.cpf));
+      return jsonResponse({
+        ok: true,
+        combustiveis, tipos_documento: tiposDoc,
+        rateios: Array.isArray(rateios) ? (rateios as Record<string, unknown>[]).map(r => ({ cod: r.codRateio, descricao: r.descricao })) : rateios,
+        almoxarifados: Array.isArray(almoxarifados) ? (almoxarifados as Record<string, unknown>[]).map(a => ({ id: a.id, descricao: a.descricao ?? a.nome })) : almoxarifados,
+        fornecedores: Array.isArray(fornecedores) ? { total: fornecedores.length, nomes: (fornecedores as Record<string, unknown>[]).map(f => f.nomeFantasia || f.razaoSocial).slice(0, 80) } : fornecedores,
+        equipamentos_total: Array.isArray(equipamentos) ? equipamentos.length : equipamentos,
+        cavalos_mover: cavalos.length, cavalos_achados_no_bsoft: cavalos.filter(v => placasEquip.has(placaNorm(v.placa))).length,
+        cavalos_nao_achados: cavalos.filter(v => !placasEquip.has(placaNorm(v.placa))).map(v => v.placa),
+        motoristas_mover: cpfsNossos.length, motoristas_achados_no_bsoft: cpfsNossos.filter(c => cpfsBsoft.has(c)).length,
+      });
+    }
+
     if (acao !== 'previa' && acao !== 'sincronizar') return jsonResponse({ error: 'Ação inválida.' }, 400);
     const gravar = acao === 'sincronizar';
 
@@ -166,7 +261,7 @@ Deno.serve(async (req: Request) => {
       admin.from('motorista_perfil').select('usuario_id, cpf'),
       admin.from('veiculo').select('id, placa, tipo').eq('transportadora_id', tid),
       admin.from('conjunto').select('motorista_id, conjunto_item(veiculo_id)').eq('transportadora_id', tid).eq('ativo', true),
-      admin.from('viagem').select('id, bsoft_manifesto_id, motorista_id, origem').eq('transportadora_id', tid).not('bsoft_manifesto_id', 'is', null),
+      admin.from('viagem').select('id, bsoft_manifesto_id, motorista_id, origem, origem_endereco').eq('transportadora_id', tid).not('bsoft_manifesto_id', 'is', null),
     ]);
     type Motorista = { id: string; nome: string; ativo?: boolean };
     const motoristaPorId = new Map<string, Motorista>(((usuarios ?? []) as Motorista[]).filter(u => u.ativo).map(u => [u.id, u]));
@@ -175,9 +270,9 @@ Deno.serve(async (req: Request) => {
     const veiculoPorPlaca = new Map<string, { id: string; placa: string }>(((veiculos ?? []) as { id: string; placa: string }[]).map(v => [placaNorm(v.placa), v]));
     const motoristaPorVeiculo = new Map<string, string>();
     ((conjuntos ?? []) as { motorista_id: string | null; conjunto_item: { veiculo_id: string }[] }[]).forEach(c => (c.conjunto_item ?? []).forEach((i: { veiculo_id: string }) => { if (c.motorista_id) motoristaPorVeiculo.set(i.veiculo_id, c.motorista_id); }));
-    const importadas = (jaImportadas ?? []) as { id: string; bsoft_manifesto_id: string; motorista_id: string | null; origem: string | null }[];
+    const importadas = (jaImportadas ?? []) as { id: string; bsoft_manifesto_id: string; motorista_id: string | null; origem: string | null; origem_endereco: string | null }[];
     const viagemPorManifesto = new Map<string, string>(importadas.map(v => [String(v.bsoft_manifesto_id), v.id]));
-    const semOrigem = new Set(importadas.filter(v => !v.origem).map(v => v.id));   // importadas antes de ler origem/destino
+    const semOrigem = new Set(importadas.filter(v => !v.origem || !v.origem_endereco).map(v => v.id));   // importadas antes de ler os endereços
     // MDF-e mais novo já importado de cada motorista (o nº do Bsoft cresce com o tempo)
     const maisNovoPorMotorista = new Map<string, number>();
     importadas.forEach(v => { if (v.motorista_id) maisNovoPorMotorista.set(v.motorista_id, Math.max(maisNovoPorMotorista.get(v.motorista_id) ?? 0, Number(v.bsoft_manifesto_id) || 0)); });
@@ -235,9 +330,17 @@ Deno.serve(async (req: Request) => {
           ctes.push({ id: String(c.id), nro: String(c.nro ?? ''), origem: local(c.dados_remetente, c.remetente), destino: local(c.dados_destinatario, c.recebedor || c.destinatario) });
         }
 
+        // coleta e entrega com endereço completo (XML do CT-e); sem XML, os nomes do CT-e
+        const locais = await lerLocaisViagem(api, chaves);
+        const dadosLocais = {
+          origem: locais?.coleta.nome ?? ctes.find(c => c.origem)?.origem ?? null,
+          destino: locais?.entrega.nome ?? [...ctes].reverse().find(c => c.destino)?.destino ?? null,
+          origem_endereco: locais?.coleta.endereco ?? null,
+          destino_endereco: locais?.entrega.endereco ?? null,
+        };
         let viagemId = viagemExistente;
-        if (viagemId && semOrigem.has(viagemId) && ctes.length) {
-          await admin.from('viagem').update({ origem: ctes.find(c => c.origem)?.origem ?? null, destino: [...ctes].reverse().find(c => c.destino)?.destino ?? null }).eq('id', viagemId);
+        if (viagemId && semOrigem.has(viagemId) && (ctes.length || locais)) {
+          await admin.from('viagem').update(dadosLocais).eq('id', viagemId);
           semOrigem.delete(viagemId);
         }
         if (!viagemId) {
@@ -246,7 +349,7 @@ Deno.serve(async (req: Request) => {
           const atual = numeroBsoft(m) > (maisNovoPorMotorista.get(motorista!.id) ?? 0);
           const { data: nova, error } = await admin.from('viagem').insert({
             transportadora_id: tid, motorista_id: motorista!.id, veiculo_id: cavalo?.id ?? null,
-            origem: ctes.find(c => c.origem)?.origem ?? null, destino: [...ctes].reverse().find(c => c.destino)?.destino ?? null,
+            ...dadosLocais,
             cte_numero: ctes.map(c => c.nro).filter(Boolean).join(', ') || null, mdfe_numero: String(m.nro ?? '') || null,
             status: atual ? 'em_andamento' : 'concluida', bsoft_manifesto_id: idBsoft,
           }).select('id').single();
