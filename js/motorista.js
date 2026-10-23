@@ -177,6 +177,7 @@ function montarTelaMotorista({ header, conteudo, tab, voltarPara = 'home' }){
   document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
     if(b.classList.contains('travada')){ mostrarToast('🔒 Faça o checklist do veículo para liberar o app'); return; }
     document.querySelectorAll('[data-tab]').forEach(o => o.classList.toggle('active', o === b));  // resposta imediata ao toque
+    pararSelecaoArquivos();
     motoristaScreen = 'home'; motoristaTab = b.dataset.tab; loadShellMotorista(); window.scrollTo(0, 0);
   }));
   document.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => irParaMotorista(b.dataset.ir)));
@@ -187,6 +188,7 @@ function montarTelaMotorista({ header, conteudo, tab, voltarPara = 'home' }){
 }
 
 function irParaMotorista(destino){
+  pararSelecaoArquivos();
   if(destino.startsWith('tab:')){ motoristaScreen = 'home'; motoristaTab = destino.slice(4); }
   else motoristaScreen = destino;
   loadShellMotorista();
@@ -215,7 +217,7 @@ async function abrirTelaMotorista(){
     documentos: loadDocumentosMotorista, historicoJornada: loadHistoricoJornadas, historicoJornadaDetalhe: loadHistoricoJornadaDetalhe,
     conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista, oficina: loadOficinaMotorista,
     agendamentos: loadAgendamentosMotorista, capacitacoes: loadCapacitacoesMotorista, notificacoes: loadNotificacoesMotorista,
-    privacidade: loadPrivacidadeMotorista,
+    privacidade: loadPerfilMotorista,   // "Meus dados e privacidade" agora fica dentro do perfil
   };
   // Início: a consulta única já traz a situação do checklist (sem esperar outra ida ao servidor)
   const vaiParaInicio = !subtelas[motoristaScreen] && !motoristaScreen.startsWith('emBreve:') && !['jornada', 'checklist', 'viagem'].includes(motoristaTab);
@@ -400,8 +402,6 @@ function desenharInicio(d){
         ${tile('conjunto', 'truck', 'Meu conjunto', cavalo || 'Cavalo e carretas')}
         ${tile('historicoJornada', 'clock', 'Jornadas anteriores', 'Linha do tempo')}
         ${tile('notificacoes', 'bell', 'Notificações', naoLidas ? `${naoLidas} não lida${naoLidas > 1 ? 's' : ''}` : 'Avisos do escritório')}
-        ${tile('perfil', 'user', 'Meu perfil', primeiroNome)}
-        ${tile('privacidade', 'lock', 'Meus dados', 'Privacidade')}
         ${appInstalado() ? '' : `<div class="quick-tile" id="btnInstalarApp">${ic('download', 20)}<div class="lbl">Instalar o app</div><div class="meta">Abre direto da tela inicial</div></div>`}
       </div>`,
   });
@@ -753,6 +753,7 @@ async function loadAbaViagem(){
   const viagem = await dadosTela('viagem', carregarViagemAtual, () => { if(motoristaScreen === 'home' && motoristaTab === 'viagem') loadAbaViagem(); });
   // arquivos anexados pelo escritório (CT-e, MDF-e, nota...) — o motorista vê, baixa e compartilha
   const arquivos = viagem ? ((await sb.from('documento').select('id, tipo, numero, validade, status, arquivo_url, referente_id').eq('referente_a', 'viagem').eq('referente_id', viagem.id).order('tipo')).data || []) : [];
+  const temTicket = arquivos.some(d => d.tipo === TIPO_TICKET_DESCARGA);
 
   montarTelaMotorista({
     tab: 'viagem',
@@ -768,19 +769,71 @@ async function loadAbaViagem(){
         </div>
       </div>
       <div class="section-label">Documentos da viagem</div>
+      ${arquivos.some(d => d.arquivo_url) ? botaoSelecionarArquivos() : ''}
       ${arquivos.length ? `<div class="card lista">${arquivos.map(d => cardDocumento(d, '', false)).join('')}</div>`
         : `<div class="card-dark-sub" style="margin:-4px 0 14px;">O escritório ainda não anexou os arquivos desta viagem. Quando anexar, eles aparecem aqui para baixar e compartilhar.</div>`}
-      <button class="btn btn-primary" id="btnFinalizarViagem">${ic('flag', 16)} Finalizar viagem</button>`
+      <div class="section-label">Finalizar a viagem</div>
+      ${temTicket
+        ? `<div class="card-dark-sub" style="margin:-4px 0 12px;">${ic('check', 14)} Ticket de descarga enviado. Já pode finalizar.</div>`
+        : `<div class="ticket-box">
+            <div class="card-dark-title">Ticket de descarga</div>
+            <div class="card-dark-sub">Obrigatório para finalizar: tire uma foto do ticket (ou escolha o PDF).</div>
+            <input type="file" id="inpTicket" accept="image/*,application/pdf" hidden>
+            <button type="button" class="btn btn-outline" id="btnTicket" style="margin-top:10px;">${ic('cam', 16)} Fotografar o ticket</button>
+            <div id="ticketEscolhido"></div>
+          </div>`}
+      <button class="btn btn-primary" id="btnFinalizarViagem">${ic('flag', 16)} ${temTicket ? 'Finalizar viagem' : 'Enviar ticket e finalizar'}</button>`
     : `<div class="card em-breve-box"><div class="ic-grande">${ic('truck', 34)}</div><div class="card-dark-title">Nenhuma viagem em andamento</div><div class="card-dark-sub">Quando o escritório abrir uma viagem para você, ela aparece aqui com origem, destino e documentos.</div></div>`,
   });
-  const btn = document.getElementById('btnFinalizarViagem');
-  if(btn) btn.addEventListener('click', () => { if(confirm('Finalizar esta viagem? Confirme só depois da entrega.')) finalizarViagem(viagem.id); });
-  if(arquivos.length) ligarAcoesArquivo(document.querySelector('.m-content') || document, arquivos, () => `Viagem ${viagem.origem || ''} para ${viagem.destino || ''}`.trim());
+  if(!viagem) return;
+  let ticket = null;
+  const inp = document.getElementById('inpTicket');
+  if(inp){
+    document.getElementById('btnTicket').addEventListener('click', () => inp.click());
+    inp.addEventListener('change', () => {
+      ticket = inp.files && inp.files[0] ? inp.files[0] : null;
+      const caixa = document.getElementById('ticketEscolhido');
+      if(!ticket){ caixa.innerHTML = ''; return; }
+      const foto = /^image\//.test(ticket.type) && !/heic/i.test(ticket.type);
+      caixa.innerHTML = foto ? `<img alt="Ticket de descarga" src="${URL.createObjectURL(ticket)}">` : `<div class="card-dark-sub" style="margin-top:8px;">${ic('doc', 14)} ${esc(ticket.name)}</div>`;
+      document.getElementById('btnTicket').innerHTML = `${ic('cam', 16)} Trocar a foto`;
+    });
+  }
+  document.getElementById('btnFinalizarViagem').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if(!temTicket && !ticket){ alert('Tire a foto do ticket de descarga antes de finalizar.'); return; }
+    if(!confirm('Finalizar esta viagem? Confirme só depois da entrega.')) return;
+    btn.disabled = true; btn.textContent = temTicket ? 'Finalizando...' : 'Enviando o ticket...';
+    if(!temTicket){
+      const erro = await enviarTicketDescarga(viagem.id, ticket);
+      if(erro){ alert('Não consegui enviar o ticket: ' + erro); btn.disabled = false; btn.innerHTML = `${ic('flag', 16)} Enviar ticket e finalizar`; return; }
+    }
+    finalizarViagem(viagem.id);
+  });
+  const raiz = document.querySelector('.m-content') || document;
+  const nomeViagem = () => `Viagem ${viagem.origem || ''} para ${viagem.destino || ''}`.trim();
+  ligarAcoesArquivo(raiz, arquivos, nomeViagem);
+  ligarSelecaoArquivos(raiz, arquivos, nomeViagem, loadAbaViagem);
+}
+
+// Foto (reduzida) ou PDF do ticket na pasta da viagem; devolve a mensagem de erro ou null
+const TIPO_TICKET_DESCARGA = 'Ticket de descarga';
+async function enviarTicketDescarga(viagemId, arquivo){
+  const pdf = /pdf/i.test(arquivo.type) || /\.pdf$/i.test(arquivo.name || '');
+  const blob = pdf ? arquivo : await comprimirImagem(arquivo, 2000, 0.85);
+  const ext = pdf ? 'pdf' : (blob.type === 'image/jpeg' ? 'jpg' : (((arquivo.name || '').split('.').pop() || 'jpg').toLowerCase()));
+  const caminho = `${usuarioAtual.transportadora_id}/viagem/${viagemId}/Ticket_de_descarga_${Date.now()}.${ext}`;
+  const { error: eUp } = await sb.storage.from('documentos').upload(caminho, blob, { contentType: pdf ? 'application/pdf' : (blob.type || 'image/jpeg') });
+  if(eUp) return eUp.message;
+  const { error } = await sb.from('documento').insert({ transportadora_id: usuarioAtual.transportadora_id, referente_a: 'viagem', referente_id: viagemId, tipo: TIPO_TICKET_DESCARGA, status: 'ok', arquivo_url: caminho });
+  if(error) return error.message;
+  if(window.limparCacheTelas) limparCacheTelas();
+  return null;
 }
 
 async function finalizarViagem(viagemId){
   const { error } = await sb.from('viagem').update({ status: 'concluida' }).eq('id', viagemId);
-  if(error){ alert('Erro ao finalizar viagem: ' + error.message); return; }
+  if(error){ alert('Erro ao finalizar viagem: ' + error.message); loadShellMotorista(); return; }
   mostrarToast('✅ Viagem finalizada');
   loadShellMotorista();
 }
@@ -831,10 +884,13 @@ async function loadDocumentosMotorista(){
       <div class="doc-tabs">
         ${[['meus', 'Meus'], ['veiculo', 'Veículo'], ['empresa', 'Empresa'], ['viagem', 'Viagem']].map(([k, l]) => `<button class="${docAbaMotorista === k ? 'active' : ''}" data-aba="${k}">${l} (${listas[k].docs.length})</button>`).join('')}
       </div>
+      ${todos.some(d => d.arquivo_url) ? botaoSelecionarArquivos() : ''}
       ${atual.docs.length ? `<div class="card lista">${atual.docs.map(d => cardDocumento(d, atual.sub(d), atual.validade)).join('')}</div>` : `<div class="status">${atual.vazio}</div>`}`,
   });
   document.querySelectorAll('[data-aba]').forEach(b => b.addEventListener('click', () => { docAbaMotorista = b.dataset.aba; loadDocumentosMotorista(); }));
-  ligarAcoesArquivo(document.querySelector('.m-content') || document, todos, nomeDoc);
+  const raiz = document.querySelector('.m-content') || document;
+  ligarAcoesArquivo(raiz, todos, nomeDoc);
+  ligarSelecaoArquivos(raiz, todos, nomeDoc, loadDocumentosMotorista);
 }
 
 function iconeVeiculo(tipo){
@@ -850,42 +906,53 @@ function labelPosicaoConjunto(ordem, tipo){
 }
 const tipoLabelGlobal = { cavalo:'Cavalo', carreta:'Carreta', dolly:'Dolly' };
 
+// Cada veículo do conjunto com os documentos dele (ver, baixar, compartilhar — um ou vários)
 async function loadConjuntoMotorista(){
   const conjunto = await carregarMeuConjunto();
   const veiculos = veiculosDoConjunto(conjunto);
+  const dados = veiculos.length ? await dadosTela('documentos', buscarDocumentosMotorista, () => { if(motoristaScreen === 'conjunto') loadConjuntoMotorista(); }) : null;
+  const docs = dados ? (dados.veic.data || []) : [];
+  const placaPorVeiculo = Object.fromEntries(veiculos.map(v => [v.veiculo_id, v.veiculo.placa]));
   montarTelaMotorista({
     header: headerVoltar('Meu conjunto'),
     conteudo: veiculos.length ? `
-      <div class="card lista">${veiculos.map(v => `
+      ${docs.some(d => d.arquivo_url) ? botaoSelecionarArquivos() : ''}
+      ${veiculos.map(v => { const dv = docs.filter(d => d.referente_id === v.veiculo_id); return `
+      <div class="card lista">
         <div class="list-item"><div class="li-ic">${iconeVeiculo(v.veiculo.tipo)}</div>
-          <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(v.veiculo.placa)}</div><div class="li-sub">${esc(labelPosicaoConjunto(v.ordem, v.veiculo.tipo))}</div></div></div>`).join('')}</div>
-      <button class="btn btn-outline" data-aba-veiculo>${ic('doc', 16)} Documentos do conjunto</button>`
+          <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(v.veiculo.placa)}</div><div class="li-sub">${esc(labelPosicaoConjunto(v.ordem, v.veiculo.tipo))}</div></div></div>
+        ${dv.length ? dv.map(d => cardDocumento(d, '', true)).join('') : `<div class="li-sub" style="padding:6px 0 4px;">Nenhum documento deste veículo cadastrado ainda.</div>`}
+      </div>`; }).join('')}`
       : `<div class="card em-breve-box"><div class="ic-grande">${ic('truck', 34)}</div><div class="card-dark-title">Nenhum conjunto vinculado</div><div class="card-dark-sub">Peça ao escritório para vincular o cavalo e as carretas que você dirige.</div></div>`,
   });
-  const b = document.querySelector('[data-aba-veiculo]');
-  if(b) b.addEventListener('click', () => { docAbaMotorista = 'veiculo'; irParaMotorista('documentos'); });
+  const raiz = document.querySelector('.m-content') || document;
+  const nome = (d) => placaPorVeiculo[d.referente_id] || '';
+  ligarAcoesArquivo(raiz, docs, nome);
+  ligarSelecaoArquivos(raiz, docs, nome, loadConjuntoMotorista);
 }
 
-function loadPerfilMotorista(){
-  const login = String(usuarioAtual.email || session.user.email || '').replace('@motoristas.moveria.app', '');
+// Perfil = cabeçalho + "Meus dados e privacidade" (dados cadastrais, relatório, pedidos, política) + sair.
+// Abre tocando no círculo com as iniciais, no Início.
+async function loadPerfilMotorista(){
+  motoristaScreen = 'perfil';
+  const dados = await carregarMeusDados();
   montarTelaMotorista({
     header: headerVoltar('Meu perfil'),
     conteudo: `
-      <div class="card" style="text-align:center; padding:26px 16px;">
+      <div class="card" style="text-align:center; padding:22px 16px;">
         <div class="avatar" style="width:64px; height:64px; font-size:22px; margin:0 auto 12px;">${esc(iniciais(usuarioAtual.nome))}</div>
         <div class="card-dark-title" style="font-size:16px;">${esc(usuarioAtual.nome)}</div>
         <div class="card-dark-sub">${esc(papelLabel[usuarioAtual.papel] || '')} · ${esc(usuarioAtual.transportadora ? usuarioAtual.transportadora.nome_fantasia : '')}</div>
-        <div class="card-dark-sub" style="margin-top:6px;">Login: <b style="color:var(--text-primary);">${esc(login)}</b></div>
       </div>
-      <button class="btn btn-outline" id="btnMeusDadosPerfil" style="margin-bottom:10px;">${ic('lock', 16)} Meus dados e privacidade</button>
-      <button class="btn btn-outline" id="btnSair">${ic('logout', 16)} Sair deste aparelho</button>
+      ${htmlMeusDados(dados, true)}
+      <button class="btn btn-outline" id="btnSair" style="margin-top:12px;">${ic('logout', 16)} Sair deste aparelho</button>
       <div class="section-label" style="margin-top:20px;">Velocidade do app (para o suporte)</div>
       <div class="card lista" style="font-size:12.5px;">${resumoVelocidade().map(([rotulo, valor]) => `
         <div class="list-item" style="padding:8px 0;"><div class="li-body"><div class="li-sub">${rotulo}</div></div><b style="font-family:var(--font-mono); font-size:12px;">${esc(valor)}</b></div>`).join('')}</div>
       <div class="li-sub" style="text-align:center; margin-bottom:10px;">Use o app por alguns minutos e tire um print desta tela para o suporte.</div>`,
   });
   document.getElementById('btnSair').addEventListener('click', doLogout);
-  document.getElementById('btnMeusDadosPerfil').addEventListener('click', () => { motoristaScreen = 'privacidade'; loadShellMotorista(); window.scrollTo(0, 0); });
+  ligarMeusDados(document.querySelector('.m-content') || document, dados, () => { if(motoristaScreen === 'perfil') loadPerfilMotorista(); });
 }
 
 function loadEmBreveMotorista(recurso){

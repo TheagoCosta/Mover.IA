@@ -441,3 +441,16 @@ body.tema-escritorio .pill.vencido{color:var(--signal-red-ink); background:var(-
 .trip-mapas{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
 .trip-mapas .btn-small{display:inline-flex; align-items:center; gap:6px; text-decoration:none;}
 
+
+/* seleção de vários documentos (app do motorista) */
+.doc-marcar{display:flex; align-items:center; justify-content:center; width:36px; height:36px; flex-shrink:0; cursor:pointer;}
+.doc-marcar input{width:22px; height:22px; accent-color:var(--line-yellow); cursor:pointer;}
+.barra-selecao{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(76px + env(safe-area-inset-bottom, 0px)); width:calc(100% - 24px); max-width:496px; display:flex; align-items:center; gap:8px; padding:10px 12px; background:var(--asphalt-800); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:11;}
+.barra-selecao span{flex:1; font-size:13px; font-weight:600; color:var(--text-primary);}
+.barra-selecao button{display:inline-flex; align-items:center; gap:6px;}
+.barra-selecao button:disabled{opacity:.45; cursor:default;}
+.btn-small.destaque{background:var(--line-yellow); color:#1a1a1a; border-color:transparent;}
+.m-app:has(.barra-selecao) .m-content{padding-bottom:150px;}
+/* ticket de descarga */
+.ticket-box{border:1px dashed var(--border); border-radius:12px; padding:14px; margin-bottom:12px;}
+.ticket-box img{display:block; max-width:100%; max-height:220px; border-radius:8px; margin-top:10px;}

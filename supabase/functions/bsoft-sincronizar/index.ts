@@ -212,10 +212,10 @@ Deno.serve(async (req: Request) => {
     if (acao === 'abastecimento_preparar' || acao === 'abastecimento_enviar') {
       if (typeof body?.segredo === 'string') return jsonResponse({ error: 'Só o escritório logado envia abastecimentos.' }, 403);
       const { data: a } = await admin.from('abastecimento')
-        .select('id, tipo, data, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, posto, nota_numero, bsoft_ref, motorista_id, veiculo:veiculo_id(id, placa)')
+        .select('id, tipo, data, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, bsoft_ref, motorista_id, veiculo:veiculo_id(id, placa)')
         .eq('id', String(body?.abastecimento_id ?? '')).eq('transportadora_id', tid).maybeSingle();
       if (!a) return jsonResponse({ ok: false, error: 'Abastecimento não encontrado.' });
-      const ab = a as unknown as { id: string; tipo: string | null; data: string; km: number; litros: number; arla_litros: number | null; preco_litro_diesel: number | null; preco_litro_arla: number | null; posto: string | null; nota_numero: string | null; bsoft_ref: string | null; motorista_id: string | null; veiculo: { id: string; placa: string } | null };
+      const ab = a as unknown as { id: string; tipo: string | null; data: string; km: number; litros: number; arla_litros: number | null; preco_litro_diesel: number | null; preco_litro_arla: number | null; odometro_bomba: number | null; posto: string | null; nota_numero: string | null; bsoft_ref: string | null; motorista_id: string | null; veiculo: { id: string; placa: string } | null };
       const interno = ab.tipo === 'interno';
       const quando = new Date(new Date(ab.data).getTime() - 3 * 3600000).toISOString();   // horário de Brasília
       const dia = quando.slice(0, 10);
@@ -309,6 +309,8 @@ Deno.serve(async (req: Request) => {
           if (interno) {
             Object.assign(corpo, { dtAbastecimento: `${dia} ${quando.slice(11, 16)}`, almoxarifados_id: it.almox });
             if (!comuns.localAbastecimento) corpo.localAbastecimento = 'INTERNO';
+            // número de controle = hodômetro da bomba (só no diesel: o Bsoft exige número único)
+            if (it.rotulo === 'diesel' && Number(ab.odometro_bomba) > 0) corpo.numeroControle = Math.round(Number(ab.odometro_bomba));
           } else {
             Object.assign(corpo, { dtAbastecimento: dia, programado });
             if (ab.nota_numero) corpo.nroDoc = String(ab.nota_numero).slice(0, 30);

@@ -658,20 +658,29 @@ async function baixarArquivoItem(item){
 }
 // O celular só abre a tela de compartilhar logo depois de um toque; se o download demorou e
 // o toque "venceu", mostra um botão para tocar de novo (o arquivo já está pronto)
-async function compartilharArquivoItem(item){
-  const f = await arquivoDoItem(item);
-  if(!(navigator.canShare && navigator.canShare({ files: [f] }))){ await baixarArquivoItem(item); mostrarToast('Este aparelho não compartilha arquivos direto — o arquivo foi baixado.'); return; }
-  try{ await navigator.share({ files: [f], title: f.name }); }
+async function compartilharArquivoItem(item){ return compartilharVariosItens([item]); }
+// Vários arquivos numa só tela de compartilhar (ex.: CNH + CRLV + MDF-e para o WhatsApp)
+async function compartilharVariosItens(itens){
+  const arquivos = [];
+  for(const it of itens) arquivos.push(await arquivoDoItem(it));
+  if(!(navigator.canShare && navigator.canShare({ files: arquivos }))){
+    for(const it of itens) await baixarArquivoItem(it);
+    mostrarToast(itens.length > 1 ? 'Este aparelho não compartilha vários arquivos direto — eles foram baixados.' : 'Este aparelho não compartilha arquivos direto — o arquivo foi baixado.');
+    return;
+  }
+  const dados = arquivos.length === 1 ? { files: arquivos, title: arquivos[0].name } : { files: arquivos };
+  try{ await navigator.share(dados); }
   catch(e){
     if(e && e.name === 'AbortError') return;   // a pessoa fechou a tela de compartilhar
     if(e && e.name === 'NotAllowedError'){
+      const titulo = arquivos.length === 1 ? 'Arquivo pronto' : `${arquivos.length} arquivos prontos`;
       document.body.insertAdjacentHTML('beforeend', `<div id="compartilharDeNovo" class="aviso-privacidade" style="z-index:96;"><div class="aviso-privacidade-caixa" style="max-width:360px; text-align:center;">
-        <div class="card-dark-title" style="margin-bottom:6px;">Arquivo pronto</div><div class="l2" style="margin-bottom:14px;">${esc(f.name)}</div>
+        <div class="card-dark-title" style="margin-bottom:6px;">${titulo}</div><div class="l2" style="margin-bottom:14px;">${arquivos.map(f => esc(f.name)).join('<br>')}</div>
         <button type="button" id="btnCompartilharAgora" style="width:100%;">Compartilhar</button>
         <button type="button" class="btn-small" id="btnCompartilharFechar" style="width:100%; margin-top:8px;">Fechar</button></div></div>`);
       const fechar = () => { const m = document.getElementById('compartilharDeNovo'); if(m) m.remove(); };
       document.getElementById('btnCompartilharFechar').addEventListener('click', fechar);
-      document.getElementById('btnCompartilharAgora').addEventListener('click', () => { navigator.share({ files: [f], title: f.name }).catch(() => {}); fechar(); });
+      document.getElementById('btnCompartilharAgora').addEventListener('click', () => { navigator.share(dados).catch(() => {}); fechar(); });
       return;
     }
     throw e;

@@ -80,9 +80,10 @@ let documentosFiltro = 'todos';
 // Linha de documento no app do motorista (lista escura, no estilo do protótipo).
 // O motorista só vê, baixa e compartilha — anexar/trocar arquivo é do escritório.
 function cardDocumento(d, subtitulo, comValidade = true){
+  const marcavel = selecionandoArquivos && d.arquivo_url;
   return `
     <div class="list-item" style="align-items:flex-start;">
-      <div class="li-ic">${ic('doc', 16)}</div>
+      ${marcavel ? `<label class="doc-marcar"><input type="checkbox" data-sel-doc="${d.id}" ${selecaoArquivos.has(String(d.id)) ? 'checked' : ''} aria-label="Selecionar ${esc(d.tipo)}"></label>` : `<div class="li-ic">${ic('doc', 16)}</div>`}
       <div class="li-body">
         <div class="li-title">${esc(d.tipo)}</div>
         <div class="li-sub">${[subtitulo ? esc(subtitulo) : '', d.numero ? 'nº ' + esc(d.numero) : '', comValidade ? esc(textoVencimento(d)) : ''].filter(Boolean).join(' · ')}</div>
@@ -1058,6 +1059,52 @@ async function acaoArquivoDocumento(acao, docId, docs, complemento = '', botao =
   } catch(e){ alert(e.message || 'Não consegui preparar o arquivo.'); }
   finally{ if(botao){ botao.disabled = false; botao.innerHTML = textoOriginal; } }
 }
+// ---------- vários arquivos de uma vez (app do motorista) ----------
+// "Selecionar vários" põe uma caixinha em cada documento; a barra de baixo compartilha ou baixa
+// todos os marcados juntos. A marcação continua ao trocar de aba (Meus, Veículo, Empresa, Viagem).
+const selecaoArquivos = new Set();
+let selecionandoArquivos = false;
+function pararSelecaoArquivos(){ selecionandoArquivos = false; selecaoArquivos.clear(); }
+function botaoSelecionarArquivos(){
+  return `<button type="button" class="btn-small" id="btnSelecionarArquivos" style="margin-bottom:10px;">${ic(selecionandoArquivos ? 'x' : 'checksq', 14)} ${selecionandoArquivos ? 'Cancelar seleção' : 'Selecionar vários para enviar'}</button>`;
+}
+// docs = todos os documentos que podem estar marcados; redesenhar = desenha a tela de novo
+function ligarSelecaoArquivos(raiz, docs, complementoDe, redesenhar){
+  const b = raiz.querySelector('#btnSelecionarArquivos');
+  if(b) b.addEventListener('click', () => { if(selecionandoArquivos) pararSelecaoArquivos(); else selecionandoArquivos = true; redesenhar(); });
+  const antiga = document.getElementById('barraSelecao');
+  if(antiga) antiga.remove();
+  if(!selecionandoArquivos) return;
+  document.querySelector('.m-app').insertAdjacentHTML('beforeend', `<div class="barra-selecao" id="barraSelecao">
+    <span id="selQtd"></span>
+    <button type="button" class="btn-small" id="selBaixar">${ic('download', 14)} Baixar</button>
+    ${podeCompartilharArquivos() ? `<button type="button" class="btn-small destaque" id="selCompartilhar">${ic('share', 14)} Enviar</button>` : ''}
+  </div>`);
+  const marcados = () => (docs || []).filter(d => d.arquivo_url && selecaoArquivos.has(String(d.id)));
+  const atualizar = () => {
+    const n = marcados().length;
+    document.getElementById('selQtd').textContent = n ? `${n} selecionado${n > 1 ? 's' : ''}` : 'Marque os documentos';
+    document.querySelectorAll('#barraSelecao button').forEach(x => { x.disabled = !n; });
+  };
+  raiz.querySelectorAll('[data-sel-doc]').forEach(c => c.addEventListener('change', () => { if(c.checked) selecaoArquivos.add(c.dataset.selDoc); else selecaoArquivos.delete(c.dataset.selDoc); atualizar(); }));
+  const agir = async (acao, botao) => {
+    const lista = marcados();
+    if(!lista.length) return;
+    const texto = botao.innerHTML; botao.disabled = true; botao.textContent = 'Preparando...';
+    try{
+      const itens = [];
+      for(const d of lista) itens.push(await itemArquivoDocumento(d, complementoDe(d)));
+      if(acao === 'compartilhar') await compartilharVariosItens(itens);
+      else for(const it of itens) await baixarArquivoItem(it);
+    } catch(e){ alert(e.message || 'Não consegui preparar os arquivos.'); }
+    finally{ botao.innerHTML = texto; atualizar(); }
+  };
+  document.getElementById('selBaixar').addEventListener('click', (e) => agir('baixar', e.currentTarget));
+  const comp = document.getElementById('selCompartilhar');
+  if(comp) comp.addEventListener('click', (e) => agir('compartilhar', e.currentTarget));
+  atualizar();
+}
+
 // Liga os botões Ver / Baixar / Compartilhar de uma lista. complementoDe(doc) = nome da pessoa, placa ou viagem
 function ligarAcoesArquivo(raiz, docs, complementoDe = () => ''){
   const achar = (id) => (docs || []).find(d => String(d.id) === String(id));

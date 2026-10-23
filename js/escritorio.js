@@ -289,7 +289,7 @@ async function secaoViagens(el){
 }
 
 // ---------- documentos da viagem (CT-e, MDF-e, NF-e...) ----------
-const TIPOS_DOC_VIAGEM = ['Agendamento', 'CT-e', 'MDF-e', 'NF-e', 'Ordem de coleta', 'Comprovante de entrega', 'Outro'];
+const TIPOS_DOC_VIAGEM = ['Agendamento', 'CT-e', 'MDF-e', 'NF-e', 'Ordem de coleta', 'Comprovante de entrega', 'Ticket de descarga', 'Outro'];
 // palpite do tipo pelo nome do arquivo (ex.: "MDFe_123.pdf" → MDF-e); a pessoa pode trocar
 function tipoDocViagemPeloNome(nome){
   const n = String(nome || '').toUpperCase();
@@ -631,7 +631,7 @@ async function abrirEnviarBsoft(a, el){
     <div class="l2" style="margin-bottom:10px;">
       Veículo no Bsoft: ${r.equipamento ? `<b>${esc(r.equipamento.nome)}</b>` : '<b style="color:var(--red-600,#c0392b);">não encontrado — cadastre a placa no Bsoft</b>'}<br>
       Motorista no Bsoft: ${r.motorista ? `<b>${esc(r.motorista.nome)}</b>` : 'não encontrado (vai sem motorista)'}<br>
-      Km: <b>${Number(a.km).toLocaleString('pt-BR')}</b> · Diesel: <b>${litros(a.litros)}</b>${temArla ? ` · Arla: <b>${litros(a.arla_litros)}</b>` : ''}${!interno && a.nota_numero ? ` · Nota: <b>${esc(a.nota_numero)}</b>` : ''}
+      Km: <b>${Number(a.km).toLocaleString('pt-BR')}</b> · Diesel: <b>${litros(a.litros)}</b>${temArla ? ` · Arla: <b>${litros(a.arla_litros)}</b>` : ''}${!interno && a.nota_numero ? ` · Nota: <b>${esc(a.nota_numero)}</b>` : ''}${interno ? `<br>Número de controle (hodômetro da bomba): ${a.odometro_bomba != null ? `<b>${Math.round(Number(a.odometro_bomba))}</b>` : 'não informado'}` : ''}
     </div>
     <div class="o-form-grid">
       ${campo('ebComb', 'Combustível do diesel', `<select id="ebComb">${opcoes(r.combustiveis, combDiesel)}</select>`)}
