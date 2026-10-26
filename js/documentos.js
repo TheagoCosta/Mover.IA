@@ -716,7 +716,8 @@ async function processarUploadAutomatico(file, lote = null){
     }
   }
 
-  const sugestaoCalendario = veiculoSugerido ? sugerirValidadePorPlaca(veiculoSugerido.placa, calendario) : null;
+  const exercicioCrlv = deteccao.tipo === 'CRLV' ? extrairExercicioCRLV(texto) : null;
+  const sugestaoCalendario = veiculoSugerido ? sugerirValidadePorPlaca(veiculoSugerido.placa, calendario, exercicioCrlv) : null;
 
   // Na CNH, o nº de registro e a validade aparecem em vermelho no cartão —
   // busca eles especificamente pelo rótulo, em vez de só listar tudo que
@@ -823,7 +824,7 @@ async function processarUploadAutomatico(file, lote = null){
 
   if(lote) mostrarStatusOcr(false);
   const sugestaoVeiculo = deteccao.referenteA === 'veiculo' && !veiculoSugerido ? extrairDadosCRLV(texto, file.name) : null;
-  const resposta = await mostrarRevisaoDocumento({ file, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo: motoristaNovo ? null : sugestaoNovo, sugestaoVeiculo, calendario, lote });
+  const resposta = await mostrarRevisaoDocumento({ file, texto, deteccao, motoristas, veiculos, motoristaSugerido, veiculoSugerido, datas, sugestaoCalendario, usouOcr, numeroSugerido, validadeSugerida, categoriaSugerida, sugestaoNovo: motoristaNovo ? null : sugestaoNovo, sugestaoVeiculo, calendario, lote });
   if(resposta && resposta.criouMotorista) motoristaNovo = true;
   if(lote){
     if(resposta && resposta.salvo) registrar(motoristaNovo ? 'novo' : 'conferido', `${motoristaNovo ? 'Motorista cadastrado com login; ' : ''}conferido na mão e salvo`);
@@ -838,17 +839,23 @@ async function salvarCategoriaCnh(usuarioId, categoria){
   await sb.from('motorista_perfil').upsert({ usuario_id: usuarioId, categoria_cnh: cat });
 }
 
-function sugerirValidadePorPlaca(placa, calendario){
+// Exercício impresso no CRLV ("EXERCÍCIO 2026"); o licenciamento dele vence no ano seguinte
+function extrairExercicioCRLV(texto){
+  const m = String(texto || '').match(/EXERC[IÍ1l]C[IÍ1l]O[^0-9]{0,30}(20\d{2})/i);
+  const ano = m ? parseInt(m[1], 10) : null;
+  return ano && ano >= 2015 && ano <= new Date().getFullYear() + 1 ? ano : null;
+}
+// CRLV do exercício X vale até o fim do mês do calendário (pelo final da placa) do ano X+1.
+// Sem o exercício lido, supõe o exercício do ano atual (o CRLV que acabou de sair).
+function sugerirValidadePorPlaca(placa, calendario, exercicio = null){
   if(!placa || !calendario || !calendario.length) return null;
   const digitos = (placa || '').replace(/[^0-9]/g, '');
   if(!digitos.length) return null;
   const finalPlaca = parseInt(digitos[digitos.length - 1], 10);
   const linha = calendario.find(c => c.final_placa === finalPlaca);
   if(!linha) return null;
-  const hoje = new Date();
-  let ano = hoje.getFullYear();
-  let dataFinal = new Date(ano, linha.mes, 0);
-  if(dataFinal < hoje){ ano += 1; dataFinal = new Date(ano, linha.mes, 0); }
+  const ano = (exercicio || new Date().getFullYear()) + 1;
+  const dataFinal = new Date(ano, linha.mes, 0);
   const dd = String(dataFinal.getDate()).padStart(2, '0');
   const mm = String(linha.mes).padStart(2, '0');
   return `${dd}/${mm}/${ano}`;
@@ -984,7 +991,7 @@ function montarRevisaoDocumento(ctx, resolverRevisao){
     renderReferenteIdSelect();
     // CRLV: sem validade escolhida, sugere a do calendário do Detran pelo final da placa
     const campoValidade = document.getElementById('revisaoValidade');
-    const sugestao = sugerirValidadePorPlaca(novo.placa, calendario);
+    const sugestao = sugerirValidadePorPlaca(novo.placa, calendario, deteccao.tipo === 'CRLV' ? extrairExercicioCRLV(ctx.texto || '') : null);
     if(sugestao && !campoValidade.value && /crlv|licenciamento/i.test(document.getElementById('revisaoTipo').value)){
       const [dd, mm, yyyy] = sugestao.split('/');
       campoValidade.value = `${yyyy}-${mm}-${dd}`;

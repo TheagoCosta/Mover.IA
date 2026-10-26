@@ -4,8 +4,9 @@
 // Lê os MDF-e (manifestos) emitidos no Bsoft, acha o motorista no MOVER.IA (pelo CPF ou pela
 // placa do conjunto), cria a viagem no app dele e anexa os PDFs do DAMDFE e dos DACTE — o
 // motorista recebe o aviso e pode baixar/compartilhar. A sincronização SÓ LÊ do Bsoft (a API não
-// tem ambiente de testes). A única gravação é o abastecimento, um por vez, quando o escritório
-// clica em "Enviar ao Bsoft" e confirma. Documentação: https://docs.bsoft.app
+// tem ambiente de testes). Gravações: o abastecimento, um por vez, quando o escritório clica em
+// "Enviar ao Bsoft" e confirma; e o encerramento do MDF-e quando a viagem é finalizada com o
+// ticket de descarga (automático só se o escritório ligar). Documentação: https://docs.bsoft.app
 //
 // Credenciais do Bsoft = segredos desta função, cadastrados pelo Thiago no painel do Supabase
 // (Edge Functions → Secrets): BSOFT_DOMINIO (só o começo de xxx.bsoft.app), BSOFT_USUARIO
@@ -17,6 +18,7 @@
 // Ações: status | testar | previa (mostra o que seria importado, sem gravar) | sincronizar
 //        abastecimento_preparar (só lê: acha veículo, motorista, posto, possíveis repetidos)
 //        abastecimento_enviar (grava; só o escritório logado, nunca o agendamento)
+//        encerrar_mdfe (grava; banco ao finalizar a viagem com ticket, ou botão do escritório)
 // =====================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -81,11 +83,10 @@ function criarApi(c: { dominio: string; usuario: string; senha: string }) {
     }
     return dados;
   }
-  // POST só para CONSULTAS que a API faz por POST (ex.: XML do CT-e) — nada é gravado no Bsoft
-  async function consultaPost(caminho: string, corpo: unknown) {
+  async function enviar(metodo: string, caminho: string, corpo: unknown) {
     let resp: Response;
     try {
-      resp = await fetch(base + caminho, { method: 'POST', headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(corpo), signal: AbortSignal.timeout(30000) });
+      resp = await fetch(base + caminho, { method: metodo, headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(corpo), signal: AbortSignal.timeout(30000) });
     } catch (_e) {
       throw new ErroBsoft(0, 'Não consegui falar com o Bsoft.');
     }
@@ -95,10 +96,13 @@ function criarApi(c: { dominio: string; usuario: string; senha: string }) {
     if (!resp.ok) throw new ErroBsoft(resp.status, dados && typeof dados === 'object' && 'message' in (dados as Record<string, unknown>) ? String((dados as Record<string, unknown>).message) : `erro ${resp.status}`);
     return dados;
   }
-  // GRAVA no Bsoft (produção, sem ambiente de testes). Só a ação abastecimento_enviar usa, depois que
-  // o escritório confere e confirma na tela.
-  const gravarNoBsoft = consultaPost;
-  return { get, consultaPost, gravarNoBsoft };
+  // POST só para CONSULTAS que a API faz por POST (ex.: XML do CT-e) — nada é gravado no Bsoft
+  const consultaPost = (caminho: string, corpo: unknown) => enviar('POST', caminho, corpo);
+  // GRAVAM no Bsoft (produção, sem ambiente de testes): abastecimento (escritório confere e confirma)
+  // e encerramento do MDF-e (viagem finalizada com ticket de descarga)
+  const gravarNoBsoft = (caminho: string, corpo: unknown) => enviar('POST', caminho, corpo);
+  const alterarNoBsoft = (caminho: string, corpo: unknown) => enviar('PATCH', caminho, corpo);
+  return { get, consultaPost, gravarNoBsoft, alterarNoBsoft };
 }
 
 // ---------- endereços pelo XML do CT-e ----------
@@ -181,7 +185,7 @@ Deno.serve(async (req: Request) => {
     const acao = String(body?.acao ?? 'status');
     const cred = credenciais();
     if (acao === 'status') {
-      return jsonResponse({ configurado: !!cred, dominio: cred ? `${cred.dominio}.bsoft.app` : null, ativo: cfg.ativo, ultima_execucao: cfg.ultima_execucao, ultimo_status: cfg.ultimo_status, ultimo_resumo: cfg.ultimo_resumo, dias_retroativos: cfg.dias_retroativos });
+      return jsonResponse({ configurado: !!cred, dominio: cred ? `${cred.dominio}.bsoft.app` : null, ativo: cfg.ativo, ultima_execucao: cfg.ultima_execucao, ultimo_status: cfg.ultimo_status, ultimo_resumo: cfg.ultimo_resumo, dias_retroativos: cfg.dias_retroativos, encerrar_mdfe: cfg.encerrar_mdfe });
     }
     if (!cred) {
       return jsonResponse({ configurado: false, error: 'Faltam os dados de acesso do Bsoft (segredos BSOFT_DOMINIO, BSOFT_USUARIO e BSOFT_SENHA no Supabase).' });
@@ -206,6 +210,37 @@ Deno.serve(async (req: Request) => {
       ]);
       const limpa = (x: unknown) => Array.isArray(x) ? (x as Record<string, unknown>[]).map(semDocs) : x;
       return jsonResponse({ ok: true, posto: limpa(posto), proprios: limpa(proprios), filtro_equipamento: limpa(filtroEquip) });
+    }
+
+    // ---------- encerramento ("baixa") do MDF-e: viagem finalizada com o ticket de descarga ----------
+    // Chamado pelo banco quando o motorista finaliza (se o escritório ligou o automático) ou pelo botão do escritório.
+    if (acao === 'encerrar_mdfe') {
+      if (typeof body?.segredo === 'string' && !cfg.encerrar_mdfe) return jsonResponse({ ok: false, error: 'Encerramento automático desligado.' });
+      const { data: v } = await admin.from('viagem').select('id, status, mdfe_numero, bsoft_manifesto_id, bsoft_encerrado_em')
+        .eq('id', String(body?.viagem_id ?? '')).eq('transportadora_id', tid).maybeSingle();
+      if (!v) return jsonResponse({ ok: false, error: 'Viagem não encontrada.' });
+      if (!v.bsoft_manifesto_id) return jsonResponse({ ok: false, error: 'Esta viagem não veio de um MDF-e do Bsoft.' });
+      if (v.bsoft_encerrado_em) return jsonResponse({ ok: true, ja_encerrado: true });
+      if (v.status !== 'concluida') return jsonResponse({ ok: false, error: 'A viagem ainda não foi finalizada.' });
+      const { data: ticket } = await admin.from('documento').select('id').eq('referente_a', 'viagem').eq('referente_id', v.id).eq('tipo', 'Ticket de descarga').limit(1);
+      if (!ticket?.length) return jsonResponse({ ok: false, error: 'Falta o ticket de descarga desta viagem.' });
+      const agora = new Date(Date.now() - 3 * 3600000).toISOString();   // horário de Brasília
+      const obs = 'Encerrado pelo MOVER.IA: o motorista enviou o ticket de descarga.';
+      const caminho = `/transporte/v1/manifestos/${encodeURIComponent(String(v.bsoft_manifesto_id))}/encerrar`;
+      let erro: string | null = null;
+      try {
+        try { await api.alterarNoBsoft(caminho, { fecharManifesto: 'S', dtFechamento: `${agora.slice(0, 10)} ${agora.slice(11, 16)}`, obs }); }
+        catch (e) {
+          // o manifesto já estava fechado no Bsoft: só encerra
+          if (e instanceof ErroBsoft && /j[aá] (est[aá] )?fechad/i.test(e.message)) await api.alterarNoBsoft(caminho, { obs });
+          else throw e;
+        }
+      } catch (e) {
+        const msg = (e as Error).message;
+        erro = /j[aá] (est[aá] )?encerrad/i.test(msg) ? null : msg;   // já encerrado lá = está certo
+      }
+      await admin.from('viagem').update(erro ? { bsoft_encerramento_erro: erro.slice(0, 500) } : { bsoft_encerrado_em: new Date().toISOString(), bsoft_encerramento_erro: null }).eq('id', v.id);
+      return jsonResponse(erro ? { ok: false, error: `O Bsoft não encerrou o MDF-e ${v.mdfe_numero ?? ''}: ${erro}` } : { ok: true });
     }
 
     // ---------- abastecimento → Bsoft ----------

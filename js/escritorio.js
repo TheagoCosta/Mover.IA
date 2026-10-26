@@ -218,12 +218,20 @@ const ROTULO_VIAGEM = { em_andamento: ['blue', 'Em andamento'], concluida: ['gre
 
 async function secaoViagens(el){
   const [viagens, docs, usuarios] = await Promise.all([
-    consultar(sb.from('viagem').select('id, origem, destino, origem_endereco, destino_endereco, cte_numero, mdfe_numero, status, criado_em, bsoft_manifesto_id, motorista_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa)').order('criado_em', { ascending:false }).limit(500)),
-    consultar(sb.from('documento').select('referente_id').eq('referente_a', 'viagem')),
+    consultar(sb.from('viagem').select('id, origem, destino, origem_endereco, destino_endereco, cte_numero, mdfe_numero, status, criado_em, bsoft_manifesto_id, bsoft_encerrado_em, bsoft_encerramento_erro, motorista_id, motorista:motorista_id(nome), veiculo:veiculo_id(placa)').order('criado_em', { ascending:false }).limit(500)),
+    consultar(sb.from('documento').select('referente_id, tipo').eq('referente_a', 'viagem')),
     qUsuarios(),
   ]);
-  const nDocs = {};
-  docs.forEach(d => { nDocs[d.referente_id] = (nDocs[d.referente_id] || 0) + 1; });
+  const nDocs = {}, comTicket = new Set();
+  docs.forEach(d => { nDocs[d.referente_id] = (nDocs[d.referente_id] || 0) + 1; if(d.tipo === 'Ticket de descarga') comTicket.add(d.referente_id); });
+  // MDF-e no Bsoft: encerrado, com erro, ou botão para encerrar (viagem do Bsoft concluída com ticket)
+  const situacaoMdfe = (v) => {
+    if(!v.bsoft_manifesto_id || v.status !== 'concluida') return '';
+    if(v.bsoft_encerrado_em) return `<div class="sub" style="margin-top:4px;">MDF-e encerrado ${fmtDataHora(v.bsoft_encerrado_em)}</div>`;
+    if(!comTicket.has(v.id)) return `<div class="sub" style="margin-top:4px;">Sem ticket de descarga</div>`;
+    return `${v.bsoft_encerramento_erro ? `<div class="sub" style="margin-top:4px; color:var(--signal-red-ink); max-width:220px;" title="${esc(v.bsoft_encerramento_erro)}">Erro ao encerrar: ${esc(v.bsoft_encerramento_erro.slice(0, 80))}</div>` : ''}
+      <button class="btn btn-outline btn-sm" data-encerrar-mdfe="${v.id}" style="margin-top:4px;">Encerrar MDF-e</button>`;
+  };
   const emAndamento = viagens.filter(v => v.status === 'em_andamento');
   const motoristasEmViagem = new Set(emAndamento.map(v => v.motorista_id).filter(Boolean)).size;
   const doFiltro = filtroViagens === 'todas' ? viagens : viagens.filter(v => v.status === filtroViagens);
@@ -263,11 +271,21 @@ async function secaoViagens(el){
           <td class="mono">${esc(v.mdfe_numero || '—')}</td>
           <td class="mono" style="max-width:140px;">${esc(v.cte_numero || '—')}</td>
           <td><button class="btn ${n ? 'btn-outline' : 'btn-primary'} btn-sm" data-docs-viagem="${v.id}">${ic('doc', 14)} ${n ? n : 'Anexar'}</button></td>
-          <td>${badge(cor, txt)}</td>
+          <td>${badge(cor, txt)}${situacaoMdfe(v)}</td>
           <td><button class="btn btn-outline btn-sm" data-status-viagem="${v.id}">${v.status === 'em_andamento' ? 'Concluir' : 'Reabrir'}</button></td></tr>`; }))
         : vazio(estadoListas.viagens && estadoListas.viagens.busca ? 'Nenhuma viagem encontrada nesta pesquisa.' : filtroViagens === 'em_andamento' ? 'Nenhuma viagem em andamento.' : 'Nenhuma viagem por aqui.'),
       `<button class="btn btn-primary btn-sm" id="btnNovaViagemSecao">${ic('plus', 15)} Nova viagem</button>${visiveis.length ? botaoExportar('btnCsvViagens') : ''}`);
     caixa.querySelectorAll('[data-docs-viagem]').forEach(b => b.addEventListener('click', () => abrirDocumentosViagem(viagens.find(v => v.id === b.dataset.docsViagem))));
+    caixa.querySelectorAll('[data-encerrar-mdfe]').forEach(b => b.addEventListener('click', async () => {
+      const v = viagens.find(x => x.id === b.dataset.encerrarMdfe);
+      if(!confirm(`Encerrar no Bsoft o MDF-e ${v.mdfe_numero || ''} (${nomeMot(v)})?\n\nO encerramento vai para a SEFAZ e não se desfaz.`)) return;
+      b.disabled = true; b.textContent = 'Encerrando...';
+      let r;
+      try{ r = await chamarBsoft('encerrar_mdfe', { viagem_id: v.id }); } catch(e){ r = { ok: false, error: e.message }; }
+      if(!r || !r.ok) alert((r && r.error) || 'Não consegui encerrar.');
+      else mostrarToast('✅ MDF-e encerrado no Bsoft');
+      secaoViagens(el);
+    }));
     caixa.querySelectorAll('[data-status-viagem]').forEach(b => b.addEventListener('click', async () => {
       const v = viagens.find(x => x.id === b.dataset.statusViagem);
       const novo = v.status === 'em_andamento' ? 'concluida' : 'em_andamento';
@@ -907,7 +925,11 @@ async function secaoIntegracao(el){
         <button class="btn btn-primary btn-sm" id="btnBsoftSincronizar">Sincronizar agora</button>
         <button class="btn ${st.ativo ? 'btn-outline' : 'btn-primary'} btn-sm" id="btnBsoftAutomatico">${st.ativo ? 'Desligar automático' : 'Ligar sincronização automática'}</button>
       </div>
-      <div id="bsoftResultado" style="margin-top:14px;"></div></div>`)}
+      <div id="bsoftResultado" style="margin-top:14px;"></div></div>`)
+      + painel('Encerramento do MDF-e', `<div class="o-panel-body">
+      <div class="l2" style="line-height:1.55; margin-bottom:12px;">Quando o motorista finaliza a viagem enviando o <b>ticket de descarga</b>, o MOVER.IA pode pedir ao Bsoft para <b>encerrar (dar baixa) no MDF-e</b> dessa viagem. O encerramento vai para a SEFAZ e não se desfaz.
+        Situação: <b>${st.encerrar_mdfe ? 'automático LIGADO' : 'automático desligado'}</b>. Com ele desligado, dá para encerrar uma viagem por vez em Viagens (botão "Encerrar MDF-e").</div>
+      <button class="btn ${st.encerrar_mdfe ? 'btn-outline' : 'btn-primary'} btn-sm" id="btnBsoftEncerrarAuto">${st.encerrar_mdfe ? 'Desligar encerramento automático' : 'Ligar encerramento automático'}</button></div>`)}
     ${(resumo.sem_motorista || []).length ? painel('MDF-e sem motorista encontrado (última sincronização)', `<div class="o-panel-body"><div class="l2" style="margin-bottom:8px;">Confira se o CPF do motorista está no cadastro dele (Motoristas → clicar no motorista) ou se a placa está no conjunto certo.</div></div>
       ${tabela(['MDF-e', 'Placa', 'Motorista no Bsoft'], resumo.sem_motorista.map(s => `<tr><td class="mono">${esc(s.manifesto)}</td><td class="mono">${esc(s.placa || '—')}</td><td>${esc(s.motorista_bsoft || '—')}</td></tr>`))}`) : ''}
     ${painel(`Histórico de sincronizações (${logs.length})`, logs.length ? tabela(['Quando', 'Situação', 'Viagens novas', 'Observação'],
@@ -938,6 +960,14 @@ async function secaoIntegracao(el){
     const { error } = await sb.rpc('definir_sincronizacao_bsoft', { p_ativo: ligar });
     if(error){ alert(error.message); return; }
     mostrarToast(ligar ? '✅ Sincronização automática ligada' : 'Sincronização automática desligada');
+    secaoIntegracao(el);
+  });
+  document.getElementById('btnBsoftEncerrarAuto').addEventListener('click', async () => {
+    const ligar = !st.encerrar_mdfe;
+    if(ligar && !confirm('Ligar o encerramento automático? Cada viagem do Bsoft finalizada pelo motorista com o ticket de descarga terá o MDF-e encerrado no Bsoft (e na SEFAZ) na hora. Isso não se desfaz.')) return;
+    const { error } = await sb.rpc('definir_encerramento_mdfe', { p_ligar: ligar });
+    if(error){ alert(error.message); return; }
+    mostrarToast(ligar ? '✅ Encerramento automático ligado' : 'Encerramento automático desligado');
     secaoIntegracao(el);
   });
 }
