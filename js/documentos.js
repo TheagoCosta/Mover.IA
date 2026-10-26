@@ -641,9 +641,11 @@ function mostrarToast(mensagem){
 // pessoa confirma manualmente no cartão de revisão quanto quando o app
 // tem certeza suficiente pra cadastrar sozinho, sem perguntar nada.
 async function salvarDocumentoNoBanco({ referenteA, referenteId, tipo, numero, validade, file }){
-  // CNH nova de quem já tem CNH cadastrada: atualiza a existente (não duplica)
-  if(referenteA === 'motorista' && /^cnh$/i.test(String(tipo || '').trim())){
-    const { data: existente } = await sb.from('documento').select('id').eq('referente_a', 'motorista').eq('referente_id', referenteId).ilike('tipo', 'cnh').limit(1);
+  // CNH nova de quem já tem CNH, ou CRLV novo de veículo que já tem CRLV: atualiza o existente (não duplica)
+  const tipoUnico = (referenteA === 'motorista' && /^cnh$/i.test(String(tipo || '').trim())) ? 'cnh'
+    : (referenteA === 'veiculo' && /^crlv$/i.test(String(tipo || '').trim())) ? 'crlv' : null;
+  if(tipoUnico){
+    const { data: existente } = await sb.from('documento').select('id').eq('referente_a', referenteA).eq('referente_id', referenteId).ilike('tipo', tipoUnico).order('criado_em', { ascending: false }).limit(1);
     if(existente && existente[0]){
       const docId = existente[0].id;
       const path = `${usuarioAtual.transportadora_id}/${docId}_${Date.now()}_${sanitizarNomeArquivo(file.name)}`;
