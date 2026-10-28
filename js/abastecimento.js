@@ -3,7 +3,8 @@
 //     quem do escritório abasteceu confirma com a PRÓPRIA senha — conferida
 //     no servidor (função registrar-abastecimento-interno).
 //   • Externo (posto): km, litros, Arla, posto e número da nota/comprovante.
-// Data e hora são gravadas automaticamente no momento do registro.
+// Data e hora são gravadas automaticamente no momento do registro (sem sinal,
+// o externo fica guardado no celular com a hora em que foi feito — js/offline.js).
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
 
@@ -26,7 +27,7 @@ async function loadAbastecimentoMotorista(){
   const conjunto = await carregarMeuConjunto();
   const cavalo = veiculosDoConjunto(conjunto).find(ci => ci.ordem === 1) || veiculosDoConjunto(conjunto).find(ci => ci.veiculo.tipo === 'cavalo');
 
-  const [{ data: historico }, { data: ultimoDoVeiculo }, { data: ultimoArla }] = await dadosTela('abastecimento', async () => {
+  const [{ data: doServidor }, { data: ultimoDoVeiculo }, { data: ultimoArla }] = await dadosTela('abastecimento', async () => {
     const r = await Promise.all([
       sb.from('abastecimento')
         .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
@@ -36,6 +37,7 @@ async function loadAbastecimentoMotorista(){
     ]);
     return r.map(x => ({ data: x.data || [] }));
   }, () => { if(motoristaScreen === 'abastecimento') loadAbastecimentoMotorista(); });
+  const historico = [...abastecimentosNaFila().reverse(), ...(doServidor || [])];   // os guardados sem sinal aparecem primeiro
   const ultimoKm = ultimoDoVeiculo && ultimoDoVeiculo[0] ? Number(ultimoDoVeiculo[0].km) : null;
   const ultimoKmArla = ultimoArla && ultimoArla[0] ? Number(ultimoArla[0].km) : null;
   const media = mediaDe(historico, 'media_calculada');
@@ -125,7 +127,7 @@ function itemAbastecimentoMotorista(a){
         <div class="li-sub">${fmtDataHora(a.data)} · ${esc(a.veiculo ? a.veiculo.placa : '')} · km ${numBR(a.km, 0)}</div>
         ${detalhe ? `<div class="li-sub">${detalhe}</div>` : ''}
       </div>
-      ${a.tipo ? pillStatus(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : ''}
+      ${a.naFila ? pillStatus('amber', 'Aguardando sinal') : a.tipo ? pillStatus(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : ''}
     </div>`;
 }
 
@@ -153,7 +155,10 @@ async function prepararAbastecimento(cavalo, ultimoKm, ultimoKmArla){
     const btn = document.querySelector('#formAbastecimento button[type="submit"]');
     btn.disabled = true; btn.textContent = 'Salvando...';
     // médias do diesel e do Arla e a data são calculadas pelo banco (gatilho abastecimento_calcular)
-    const { data: salvo, error } = await sb.from('abastecimento').insert({
+    // sem sinal: fica guardado no celular e vai depois (js/offline.js)
+    const id = novoId();
+    const dados = {
+      id,
       transportadora_id: usuarioAtual.transportadora_id,
       motorista_id: session.user.id,
       veiculo_id: cavalo.veiculo_id,
@@ -161,16 +166,23 @@ async function prepararAbastecimento(cavalo, ultimoKm, ultimoKmArla){
       km, litros, arla_litros: arla,
       preco_litro_diesel: precoDiesel, preco_litro_arla: arla ? precoArla : null,
       posto, nota_numero: nota,
-    }).select('media_calculada').single();
-    if(error){ erro.textContent = 'Erro ao salvar: ' + error.message; btn.disabled = false; btn.textContent = 'Registrar abastecimento'; return; }
-    const media = salvo && salvo.media_calculada !== null ? Number(salvo.media_calculada) : null;
-    mostrarToast(media ? `✅ Abastecimento salvo — ${media.toFixed(2).replace('.', ',')} km/l` : '✅ Abastecimento salvo');
+    };
+    const r = await gravarOuGuardar(`Abastecimento ${cavalo.veiculo.placa}`, [{ tabela: 'abastecimento', op: 'insert', dados }],
+      { abastecimento: { ...dados, veiculo: { placa: cavalo.veiculo.placa } } });
+    if(r.erro){ erro.textContent = 'Erro ao salvar: ' + r.erro; btn.disabled = false; btn.textContent = 'Registrar abastecimento'; return; }
+    if(r.guardado) avisoGuardado(r);
+    else {
+      const { data: salvo } = await sb.from('abastecimento').select('media_calculada').eq('id', id).maybeSingle();
+      const media = salvo && salvo.media_calculada !== null ? Number(salvo.media_calculada) : null;
+      mostrarToast(media ? `✅ Abastecimento salvo — ${media.toFixed(2).replace('.', ',')} km/l` : '✅ Abastecimento salvo');
+    }
     loadAbastecimentoMotorista();
     return;
   }
 
   const odometro = lerNumero('abOdometro');
   if(odometro === null || Number.isNaN(odometro) || odometro < 0){ erro.textContent = 'Informe o odômetro da bomba.'; return; }
+  if(!navigator.onLine){ erro.textContent = 'Sem internet agora. O abastecimento interno precisa de sinal, porque o escritório confirma com a senha.'; return; }
   abrirConfirmacaoEscritorio({ veiculo_id: cavalo.veiculo_id, placa: cavalo.veiculo.placa, km, litros, arla_litros: arla, odometro_bomba: odometro });
 }
 

@@ -26,8 +26,18 @@ async function init(){
     usuarioAtual = null;
     app.innerHTML = `<div class="wrap"><div class="status">Carregando...</div></div>`;
   }
-  const { data } = await sb.auth.getSession();
+  const { data, error } = await sb.auth.getSession();
   session = data.session;
+  // Sem sinal e com o acesso vencido (não deu para renovar): segue com o que está
+  // guardado no aparelho; os registros vão para a fila e o acesso renova quando o sinal voltar
+  if(!session && cache && cache.usuario.papel === 'motorista' && (!navigator.onLine || (error && ehErroDeRede(error)))){
+    session = { user: { id: cache.usuarioId } };
+    usuarioAtual = { ...cache.usuario, _doCache: true };
+    window.addEventListener('online', async () => {
+      const { data: d } = await sb.auth.getSession();
+      if(d.session) session = d.session; else { session = null; usuarioAtual = null; render(); }
+    }, { once: true });
+  }
   if(!session || (cache && session.user.id !== cache.usuarioId)){
     usuarioAtual = null;
     if(!session) limparCacheInicio();
@@ -170,6 +180,7 @@ async function loadShell(){
   const destino = lerDestinoDaUrl();
   if(destino) prepararDestino(destino);
   sincronizarPush();
+  if(usuarioAtual.papel === 'motorista') setTimeout(enviarFila, 2000);   // registros guardados sem sinal (js/offline.js)
   setTimeout(verificarAceitePrivacidade, 600);   // aviso da Política de Privacidade (1º acesso / versão nova)
 
   if(usuarioAtual.papel === 'motorista'){ definirTema('escuro'); loadShellMotorista(); return; }

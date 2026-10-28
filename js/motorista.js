@@ -52,15 +52,16 @@ function placaCavalo(conjunto){
 // Jornada aberta (ativa ou pausada) com todos os eventos, pra calcular o
 // tempo de condução e mostrar a linha do tempo.
 async function buscarJornadaAberta(){
-  const { data } = await sb.from('jornada')
+  const { data, error } = await sb.from('jornada')
     .select('id, inicio, status, jornada_evento(tipo, motivo, observacao, criado_em)')
     .eq('motorista_id', session.user.id)
     .neq('status', 'encerrada')
     .order('inicio', { ascending: false })
     .limit(1);
+  if(error && ehErroDeRede(error)){ const c = lerCacheInicio(); return c ? c.dados.jornada || null : null; }   // sem sinal: a última conhecida
   return (data && data[0]) || null;
 }
-async function carregarJornadaAtiva(){ return prepararJornada(await buscarJornadaAberta()); }
+async function carregarJornadaAtiva(){ return prepararJornada(jornadaComFila(await buscarJornadaAberta())); }
 // ordena os eventos e calcula parada atual e tempo de condução
 function prepararJornada(jornada){
   if(jornada){
@@ -111,9 +112,10 @@ let travaVerificadaEm = 0;
 function invalidarTravaChecklist(){ travaVerificadaEm = 0; }
 
 async function carregarUltimoChecklist(){
-  const { data } = await sb.from('checklist').select('id, criado_em')
+  const { data, error } = await sb.from('checklist').select('id, criado_em')
     .eq('motorista_id', session.user.id)
     .order('criado_em', { ascending: false }).limit(1);
+  if(error && ehErroDeRede(error)){ const c = lerCacheInicio(); return c ? c.dados.ultimo_checklist || null : null; }
   return (data && data[0]) || null;
 }
 
@@ -125,13 +127,11 @@ async function atualizarTravaChecklist(){
   travaVerificadaEm = Date.now();
   const conjunto = await carregarMeuConjunto();
   if(!conjunto) return definirTrava(null, null, false);
-  const [ultimo, { data: aberta }] = await Promise.all([
-    carregarUltimoChecklist(),
-    sb.from('jornada').select('id').eq('motorista_id', session.user.id).neq('status', 'encerrada').limit(1),
-  ]);
-  return definirTrava(conjunto, ultimo, !!(aberta && aberta.length));
+  const [ultimo, jornada] = await Promise.all([carregarUltimoChecklist(), buscarJornadaAberta()]);
+  return definirTrava(conjunto, ultimo, !!jornadaComFila(jornada));
 }
 function definirTrava(conjunto, ultimo, jornadaAberta){
+  ultimo = ultimoChecklistComFila(ultimo);   // checklist guardado sem sinal já vale
   if(!conjunto) return (travaChecklist = { exigido:false, travado:false, ultimo:null, venceEm:null, jornadaAberta:false });
   const venceEm = ultimo ? new Date(new Date(ultimo.criado_em).getTime() + VALIDADE_CHECKLIST_HORAS * 3600000) : null;
   return (travaChecklist = { exigido:true, ultimo, venceEm, travado: !venceEm || venceEm <= new Date(), jornadaAberta });
@@ -166,7 +166,7 @@ function montarTelaMotorista({ header, conteudo, tab, voltarPara = 'home' }){
   app.innerHTML = `
     <div class="m-app">
       ${header}
-      <div class="m-content">${conteudo}</div>
+      <div class="m-content">${faixaFila()}${conteudo}</div>
       <nav class="tabbar">
         ${ABAS_MOTORISTA.map(a => {
           const travada = travaChecklist.travado && !liberadoComChecklistVencido('home', a.k);
@@ -317,12 +317,21 @@ async function carregarInicioPorPartes(){
 // conferida quando os dados acabaram de vir do servidor
 function aplicarDadosInicio(d, recentes){
   meuConjunto = d.conjunto || false;
-  definirTrava(meuConjunto, d.ultimo_checklist, !!d.jornada);
+  definirTrava(meuConjunto, d.ultimo_checklist, !!jornadaComFila(d.jornada));
   if(recentes) travaVerificadaEm = Date.now();
 }
 
 async function buscarInicio(){
   const { data, error } = await sb.rpc('inicio_motorista');
+  if(error && ehErroDeRede(error)){
+    // sem sinal: fica com o que estava guardado no aparelho (não apaga com dados vazios)
+    const c = lerCacheInicio();
+    if(c && c.usuarioId === session.user.id){
+      guardarTela('jornada', c.dados.jornada || null); guardarTela('viagem', c.dados.viagem || null); guardarTela('agendamentos', c.dados.agendamentos || []);
+      aplicarDadosInicio(c.dados, false);
+      return c.dados;
+    }
+  }
   const dados = !error && data && typeof data === 'object' ? data : await carregarInicioPorPartes();
   // as telas Jornada, Viagem e Agendamentos já ficam prontas com o que veio aqui
   guardarTela('jornada', dados.jornada || null);
@@ -362,7 +371,7 @@ function abrirInicioDoCache(cache){
 
 function desenharInicio(d){
   const conjunto = d.conjunto || false;
-  const jornada = prepararJornada(d.jornada ? { ...d.jornada } : null);
+  const jornada = prepararJornada(jornadaComFila(d.jornada || null));
   const viagem = d.viagem;
   const alertas = montarAlertas(d.docs_motorista, d.docs_veiculo, d.capacitacoes);
   const chamadosAbertos = Number(d.chamados_abertos) || 0;
@@ -421,7 +430,7 @@ function saudacaoHorario(){
 // Aba JORNADA
 // ---------------------------------------------------------------------
 async function loadAbaJornada(){
-  const jornada = prepararJornada(await dadosTela('jornada', buscarJornadaAberta, () => { if(motoristaScreen === 'home' && motoristaTab === 'jornada') loadAbaJornada(); }));
+  const jornada = prepararJornada(jornadaComFila(await dadosTela('jornada', buscarJornadaAberta, () => { if(motoristaScreen === 'home' && motoristaTab === 'jornada') loadAbaJornada(); })));
   let principal;
   if(!jornada){
     principal = `
@@ -478,22 +487,29 @@ async function loadAbaJornada(){
   if(encerrar) encerrar.addEventListener('click', () => { jornadaEmEdicaoId = jornada.id; irParaMotorista('jornadaEncerrar'); });
 }
 
+// Jornada: cada ação grava a jornada e o evento; sem sinal fica guardada no
+// celular e vai depois (ver js/offline.js)
+function avisoGuardado(r){ if(r.guardado) mostrarToast('📶 Sem sinal — guardado no celular, vai sozinho quando o sinal voltar'); }
+
 async function iniciarJornada(){
-  const { data, error } = await sb.from('jornada').insert({
-    transportadora_id: usuarioAtual.transportadora_id,
-    motorista_id: session.user.id,
-    status: 'ativa'
-  }).select('id').single();
-  if(error){ alert('Erro ao iniciar jornada: ' + error.message); loadShellMotorista(); return; }
-  await sb.from('jornada_evento').insert({ jornada_id: data.id, tipo: 'inicio' });
+  const jornadaId = novoId();
+  const r = await gravarOuGuardar('Início da jornada', [
+    { tabela: 'jornada', op: 'insert', dados: { id: jornadaId, transportadora_id: usuarioAtual.transportadora_id, motorista_id: session.user.id, status: 'ativa' } },
+    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaId, tipo: 'inicio' } },
+  ], { jornada: { acao: 'iniciar', jornadaId } });
+  if(r.erro){ alert('Erro ao iniciar jornada: ' + r.erro); loadShellMotorista(); return; }
+  avisoGuardado(r);
   invalidarTravaChecklist();
   loadShellMotorista();
 }
 
 async function atualizarJornada(jornadaId, novoStatus, tipoEvento){
-  const { error } = await sb.from('jornada').update({ status: novoStatus }).eq('id', jornadaId);
-  if(error){ alert('Erro: ' + error.message); loadShellMotorista(); return; }
-  await sb.from('jornada_evento').insert({ jornada_id: jornadaId, tipo: tipoEvento });
+  const r = await gravarOuGuardar(TIPO_EVENTO_LABEL[tipoEvento] || 'Jornada', [
+    { tabela: 'jornada', op: 'update', id: jornadaId, dados: { status: novoStatus } },
+    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaId, tipo: tipoEvento } },
+  ], { jornada: { acao: tipoEvento, jornadaId } });
+  if(r.erro){ alert('Erro: ' + r.erro); loadShellMotorista(); return; }
+  avisoGuardado(r);
   loadShellMotorista();
 }
 
@@ -527,9 +543,12 @@ async function confirmarPausa(){
   btn.disabled = true; btn.textContent = 'Salvando...';
   const obs = document.getElementById('pausaObs').value.trim();
 
-  const { error } = await sb.from('jornada').update({ status: 'pausada' }).eq('id', jornadaEmEdicaoId);
-  if(error){ alert('Erro ao registrar parada: ' + error.message); btn.disabled = false; btn.textContent = 'Confirmar parada'; return; }
-  await sb.from('jornada_evento').insert({ jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, observacao: obs || null });
+  const r = await gravarOuGuardar(`Parada: ${motivoSelecionado}`, [
+    { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'pausada' } },
+    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, observacao: obs || null } },
+  ], { jornada: { acao: 'pausa', jornadaId: jornadaEmEdicaoId, motivo: motivoSelecionado, observacao: obs || null } });
+  if(r.erro){ alert('Erro ao registrar parada: ' + r.erro); btn.disabled = false; btn.textContent = 'Confirmar parada'; return; }
+  avisoGuardado(r);
 
   motivoSelecionado = null;
   irParaMotorista('tab:jornada');
@@ -556,17 +575,15 @@ async function confirmarEncerramento(assinaturaBase64){
   btn.disabled = true; btn.textContent = 'Salvando...';
   const obs = document.getElementById('encerrarObs').value.trim();
 
-  const { error } = await sb.from('jornada').update({
-    status: 'encerrada',
-    fim: new Date().toISOString(),
-    assinatura_base64: assinaturaBase64,
-    assinado_em: new Date().toISOString()
-  }).eq('id', jornadaEmEdicaoId);
-  if(error){ alert('Erro ao encerrar jornada: ' + error.message); btn.disabled = false; btn.textContent = 'Assinar e encerrar jornada'; return; }
-  await sb.from('jornada_evento').insert({ jornada_id: jornadaEmEdicaoId, tipo: 'fim', observacao: obs || null });
+  // fim e assinado_em são definidos pelo banco
+  const r = await gravarOuGuardar('Fim da jornada', [
+    { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'encerrada', assinatura_base64: assinaturaBase64 } },
+    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'fim', observacao: obs || null } },
+  ], { jornada: { acao: 'encerrar', jornadaId: jornadaEmEdicaoId } });
+  if(r.erro){ alert('Erro ao encerrar jornada: ' + r.erro); btn.disabled = false; btn.textContent = 'Assinar e encerrar jornada'; return; }
   invalidarTravaChecklist();
 
-  mostrarToast('✅ Jornada encerrada');
+  if(r.guardado) avisoGuardado(r); else mostrarToast('✅ Jornada encerrada');
   irParaMotorista('tab:jornada');
 }
 
@@ -632,7 +649,9 @@ function formatarDuracao(inicioIso, fimIso){
 // Aba CHECKLIST
 // ---------------------------------------------------------------------
 async function buscarItensChecklist(){
-  const { data } = await sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').eq('ativo', true).order('ordem');
+  const { data, error } = await sb.from('checklist_item_padrao').select('id, ordem, descricao, padrao_esperado').eq('ativo', true).order('ordem');
+  if(error && ehErroDeRede(error)) return itensChecklistGuardados();   // sem sinal: a lista guardada da última vez
+  guardarItensChecklist(data || []);
   return data || [];
 }
 
@@ -720,18 +739,19 @@ async function enviarChecklist(assinaturaBase64){
   const conjunto = await carregarMeuConjunto();
   const respostas = Object.keys(chkAnswers).map(itemId => ({ item_id: itemId, resposta: chkAnswers[itemId] }));
 
-  const { error } = await sb.from('checklist').insert({
+  const r = await gravarOuGuardar('Checklist', [{ tabela: 'checklist', op: 'insert', dados: {
+    id: novoId(),
     transportadora_id: usuarioAtual.transportadora_id,
     motorista_id: session.user.id,
     conjunto_id: conjunto ? conjunto.id : null,
     respostas,
     assinatura_base64: assinaturaBase64,
-    assinado_em: new Date().toISOString(),
-  });
+  } }], { checklist: true });
 
-  if(error){ alert('Erro ao enviar checklist: ' + error.message); btn.disabled = false; btn.textContent = 'Tentar de novo'; return; }
+  if(r.erro){ alert('Erro ao enviar checklist: ' + r.erro); btn.disabled = false; btn.textContent = 'Tentar de novo'; return; }
   const irregulares = respostas.filter(r => r.resposta === 'bad').length;
-  mostrarToast(irregulares ? `✅ Checklist enviado — ${irregulares} irregularidade${irregulares > 1 ? 's' : ''} avisada${irregulares > 1 ? 's' : ''} ao escritório` : '✅ Checklist enviado ao escritório');
+  if(r.guardado) avisoGuardado(r);
+  else mostrarToast(irregulares ?`✅ Checklist enviado — ${irregulares} irregularidade${irregulares > 1 ? 's' : ''} avisada${irregulares > 1 ? 's' : ''} ao escritório` : '✅ Checklist enviado ao escritório');
   chkAnswers = {};
   invalidarTravaChecklist();
   irParaMotorista('tab:inicio');

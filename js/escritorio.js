@@ -9,7 +9,8 @@ const SECOES_ESCRITORIO = [
   { k:'viagens',       l:'Viagens',       i:'map',     meta:() => 'Viagens em andamento e concluídas — MDF-e, CT-e e arquivos' },
   { k:'abastecimento', l:'Abastecimento', i:'fuel',    meta:() => 'Abastecimentos registrados, litros e gastos em posto' },
   { k:'consumo',       l:'Consumo',       i:'chart',   meta:() => 'Média de consumo por veículo e por motorista, evolução e alertas' },
-  { k:'oficina',       l:'Oficina',       i:'wrench',  meta:() => 'Chamados de manutenção — motoristas, mecânico e oficinas externas' },
+  { k:'relatorios',    l:'Relatório mensal', i:'cal', meta:() => 'Resumo do mês de cada motorista — jornadas, viagens, checklists, abastecimentos e chamados' },
+  { k:'oficina',       l:'Oficina',      i:'wrench',  meta:() => 'Chamados de manutenção — motoristas, mecânico e oficinas externas' },
   { k:'jornadas',      l:'Jornadas',      i:'clock',   meta:() => 'Registro de horas de condução e paradas' },
   { k:'checklists',    l:'Checklists',    i:'checksq', meta:() => 'Inspeções pré-viagem enviadas pelos motoristas' },
   { k:'documentos',    l:'Documentos',    i:'doc',     meta:() => 'Repositório central de documentos' },
@@ -72,7 +73,7 @@ function loadEscritorio(){
 
   const el = document.getElementById('screenContent');
   const renderizar = {
-    painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, viagens: secaoViagens, abastecimento: secaoAbastecimento, consumo: secaoConsumo,
+    painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, viagens: secaoViagens, abastecimento: secaoAbastecimento, consumo: secaoConsumo, relatorios: secaoRelatorios,
     oficina: secaoOficina, jornadas: secaoJornadas, checklists: secaoChecklists, documentos: () => loadDocumentos(),
     capacitacoes: secaoCapacitacoes, agenda: secaoAgenda, usuarios: secaoUsuarios, privacidade: secaoPrivacidade, integracao: secaoIntegracao, config: secaoConfig,
   }[screen];
@@ -102,6 +103,10 @@ function cavaloDoConjunto(conjunto){
   const itens = itensOrdenados(conjunto);
   const cavalo = itens.find(i => i.veiculo && i.veiculo.tipo === 'cavalo') || itens[0];
   return cavalo && cavalo.veiculo ? cavalo.veiculo.placa : '—';
+}
+// Registro feito sem sinal no app do motorista: vale a hora do celular (até 12 h antes) e mostra quando chegou
+function marcaSemSinal(r){
+  return r && r.recebido_em ? `<div class="l2" title="Feito sem internet no celular do motorista; a hora é a do celular.">📶 Registrado sem sinal · chegou em ${fmtDataHora(r.recebido_em)}</div>` : '';
 }
 function contarIrregularidades(checklist){ return (checklist.respostas || []).filter(r => r.resposta === 'bad').length; }
 function loginDoEmail(email){ return String(email || '').endsWith('@motoristas.moveria.app') ? email.split('@')[0] : email; }
@@ -445,12 +450,14 @@ let filtroAbastecimento = 'todos';
 async function secaoAbastecimento(el){
   const [registros, comBsoft] = await Promise.all([
     consultar(sb.from('abastecimento')
-      .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, bsoft_ref, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
+      .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, bsoft_ref, bsoft_origem, recebido_em, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
       .order('data', { ascending:false }).limit(1000)),
     sb.from('integracao_bsoft').select('transportadora_id').maybeSingle().then(r => !!r.data),
   ]);
   // coluna do Bsoft: botão para enviar, ou a marca de que já foi
-  const celulaBsoft = (a) => !comBsoft || !a.tipo ? '' : a.bsoft_ref
+  const celulaBsoft = (a) => !comBsoft || !a.tipo ? '' : a.bsoft_origem
+    ? `<span title="Lançado no Bsoft pelo escritório (${esc(a.bsoft_origem)}) e trazido para o MOVER.IA">${badge('blue', 'Do Bsoft')}</span>`
+    : a.bsoft_ref
     ? `<span title="${esc(a.bsoft_ref)}">${badge('green', 'No Bsoft')}</span>`
     : `<button class="btn btn-outline btn-sm" data-bsoft-abast="${a.id}" title="Lançar este abastecimento no Bsoft">Enviar ao Bsoft</button>`;
   const trintaDias = new Date(Date.now() - 30 * 86400000);
@@ -502,6 +509,7 @@ async function secaoAbastecimento(el){
       ${kpi(recentes.length, 'Abastecimentos em 30 dias', `${nInternos} interno${nInternos === 1 ? '' : 's'} · ${nExternos} externo${nExternos === 1 ? '' : 's'}`)}
     </div>
     <div class="o-banner" style="color:var(--ink-700);">${ic('chart', 18)}<div class="txt"><b>Relatório de consumo</b>Evolução mês a mês, ranking por veículo e por motorista e alertas de consumo fora do padrão: <a href="#" data-ir-consumo>abrir o relatório</a>.</div></div>
+    ${comBsoft ? `<div class="o-banner" style="color:var(--ink-700);">${ic('sync', 18)}<div class="txt"><b>Abastecimentos lançados no Bsoft</b>O MOVER.IA lê do Bsoft os abastecimentos da frota (só leitura) — o motorista é o da viagem ou do conjunto daquele cavalo. Os novos também chegam a cada sincronização. <a href="#" id="btnTrazerBsoft">Buscar agora</a></div></div>` : ''}
     ${painel('Consumo médio por veículo',
       veiculos.length ? tabela(['Placa', 'Média diesel', 'Média Arla', 'Abastecimentos', 'Diesel (total)', 'Arla (total)', 'Último km'],
         veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td><b>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</b></td><td>${v.mediaArla ? fmtNum(v.mediaArla, 1) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td>${v.arla ? fmtNum(v.arla, 0) + ' L' : '<span class="sub">—</span>'}</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
@@ -518,7 +526,7 @@ async function secaoAbastecimento(el){
     const caixa = document.getElementById('listaAbast');
     caixa.innerHTML = `${painel(`Abastecimentos registrados (${visiveis.length})${visiveis.length > 200 ? ' · mostrando 200' : ''}`,
       visiveis.length ? tabela(['Data e hora', 'Tipo', 'Placa', 'Motorista', 'Km', 'Diesel', 'Arla', 'Média diesel', 'Valor', 'Posto / confirmação', ''],
-        visiveis.slice(0, 200).map(a => { const valor = valorAbastecimento(a); return `<tr><td class="sub">${fmtDataHora(a.data)}</td><td>${a.tipo ? badge(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : '<span class="sub">—</span>'}</td><td class="mono">${esc(a.veiculo ? a.veiculo.placa : '—')}</td><td>${esc(a.motorista ? a.motorista.nome : '—')}</td><td class="mono">${fmtNum(a.km, 0)}</td>
+        visiveis.slice(0, 200).map(a => { const valor = valorAbastecimento(a); return `<tr><td class="sub">${a.bsoft_origem ? fmtData(a.data) : fmtDataHora(a.data)}${marcaSemSinal(a)}</td><td>${a.tipo ? badge(a.tipo === 'interno' ? 'blue' : 'grey', ROTULO_TIPO_ABAST[a.tipo]) : '<span class="sub">—</span>'}</td><td class="mono">${esc(a.veiculo ? a.veiculo.placa : '—')}</td><td>${esc(a.motorista ? a.motorista.nome : '—')}</td><td class="mono">${fmtNum(a.km, 0)}</td>
           <td>${fmtNum(a.litros, 1)} L${a.preco_litro_diesel ? `<div class="sub">${fmtReais(a.preco_litro_diesel)}/L</div>` : ''}</td>
           <td>${a.arla_litros ? fmtNum(a.arla_litros, 1) + ' L' : '<span class="sub">—</span>'}${a.preco_litro_arla ? `<div class="sub">${fmtReais(a.preco_litro_arla)}/L</div>` : ''}${a.media_arla_calculada ? `<div class="sub">${fmtNum(a.media_arla_calculada, 1)} km/l</div>` : ''}</td>
           <td>${a.media_calculada ? fmtNum(a.media_calculada, 2) + ' km/l' : '<span class="sub">—</span>'}</td>
@@ -532,6 +540,17 @@ async function secaoAbastecimento(el){
   }
 
   el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
+  const trazer = document.getElementById('btnTrazerBsoft');
+  if(trazer) trazer.addEventListener('click', async (e) => {
+    e.preventDefault();
+    trazer.textContent = 'Buscando no Bsoft...';
+    try{
+      const r = await chamarBsoft('importar_abastecimentos', { dias: 30 });
+      if(!r.ok) throw new Error(r.error || 'erro');
+      mostrarToast(r.novos ? `✅ ${r.novos} abastecimento${r.novos > 1 ? 's' : ''} trazido${r.novos > 1 ? 's' : ''} do Bsoft` : 'Nada novo no Bsoft (últimos 30 dias)');
+      secaoAbastecimento(el);
+    } catch(err){ alert('Não consegui buscar no Bsoft: ' + err.message); trazer.textContent = 'Buscar agora'; }
+  });
   el.querySelectorAll('[data-ir-consumo]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); screen = 'consumo'; loadEscritorio(); }));
   const dec = (v, c) => v == null || v === '' ? '' : Number(v).toFixed(c).replace('.', ',');
   const b1 = document.getElementById('btnCsvConsumo');
@@ -756,7 +775,7 @@ const COR_JORNADA = { ativa:'blue', pausada:'amber', encerrada:'green' };
 
 async function secaoJornadas(el){
   const jornadas = await consultar(sb.from('jornada')
-    .select('id, inicio, fim, status, assinatura_base64, motorista:motorista_id(nome), jornada_evento(tipo, motivo, observacao, criado_em)')
+    .select('id, inicio, fim, status, assinatura_base64, motorista:motorista_id(nome), jornada_evento(tipo, motivo, observacao, criado_em, recebido_em)')
     .order('inicio', { ascending:false }).limit(200));
   const linhas = jornadas.map(j => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
@@ -791,7 +810,7 @@ async function secaoJornadas(el){
     const { j, eventos, c } = linhas.find(l => l.j.id === tr.dataset.jornada);
     abrirModal(`${j.motorista ? j.motorista.nome : 'Jornada'} — ${fmtData(j.inicio)}`, `
       <div class="l2" style="margin-bottom:10px;">Tempo de condução: <b>${fmtMinutos(c.totalMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[j.status])}</div>
-      ${eventos.map(ev => `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
+      ${eventos.map(ev => `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}${marcaSemSinal(ev)}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
       ${imgAssinatura(j.assinatura_base64) ? `<div class="section-label">Assinatura do motorista</div>${imgAssinatura(j.assinatura_base64, 'width:100%; background:#fff; border:1px solid var(--border); border-radius:8px;')}` : ''}
       <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="btnCorrigirJornada">Corrigir horários / encerrar</button>
@@ -815,7 +834,7 @@ async function secaoJornadas(el){
 // ---------------------------------------------------------------------
 async function secaoChecklists(el){
   const checklists = await consultar(sb.from('checklist')
-    .select('id, criado_em, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))')
+    .select('id, criado_em, recebido_em, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))')
     .order('criado_em', { ascending:false }).limit(200));
   const nomeMot = (c) => c.motorista ? c.motorista.nome : '';
   const ordens = [
@@ -834,7 +853,7 @@ async function secaoChecklists(el){
     const caixa = document.getElementById('listaChecklists');
     caixa.innerHTML = painel(`Checklists enviados (${visiveis.length})`,
       visiveis.length ? tabela(['Motorista', 'Conjunto', 'Data', 'Itens respondidos', 'Irregularidades', 'Status'],
-        visiveis.map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}</td><td>${(c.respostas || []).length}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
+        visiveis.map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}${marcaSemSinal(c)}</td><td>${(c.respostas || []).length}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
         : vazio(checklists.length ? 'Nenhum checklist encontrado nesta pesquisa.' : 'Nenhum checklist enviado ainda.'),
       visiveis.length ? botaoExportar('btnCsvChecklists') : '');
     caixa.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist), () => secaoChecklists(el))));

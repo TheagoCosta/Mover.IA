@@ -15,7 +15,8 @@
 // Quem pode chamar (verify_jwt = false; a função confere):
 //   • o escritório logado (gestão da transportadora com a integração habilitada)
 //   • o agendamento do banco (pg_cron), com o segredo da tabela integracao_segredo
-// Ações: status | testar | previa (mostra o que seria importado, sem gravar) | sincronizar
+// Ações: status | testar | previa (mostra o que seria importado, sem gravar) | sincronizar (MDF-e + abastecimentos recentes)
+//        importar_abastecimentos (lê os abastecimentos lançados no Bsoft e grava no MOVER.IA, para o Consumo)
 //        abastecimento_preparar (só lê: acha veículo, motorista, posto, possíveis repetidos)
 //        abastecimento_enviar (grava; só o escritório logado, nunca o agendamento)
 //        encerrar_mdfe (grava; banco ao finalizar a viagem com ticket, ou botão do escritório)
@@ -46,7 +47,7 @@ const digitos = (s: unknown) => String(s ?? '').replace(/\D/g, '');
 // "FXV-4I34/SP" (como o Bsoft escreve) e "FXV4I34" viram a mesma placa
 const placaNorm = (s: unknown) => String(s ?? '').toUpperCase().replace(/\/[A-Z]{2}\s*$/, '').replace(/[^A-Z0-9]/g, '');
 const b64utf8 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
-const nomeArquivo = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.-]+/g, '_').slice(0, 80);
+const nomeArquivo = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.-]+/g, '_').slice(0, 80);
 
 // ---------- credenciais e cliente da API ----------
 function credenciais() {
@@ -157,6 +158,121 @@ function hojeBrasilia(deslocDias = 0) {
   return d.toISOString().slice(0, 10);
 }
 
+// ---------- abastecimentos lançados no Bsoft → MOVER.IA (só LÊ do Bsoft) ----------
+// Alimenta o relatório de Consumo sem mudar a rotina do escritório (que lança no Bsoft).
+// O Bsoft não informa motorista nem combustível: o motorista sai da viagem (MDF-e) do cavalo
+// naquele dia ou do conjunto atual; o Arla (preço por litro bem menor) é juntado ao diesel do
+// mesmo veículo e dia. Não importa de novo (bsoft_origem), nem o que o MOVER.IA enviou ao Bsoft
+// (bsoft_ref), nem o que o motorista já registrou no app (mesmo veículo, dia, km e litros).
+const PRECO_MAX_ARLA = 4.8, LITROS_MAX_ARLA = 150, MAX_ABAST_POR_RODADA = 500;
+type SbAdmin = ReturnType<typeof createClient>;
+async function importarAbastecimentos(api: ReturnType<typeof criarApi>, admin: SbAdmin, tid: string, dias: number) {
+  const periodo = { dtInicio: hojeBrasilia(dias), dtFim: hojeBrasilia() };
+  // a API pode ignorar a paginação e devolver tudo: para quando uma página não traz nada novo
+  const todos = async (caminho: string) => {
+    const vistos = new Map<string, Record<string, unknown>>();
+    for (let p = 0; p < 40; p++) {
+      const lote = await lista(api, caminho, { ...periodo, limit: `${p * 100},100` });
+      const antes = vistos.size;
+      lote.forEach(x => vistos.set(String(x.id), x));
+      if (lote.length < 100 || vistos.size === antes) break;
+    }
+    return [...vistos.values()];
+  };
+  const [posto, proprios] = await Promise.all([todos('/manutencao/v1/abastecimentos'), todos('/manutencao/v1/abastecimentosProprios')]);
+  const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : 0; };
+  type Linha = { origem: string; prefixo: string; refs: string[]; tipo: 'externo' | 'interno'; placa: string; dia: string; km: number; litros: number; valor: number; posto: string | null; nota: string | null; bomba: number | null; arla?: { litros: number; preco: number | null } };
+  const linhas: Linha[] = [
+    ...posto.map(x => ({ origem: `posto:${x.id}`, prefixo: 'posto', refs: [String(x.id), String(x.codigo_agrupamento ?? '')].filter(Boolean), tipo: 'externo' as const,
+      placa: placaNorm(x.equipamento), dia: String(x.dtAbastecimento ?? '').slice(0, 10), km: n(x.leitura), litros: n(x.ltsAbastecidos), valor: n(x.valorAbastecimento ?? x.Total),
+      posto: [String(x.localAbastecimento ?? '').trim(), String(x.ufAbastecimento ?? '').trim()].filter(Boolean).join('/') || null, nota: String(x.nroDoc ?? '').trim() || null, bomba: null })),
+    ...proprios.map(x => ({ origem: `proprio:${x.id}`, prefixo: 'proprio', refs: [String(x.id), String(x.numeroControle ?? '')].filter(Boolean), tipo: 'interno' as const,
+      placa: placaNorm(x.descricao), dia: String(x.dtAbastecimento ?? '').slice(0, 10), km: n(x.leitura), litros: n(x.ltsAbastecidos), valor: n(x.valorTotal),
+      posto: null, nota: null, bomba: n(x.numeroControle) || null })),
+  ];
+  const resumo = { periodo: `${periodo.dtInicio} a ${periodo.dtFim}`, lidos: linhas.length, novos: 0, ja_no_mover: 0, fora_da_frota: 0, arla_juntado: 0, arla_sem_diesel: 0, sem_km: 0, sem_motorista: 0, pendentes: 0, erros: [] as string[] };
+
+  const [{ data: veiculos }, { data: existentes }, { data: viagens }, { data: conjuntos }] = await Promise.all([
+    admin.from('veiculo').select('id, placa').eq('transportadora_id', tid),
+    admin.from('abastecimento').select('veiculo_id, data, km, litros, bsoft_origem, bsoft_ref').eq('transportadora_id', tid).gte('data', `${periodo.dtInicio}T00:00:00-03:00`),
+    admin.from('viagem').select('motorista_id, veiculo_id, criado_em').eq('transportadora_id', tid).gte('criado_em', new Date(Date.parse(periodo.dtInicio) - 30 * 86400000).toISOString()).order('criado_em'),
+    admin.from('conjunto').select('motorista_id, conjunto_item(veiculo_id)').eq('transportadora_id', tid).eq('ativo', true),
+  ]);
+  const veiculoPorPlaca = new Map(((veiculos ?? []) as { id: string; placa: string }[]).map(v => [placaNorm(v.placa), v.id]));
+  type Exist = { veiculo_id: string; data: string; km: number; litros: number; bsoft_origem: string | null; bsoft_ref: string | null };
+  const exist = (existentes ?? []) as Exist[];
+  const origens = new Set(exist.map(e => e.bsoft_origem).filter(Boolean));
+  const enviados = new Set(exist.flatMap(e => String(e.bsoft_ref ?? '').split(/\s+/)).map(r => r.replace('-arla', '')).filter(Boolean));   // "posto:2010"
+  const diaBr = (iso: string) => new Date(Date.parse(iso) - 3 * 3600000).toISOString().slice(0, 10);
+  const motoristaConjunto = new Map<string, string>();
+  ((conjuntos ?? []) as { motorista_id: string | null; conjunto_item: { veiculo_id: string }[] }[]).forEach(c => (c.conjunto_item ?? []).forEach(i => { if (c.motorista_id) motoristaConjunto.set(i.veiculo_id, c.motorista_id); }));
+  const viagensLista = (viagens ?? []) as { motorista_id: string | null; veiculo_id: string | null; criado_em: string }[];
+  const motoristaDe = (veiculoId: string, dia: string) => {
+    const fimDoDia = Date.parse(`${dia}T23:59:59-03:00`);
+    let achado: string | null = null;
+    for (const v of viagensLista) { if (v.veiculo_id === veiculoId && v.motorista_id && Date.parse(v.criado_em) <= fimDoDia) achado = v.motorista_id; }
+    return achado ?? motoristaConjunto.get(veiculoId) ?? null;
+  };
+
+  // só a frota, com km e litros; Arla junto ao diesel do mesmo veículo/dia/tipo (de preferência mesmo km)
+  const validas: (Linha & { veiculoId: string })[] = [];
+  for (const l of linhas) {
+    const veiculoId = veiculoPorPlaca.get(l.placa);
+    if (!veiculoId) { resumo.fora_da_frota++; continue; }
+    if (!(l.km > 0) || !(l.litros > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(l.dia)) { resumo.sem_km++; continue; }
+    validas.push({ ...l, veiculoId });
+  }
+  const preco = (l: Linha) => l.valor > 0 ? l.valor / l.litros : null;
+  const ehArla = (l: Linha) => { const p = preco(l); return p !== null && p < PRECO_MAX_ARLA && l.litros <= LITROS_MAX_ARLA; };
+  const diesel = validas.filter(l => !ehArla(l));
+  for (const a of validas.filter(ehArla)) {
+    const mesmos = diesel.filter(d => d.veiculoId === a.veiculoId && d.dia === a.dia && d.tipo === a.tipo && !d.arla);
+    const d = mesmos.find(x => Math.abs(x.km - a.km) <= 5) ?? mesmos[0];
+    if (!d) { resumo.arla_sem_diesel++; continue; }
+    d.arla = { litros: a.litros, preco: preco(a) };
+    resumo.arla_juntado++;
+  }
+
+  // o que ainda não está no MOVER.IA
+  const novos = diesel.filter(l => {
+    if (origens.has(l.origem) || l.refs.some(r => enviados.has(`${l.prefixo}:${r}`))) { resumo.ja_no_mover++; return false; }
+    const parecido = exist.some(e => e.veiculo_id === l.veiculoId && diaBr(e.data) === l.dia && Math.abs(Number(e.km) - l.km) <= 10 && Math.abs(Number(e.litros) - l.litros) <= 10);
+    if (parecido) { resumo.ja_no_mover++; return false; }
+    return true;
+  });
+  // hora: o Bsoft só dá o dia → meio-dia, um minuto a mais para cada lançamento do mesmo veículo no dia (pela ordem do km)
+  novos.sort((a, b) => a.dia.localeCompare(b.dia) || a.veiculoId.localeCompare(b.veiculoId) || a.km - b.km);
+  const ordemNoDia = new Map<string, number>();
+  const registros = novos.slice(0, MAX_ABAST_POR_RODADA).map(l => {
+    const chave = `${l.veiculoId}|${l.dia}`; const ordem = ordemNoDia.get(chave) ?? 0; ordemNoDia.set(chave, ordem + 1);
+    const motorista = motoristaDe(l.veiculoId, l.dia);
+    if (!motorista) resumo.sem_motorista++;
+    const p = preco(l);
+    return {
+      transportadora_id: tid, motorista_id: motorista, veiculo_id: l.veiculoId, tipo: l.tipo,
+      data: new Date(Date.parse(`${l.dia}T12:00:00-03:00`) + ordem * 60000).toISOString(),
+      km: l.km, litros: l.litros, arla_litros: l.arla?.litros ?? null,
+      preco_litro_diesel: l.tipo === 'externo' && p ? Math.round(p * 1000) / 1000 : null,
+      preco_litro_arla: l.tipo === 'externo' && l.arla?.preco ? Math.round(l.arla.preco * 1000) / 1000 : null,
+      posto: l.posto, nota_numero: l.nota, odometro_bomba: l.bomba, bsoft_origem: l.origem,
+    };
+  });
+  resumo.pendentes = Math.max(0, novos.length - registros.length);
+  registros.sort((a, b) => a.data.localeCompare(b.data));   // em ordem: a média de cada um usa o km do anterior
+  for (let i = 0; i < registros.length; i += 100) {
+    const { error } = await admin.from('abastecimento').insert(registros.slice(i, i + 100));
+    if (error) { resumo.erros.push(error.message); break; }
+    resumo.novos += Math.min(100, registros.length - i);
+  }
+  // lançamentos do app com data depois de um importado: recalcula a média
+  const afetados = [...new Set(registros.map(r => r.veiculo_id))];
+  for (const vid of afetados) {
+    const desde = registros.filter(r => r.veiculo_id === vid)[0].data;
+    await admin.rpc('recalcular_medias_veiculo', { p_veiculo: vid, p_desde: desde });
+  }
+  return resumo;
+}
+
 // ---------- principal ----------
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return jsonResponse({ ok: true });
@@ -210,6 +326,12 @@ Deno.serve(async (req: Request) => {
       ]);
       const limpa = (x: unknown) => Array.isArray(x) ? (x as Record<string, unknown>[]).map(semDocs) : x;
       return jsonResponse({ ok: true, posto: limpa(posto), proprios: limpa(proprios), filtro_equipamento: limpa(filtroEquip) });
+    }
+
+    // ---------- abastecimentos do Bsoft → MOVER.IA (só lê do Bsoft; grava no MOVER.IA) ----------
+    if (acao === 'importar_abastecimentos') {
+      const dias = Math.min(365, Math.max(1, Number(body?.dias) || 90));
+      return jsonResponse({ ok: true, ...(await importarAbastecimentos(api, admin, tid!, dias)) });
     }
 
     // ---------- encerramento ("baixa") do MDF-e: viagem finalizada com o ticket de descarga ----------
@@ -293,7 +415,7 @@ Deno.serve(async (req: Request) => {
         ]);
         const nomeForn = (f: Record<string, unknown>) => String(f.nomeFantasia || f.razaoSocial || f.nome || '').trim();
         // sugestão de posto: o fornecedor com mais palavras em comum com o que o motorista digitou
-        const palavras = (s: string) => new Set(s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().split(/[^A-Z0-9]+/).filter(w => w.length >= 3 && !['LTDA', 'POSTO', 'POSTOS', 'AUTO', 'REDE', 'COMERCIO'].includes(w)));
+        const palavras = (s: string) => new Set(s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().split(/[^A-Z0-9]+/).filter(w => w.length >= 3 && !['LTDA', 'POSTO', 'POSTOS', 'AUTO', 'REDE', 'COMERCIO'].includes(w)));
         let sugestao: string | null = null;
         if (!interno && ab.posto) {
           const alvo = palavras(ab.posto);
@@ -518,13 +640,20 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // abastecimentos lançados no Bsoft nos últimos dias (para o Consumo); erro aqui não atrapalha os MDF-e
+    let abastecimentos: unknown = null;
+    if (gravar && Date.now() - inicioRodada < 90000) {
+      try { abastecimentos = await importarAbastecimentos(api, admin, tid!, Math.max(3, Number(cfg.dias_retroativos) || 3) + 2); }
+      catch (e) { resumo.erros.push('Abastecimentos: ' + (e as Error).message); }
+    }
+
     if (gravar) {
       const status = resumo.erros.length && !resumo.criadas && !resumo.pdfs ? 'erro' : 'ok';
       const guardado = { ...resumo, itens: undefined, sem_motorista: resumo.sem_motorista.slice(0, 30), erros: resumo.erros.slice(0, 30) };
       await admin.from('integracao_bsoft').update({ ultima_execucao: new Date().toISOString(), ultimo_status: status, ultimo_resumo: guardado }).eq('transportadora_id', tid);
       await admin.from('sincronizacao_log').insert({ transportadora_id: tid, status: status === 'ok' ? 'sucesso' : 'erro', registros_processados: resumo.criadas, erro: resumo.erros.length ? resumo.erros.slice(0, 5).join(' | ') : null });
     }
-    return jsonResponse({ ok: true, acao, ...resumo });
+    return jsonResponse({ ok: true, acao, ...resumo, abastecimentos });
   } catch (e) {
     const mensagem = e instanceof ErroBsoft ? e.message : 'Erro na integração: ' + (e as Error).message;
     if (tid) {

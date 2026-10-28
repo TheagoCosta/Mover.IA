@@ -115,6 +115,7 @@
       neq(c, v){ linhas = linhas.filter(r => r[c] !== v); return q; },
       in(c, vs){ linhas = linhas.filter(r => vs.includes(r[c])); return q; },
       gte(c, v){ linhas = linhas.filter(r => r[c] >= v); return q; },
+      lt(c, v){ linhas = linhas.filter(r => r[c] < v); return q; },
       gt(c, v){ linhas = linhas.filter(r => r[c] != null && r[c] > v); return q; },
       lte(c, v){ linhas = linhas.filter(r => r[c] <= v); return q; },
       is(c, v){ linhas = linhas.filter(r => (r[c] ?? null) === v); return q; },
