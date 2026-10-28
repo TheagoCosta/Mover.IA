@@ -111,33 +111,11 @@ function analisarConsumo(lista){
 }
 
 // ---------- gráfico: média da frota mês a mês (uma série, barras) ----------
-function graficoConsumo(meses){
-  const comDado = meses.filter(m => m.media);
-  if(!comDado.length) return vazio('Ainda não há abastecimentos com média para montar o gráfico.');
-  const L = 640, A = 220, esq = 40, dir = 12, topo = 18, base = 28;
-  const max = Math.max(...comDado.map(m => m.media)) * 1.15;
-  const passo = (L - esq - dir) / meses.length, larg = Math.min(34, passo - 6);
-  const y = (v) => topo + (A - topo - base) * (1 - v / max);
-  const grades = [0, max / 3, 2 * max / 3].map(v => `<line x1="${esq}" x2="${L - dir}" y1="${y(v)}" y2="${y(v)}" stroke="var(--paper-200)" stroke-width="1"/>
-    <text x="${esq - 6}" y="${y(v) + 4}" text-anchor="end" class="cons-eixo">${numBRc(v, 1)}</text>`).join('');
-  const ultimo = [...meses].reverse().find(m => m.media);
-  const barras = meses.map((m, i) => {
-    const x = esq + i * passo + (passo - larg) / 2;
-    const rot = `<text x="${x + larg / 2}" y="${A - 10}" text-anchor="middle" class="cons-eixo">${m.rotulo}</text>`;
-    if(!m.media) return `${rot}<text x="${x + larg / 2}" y="${A - base - 4}" text-anchor="middle" class="cons-eixo">—</text>`;
-    const h = A - base - y(m.media), r = Math.min(4, h / 2);
-    // topo arredondado (4px), base reta na linha do zero
-    const caminho = `M${x},${A - base} V${y(m.media) + r} Q${x},${y(m.media)} ${x + r},${y(m.media)} H${x + larg - r} Q${x + larg},${y(m.media)} ${x + larg},${y(m.media) + r} V${A - base} Z`;
-    const dica = `${m.rotulo}/${String(m.ano).slice(2)}: ${numBRc(m.media, 2)} km/l · ${numBRc(m.km, 0)} km · ${numBRc(m.litros, 0)} L · ${m.n} abastecimento${m.n === 1 ? '' : 's'}`;
-    return `${rot}<g class="cons-barra" data-dica="${esc(dica)}">
-      <rect x="${x - (passo - larg) / 2}" y="${topo}" width="${passo}" height="${A - topo - base}" fill="transparent"/>
-      <path d="${caminho}" fill="${m === ultimo ? 'var(--line-yellow-dim)' : 'var(--pastel-blue-ink)'}"/>
-      ${m === ultimo ? `<text x="${x + larg / 2}" y="${y(m.media) - 6}" text-anchor="middle" class="cons-valor">${numBRc(m.media, 2)}</text>` : ''}</g>`;
-  }).join('');
-  return `<div class="cons-grafico">
-    <svg viewBox="0 0 ${L} ${A}" width="100%" role="img" aria-label="Média de consumo da frota por mês, em km por litro">
-      ${grades}<line x1="${esq}" x2="${L - dir}" y1="${A - base}" y2="${A - base}" stroke="var(--paper-200)" stroke-width="1"/>${barras}
-    </svg><div class="cons-dica" hidden></div></div>`;
+function graficoConsumo(meses, opcoes = {}){
+  return graficoBarras(meses.map(m => ({
+    rotulo: m.rotulo, valor: m.media,
+    dica: `${m.rotulo}/${String(m.ano).slice(2)}: ${numBRc(m.media, 2)} km/l · ${numBRc(m.km, 0)} km · ${numBRc(m.litros, 0)} L · ${m.n} abastecimento${m.n === 1 ? '' : 's'}`,
+  })), { casas: 2, aria: 'Média de consumo da frota por mês, em km por litro', textoVazio: 'Ainda não há abastecimentos com média para montar o gráfico.', ...opcoes });
 }
 function tabelaMeses(meses){
   return tabela(['Mês', 'Média (km/l)', 'Km rodados', 'Diesel (L)', 'Abastecimentos'],
@@ -200,7 +178,7 @@ function desenharConsumo(el, lista){
 
   el.querySelectorAll('[data-periodo-cons]').forEach(b => b.addEventListener('click', () => { periodoConsumo = Number(b.dataset.periodoCons); secaoConsumo(el); }));
   document.getElementById('btnConsTabela').addEventListener('click', () => { consumoComoTabela = !consumoComoTabela; desenharConsumo(el, lista); });
-  ligarDicasConsumo(el);
+  ligarDicasGraficos(el);
 
   const dec = (v, c) => v == null ? '' : Number(v).toFixed(c).replace('.', ',');
   const csv = (id, nome, cab, linhas) => { const b = document.getElementById(id); if(b) b.addEventListener('click', () => baixarCSV(nome, cab, linhas)); };
@@ -210,23 +188,4 @@ function desenharConsumo(el, lista){
     r.motoristas.map(m => [m.nome, dec(m.media, 2), m.vsNormal == null ? '' : dec(m.vsNormal * 100, 1), dec(m.km, 0), dec(m.diesel, 1), m.n, m.alertas]));
   csv('btnCsvConsAlertas', 'alertas_de_consumo', ['Data', 'Placa', 'Motorista', 'Média (km/l)', 'Normal do veículo (km/l)', 'Desvio (%)', 'Situação'],
     r.alertas.map(({ a, tipo, normal, desvio }) => [fmtDataHora(a.data), a.veiculo ? a.veiculo.placa : '', a.motorista ? a.motorista.nome : '', dec(a.media_calculada, 2), dec(normal, 2), desvio == null ? '' : dec(desvio * 100, 1), ROTULO_ALERTA_CONSUMO[tipo][1]]));
-}
-
-// dica ao passar o mouse (ou tocar) numa barra do gráfico
-function ligarDicasConsumo(el){
-  const caixa = el.querySelector('.cons-grafico');
-  if(!caixa) return;
-  const dica = caixa.querySelector('.cons-dica');
-  caixa.querySelectorAll('.cons-barra').forEach(g => {
-    const mostrar = (e) => {
-      const r = caixa.getBoundingClientRect();
-      dica.textContent = g.dataset.dica; dica.hidden = false;
-      const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-      dica.style.left = Math.max(0, Math.min(r.width - dica.offsetWidth, x - dica.offsetWidth / 2)) + 'px';
-      g.classList.add('ativa');
-    };
-    const esconder = () => { dica.hidden = true; g.classList.remove('ativa'); };
-    g.addEventListener('mousemove', mostrar); g.addEventListener('mouseleave', esconder);
-    g.addEventListener('touchstart', mostrar, { passive: true });
-  });
 }

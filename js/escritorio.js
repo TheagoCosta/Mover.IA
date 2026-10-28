@@ -138,15 +138,20 @@ function piorStatus(docs){
 // ---------------------------------------------------------------------
 // PAINEL
 // ---------------------------------------------------------------------
+const DIAS_PROXIMOS_PAINEL = 30;   // lista ao lado do calendário: atrasados + próximos 30 dias
+
 async function secaoPainel(el){
   const seteDiasAtras = new Date(Date.now() - 7 * 86400000);
-  const limiteAgenda = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-  const [usuarios, veiculos, conjuntos, docs, checklists, jornadas, viagens, agenda] = await Promise.all([
+  const umAnoAtras = new Date(); umAnoAtras.setDate(1); umAnoAtras.setMonth(umAnoAtras.getMonth() - 11);
+  const oitoSemanas = new Date(inicioDoDia(new Date(Date.now() - 55 * 86400000)));
+  const [usuarios, veiculos, conjuntos, docs, checklists, jornadas, viagens, agenda, abastecimentos, viagensRecentes] = await Promise.all([
     qUsuarios(), qVeiculos(), qConjuntos(), qDocumentos(),
     consultar(sb.from('checklist').select('id, criado_em, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))').order('criado_em', { ascending:false }).limit(30)),
     consultar(sb.from('jornada').select('id, inicio, fim, status, motorista_id, jornada_evento(tipo, criado_em)').gte('inicio', new Date(inicioDoDia(seteDiasAtras)).toISOString())),
     consultar(sb.from('viagem').select('id, origem, destino, cte_numero, mdfe_numero, criado_em, motorista:motorista_id(nome)').eq('status', 'em_andamento').order('criado_em', { ascending:false })),
-    consultar(sb.from('agendamento').select(CAMPOS_AGENDA).eq('status', 'pendente').lte('data_prevista', limiteAgenda).order('data_prevista').order('hora', { nullsFirst:true })),
+    consultar(sb.from('agendamento').select(CAMPOS_AGENDA).eq('status', 'pendente').order('data_prevista').order('hora', { nullsFirst:true })),
+    consultar(sb.from('abastecimento').select('id, data, tipo, litros, media_calculada, veiculo_id, motorista_id').gte('data', inicioDoDia(umAnoAtras).toISOString()).order('data').limit(5000)),
+    consultar(sb.from('viagem').select('id, criado_em').gte('criado_em', oitoSemanas.toISOString()).limit(5000)),
   ]);
 
   const motoristas = usuarios.filter(u => u.papel === 'motorista' && u.ativo);
@@ -167,11 +172,23 @@ async function secaoPainel(el){
     const idx = dias.findIndex(d => d.getTime() === inicioDoDia(new Date(j.inicio)).getTime());
     if(idx >= 0) horasDia[idx] += calcularConducao(eventos).totalMin / 60;
   });
-  const maxHoras = Math.max(8, ...horasDia);
-  const letraDia = ['D','S','T','Q','Q','S','S'];
+  const letraDia = ['dom','seg','ter','qua','qui','sex','sáb'];
 
-  const alertasOrdenados = [...docsAlerta].sort((a, b) =>
-    PESO_STATUS_DOC[statusDocumento(b)] - PESO_STATUS_DOC[statusDocumento(a)] || (diasAte(a.validade) ?? 999) - (diasAte(b.validade) ?? 999));
+  // viagens abertas por semana (8 semanas, a última é a atual)
+  const semanas = [...Array(8)].map((_, i) => { const ini = new Date(oitoSemanas); ini.setDate(ini.getDate() + i * 7); return ini; });
+  const viagensSemana = semanas.map((ini, i) => {
+    const fim = new Date(ini); fim.setDate(fim.getDate() + 7);
+    return { rotulo: fmtDataCurta(ini), valor: viagensRecentes.filter(v => { const d = new Date(v.criado_em); return d >= ini && d < fim; }).length,
+      fim: i === 7 ? new Date() : new Date(fim.getTime() - 86400000) };
+  });
+
+  // calendário: compromissos da agenda + vencimentos de documentos (como se fossem compromissos)
+  const docsComData = docsAlerta.filter(d => d.validade);
+  const docsSemData = docsAlerta.filter(d => !d.validade);
+  const itensCalendario = [
+    ...agenda.map(a => ({ ...a, _quem: [a.motorista && a.motorista.nome, a.veiculo && a.veiculo.placa].filter(Boolean).join(' · ') || 'Toda a equipe' })),
+    ...docsComData.map(d => ({ id: 'doc:' + d.id, tipo: 'Vence: ' + d.tipo, data_prevista: String(d.validade).slice(0, 10), status: 'pendente', _doc: d, _quem: nomeRef(d) })),
+  ];
 
   el.innerHTML = `
     <div class="kpi-row">
@@ -180,16 +197,24 @@ async function secaoPainel(el){
       ${kpi(chkIrregulares, 'Checklists com irregularidade', `${chkSemana.length} enviado${chkSemana.length === 1 ? '' : 's'} nos últimos 7 dias`, chkIrregulares ? 'vermelho' : 'verde')}
       ${kpi(docsAlerta.length, 'Documentos vencidos ou a vencer', docsVencidos ? `${docsVencidos} vencido${docsVencidos > 1 ? 's' : ''}` : docsAlerta.length ? `Vencem em até ${DIAS_ALERTA_DOCUMENTO} dias` : 'Tudo em dia', docsVencidos ? 'vermelho' : docsAlerta.length ? 'ambar' : 'verde')}
     </div>
-    <div class="two-col">
-      ${painel('Alertas de documentação',
-        alertasOrdenados.length ? tabela(['Motorista / veículo', 'Documento', 'Vencimento', 'Status'],
-          alertasOrdenados.slice(0, 8).map(d => `<tr class="clickable" data-ir="documentos"><td>${esc(nomeRef(d))}</td><td>${esc(d.tipo)}</td><td class="sub">${esc(textoVencimento(d))}</td><td>${badgeDoc(d)}</td></tr>`))
-          : vazio('Nenhum documento vencido ou vencendo nos próximos 30 dias.'),
-        alertasOrdenados.length > 8 ? `<button class="btn btn-outline btn-sm" data-ir="documentos">Ver todos (${alertasOrdenados.length})</button>` : '')}
-      ${painel('Horas de condução — últimos 7 dias',
-        `<div style="padding:14px 18px;"><div class="bars">
-          ${horasDia.map((h, i) => `<div class="bar-col"><div class="bar-val">${h >= 0.05 ? h.toFixed(1) + 'h' : ''}</div><div class="bar" style="height:${Math.max(2, h / maxHoras * 90)}px;"></div><div class="bar-lbl">${letraDia[dias[i].getDay()]}</div></div>`).join('')}
-        </div><div class="l2" style="margin-top:10px;">Soma de todos os motoristas, a partir dos registros de jornada.</div></div>`)}
+    ${painel('Agenda e vencimentos', `<div class="painel-agenda">
+        <div class="painel-agenda-cal" id="painelCal"></div>
+        <div class="painel-agenda-lista" id="painelProximos"></div>
+      </div>`,
+      `<button class="btn btn-outline btn-sm" data-ir="documentos">Documentos</button><button class="btn btn-outline btn-sm" data-ir="agenda">Abrir agenda</button>`)}
+    <div class="graf-grade">
+      ${painel('Consumo da frota — km/l por mês', `<div style="padding:4px 16px 12px;">${graficoConsumo(analisarConsumo(abastecimentos).meses)}</div>`,
+        `<button class="btn btn-outline btn-sm" data-ir="consumo">Relatório</button>`)}
+      ${painel('Estoque dos tanques', `<div id="painelTanques" style="padding:14px 18px;"><div class="l2">Carregando...</div></div>`,
+        `<button class="btn btn-outline btn-sm" data-ir="abastecimento">Abastecimento</button>`)}
+      ${painel('Horas de condução — últimos 7 dias', `<div style="padding:4px 16px 12px;">${graficoBarras(horasDia.map((h, i) => ({ rotulo: letraDia[dias[i].getDay()], valor: h >= 0.05 ? h : null,
+          dica: `${letraDia[dias[i].getDay()]} ${fmtDataCurta(dias[i])}: ${h.toFixed(1).replace('.', ',')} h de condução (todos os motoristas)` })),
+          { casas: 1, aria: 'Horas de condução por dia, soma de todos os motoristas', textoVazio: 'Nenhuma jornada com condução nos últimos 7 dias.' })}</div>`,
+        `<button class="btn btn-outline btn-sm" data-ir="jornadas">Jornadas</button>`)}
+      ${painel('Viagens abertas por semana', `<div style="padding:4px 16px 12px;">${graficoBarras(viagensSemana.map(s => ({ rotulo: s.rotulo, valor: s.valor || null,
+          dica: `Semana de ${s.rotulo} a ${fmtDataCurta(s.fim)}: ${s.valor} viage${s.valor === 1 ? 'm' : 'ns'}` })),
+          { casas: 0, aria: 'Viagens abertas por semana, últimas 8 semanas', textoVazio: 'Nenhuma viagem nas últimas 8 semanas.' })}</div>`,
+        `<button class="btn btn-outline btn-sm" data-ir="viagens">Viagens</button>`)}
     </div>
     ${painel(`Viagens em andamento (${viagens.length})`,
       viagens.length ? tabela(['Motorista', 'Origem → destino', 'CT-e', 'MDF-e', 'Aberta em', 'Documentos'],
@@ -197,11 +222,6 @@ async function secaoPainel(el){
           <td><button class="btn ${n ? 'btn-outline' : 'btn-primary'} btn-sm" data-docs-viagem="${v.id}">${ic('doc', 14)} ${n ? `${n} arquivo${n > 1 ? 's' : ''}` : 'Anexar'}</button></td></tr>`; }))
         : vazio('Nenhuma viagem em andamento.'),
       `<button class="btn btn-primary btn-sm" id="btnNovaViagem">${ic('plus', 15)} Nova viagem</button>`)}
-    ${painel('Próximos compromissos (7 dias)',
-      agenda.length ? tabela(['Data', 'Compromisso', 'Motorista / veículo', 'Situação'],
-        agenda.slice(0, 8).map(a => { const [cor, txt] = situacaoAgenda(a); return `<tr class="clickable" data-ir="agenda"><td class="mono">${dataHoraAgenda(a)}</td><td>${esc(a.tipo)}</td><td>${esc([a.motorista && a.motorista.nome, a.veiculo && a.veiculo.placa].filter(Boolean).join(' · ') || 'Toda a equipe')}</td><td>${badge(cor, txt)}</td></tr>`; }))
-        : vazio('Nenhum compromisso nos próximos 7 dias.'),
-      `<button class="btn btn-outline btn-sm" data-ir="agenda">Abrir agenda</button>`)}
     ${painel('Checklists recentes',
       checklists.length ? tabela(['Motorista', 'Conjunto', 'Data', 'Irregularidades', 'Status'],
         checklists.slice(0, 6).map(c => { const n = contarIrregularidades(c); return `<tr class="clickable" data-checklist="${c.id}"><td>${esc(c.motorista ? c.motorista.nome : '—')}</td><td class="mono">${esc(cavaloDoConjunto(c.conjunto))}</td><td class="sub">${fmtDataHora(c.criado_em)}</td><td>${n || '—'}</td><td>${n ? badge('red', 'Irregular') : badge('green', 'OK')}</td></tr>`; }))
@@ -209,7 +229,40 @@ async function secaoPainel(el){
       checklists.filter(c => contarIrregularidades(c) > 0).length ? badge('amber', `${checklists.filter(c => contarIrregularidades(c) > 0).length} com irregularidade`) : '')}
   `;
 
-  el.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => { screen = b.dataset.ir; loadEscritorio(); }));
+  // calendário + "principais / mais próximos" ao lado (tocar num dia mostra só aquele dia)
+  const irPara = (secao) => { screen = secao; loadEscritorio(); };
+  const desenharAgendaPainel = () => {
+    const cal = document.getElementById('painelCal'), caixa = document.getElementById('painelProximos');
+    if(!cal) return;
+    cal.innerHTML = calendarioAgenda(itensCalendario);
+    const doDia = doDiaEscolhido(itensCalendario);
+    const lista = doDia || itensCalendario
+      .filter(a => diasAte(fimAgenda(a)) < 0 || diasAte(a.data_prevista) <= DIAS_PROXIMOS_PAINEL)
+      .sort((a, b) => (diasAte(fimAgenda(a)) < 0 ? 0 : 1) - (diasAte(fimAgenda(b)) < 0 ? 0 : 1) || a.data_prevista.localeCompare(b.data_prevista));
+    const d0 = (a) => paraData(a.data_prevista);
+    caixa.innerHTML = `<div class="pa-titulo">${doDia ? `Em ${diaSemanaData(diaAgenda)}` : `Atrasados e próximos ${DIAS_PROXIMOS_PAINEL} dias`}</div>
+      ${lista.length ? lista.slice(0, 8).map(a => { const [cor, txt] = a._doc ? (statusDocumento(a._doc) === 'vencido' ? ['red', 'Vencido'] : ['amber', 'A vencer']) : situacaoAgenda(a); return `
+        <button type="button" class="pa-item" data-pa-ir="${a._doc ? 'documentos' : 'agenda'}">
+          <span class="pa-data"><b>${d0(a).getDate()}</b>${d0(a).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}</span>
+          <span class="pa-txt"><b>${esc(a.tipo)}</b><span>${esc(a._quem || '')}${a.hora ? ' · ' + String(a.hora).slice(0, 5) : ''}</span></span>
+          ${badge(cor, txt)}</button>`; }).join('')
+        + (lista.length > 8 ? `<div class="l2" style="padding:6px 2px;">e mais ${lista.length - 8}…</div>` : '')
+        : `<div class="l2" style="padding:10px 2px;">${doDia ? 'Nada neste dia.' : 'Nenhum compromisso ou vencimento por perto.'}</div>`}
+      ${docsSemData.length && !doDia ? `<button type="button" class="pa-aviso" data-pa-ir="documentos">${ic('alert', 14)} ${docsSemData.length} documento${docsSemData.length > 1 ? 's' : ''} sem validade informada: ${esc(docsSemData.slice(0, 2).map(d => d.tipo).join(', '))}${docsSemData.length > 2 ? '…' : ''}</button>` : ''}`;
+    ligarCalendario(cal, desenharAgendaPainel);
+    caixa.querySelectorAll('[data-pa-ir]').forEach(b => b.addEventListener('click', () => irPara(b.dataset.paIr)));
+  };
+  desenharAgendaPainel();
+  ligarDicasGraficos(el);
+  buscarEstoqueTanques().then(dados => {
+    const caixa = document.getElementById('painelTanques');
+    if(!caixa) return;
+    if(!dados.tanques.length){ caixa.innerHTML = '<div class="l2">Nenhum tanque cadastrado. Cadastre em Abastecimento.</div>'; return; }
+    const estoque = calcularEstoque(dados), dd = diasRestantes(estoque, 'diesel');
+    caixa.innerHTML = cartoesTanques(estoque, { compacto: true }) + (dd != null ? `<div class="l2" style="margin-top:10px;">Diesel dá para uns <b>${numGraf(dd, 0)} dias</b> no ritmo atual.</div>` : '');
+  }).catch(e => { const c = document.getElementById('painelTanques'); if(c) c.innerHTML = `<div class="l2">Não consegui carregar: ${esc(e.message)}</div>`; });
+
+  el.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => irPara(b.dataset.ir)));
   el.querySelectorAll('[data-checklist]').forEach(tr => tr.addEventListener('click', () => abrirDetalheChecklist(checklists.find(c => c.id === tr.dataset.checklist))));
   document.getElementById('btnNovaViagem').addEventListener('click', () => abrirNovaViagem(usuarios.filter(u => u.papel === 'motorista' && u.ativo)));
   el.querySelectorAll('[data-docs-viagem]').forEach(b => b.addEventListener('click', () => abrirDocumentosViagem(viagens.find(v => v.id === b.dataset.docsViagem))));
@@ -451,7 +504,7 @@ async function secaoAbastecimento(el){
   const [registros, comBsoft] = await Promise.all([
     consultar(sb.from('abastecimento')
       .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, bsoft_ref, bsoft_origem, recebido_em, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
-      .order('data', { ascending:false }).limit(1000)),
+      .order('data', { ascending:false }).limit(3000)),
     sb.from('integracao_bsoft').select('transportadora_id').maybeSingle().then(r => !!r.data),
   ]);
   // coluna do Bsoft: botão para enviar, ou a marca de que já foi
@@ -482,6 +535,17 @@ async function secaoAbastecimento(el){
   const veiculos = Object.values(porVeiculo).map(v => ({ ...v, media: consumoDe(v.registros).media, mediaArla: media(v.mediasArla) }))
     .sort((a, b) => (a.media ?? 99) - (b.media ?? 99));
 
+  const maxMediaVeic = Math.max(0, ...veiculos.map(v => v.media || 0));
+  // últimos 12 meses: litros (interno + posto) e gasto em posto
+  const litrosMes = [...Array(12)].map((_, i) => {
+    const ref = new Date(); ref.setDate(1); ref.setMonth(ref.getMonth() - (11 - i));
+    const doMes = registros.filter(a => { const d = new Date(a.data); return d.getFullYear() === ref.getFullYear() && d.getMonth() === ref.getMonth(); });
+    const ext = doMes.filter(a => a.tipo === 'externo');
+    return { rotulo: ref.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''), ano: ref.getFullYear(),
+      litros: soma(doMes, 'litros'), interno: soma(doMes.filter(a => a.tipo === 'interno'), 'litros'), externo: soma(ext, 'litros'),
+      gasto: ext.reduce((s, a) => s + (valorAbastecimento(a) || 0), 0), nExt: ext.length };
+  });
+
   const doFiltro = filtroAbastecimento === 'todos' ? registros : registros.filter(a => a.tipo === filtroAbastecimento);
   const placaDe = (a) => a.veiculo ? a.veiculo.placa : '', motDe = (a) => a.motorista ? a.motorista.nome : '';
   const ordensAbast = [
@@ -508,11 +572,18 @@ async function secaoAbastecimento(el){
       ${kpi(gastoPostos ? fmtReais(gastoPostos) : '—', 'Gasto em postos (30 dias)', 'Só abastecimentos externos')}
       ${kpi(recentes.length, 'Abastecimentos em 30 dias', `${nInternos} interno${nInternos === 1 ? '' : 's'} · ${nExternos} externo${nExternos === 1 ? '' : 's'}`)}
     </div>
+    <div id="caixaTanques"></div>
+    <div class="two-col iguais">
+      ${painel('Diesel abastecido por mês (litros)', `<div style="padding:4px 16px 12px;">${graficoBarras(litrosMes.map(m => ({ rotulo: m.rotulo, valor: m.litros,
+        dica: `${m.rotulo}/${String(m.ano).slice(2)}: ${fmtNum(m.litros, 0)} L · interno ${fmtNum(m.interno, 0)} L · posto ${fmtNum(m.externo, 0)} L` })), { casas: 0, aria: 'Litros de diesel abastecidos por mês' })}</div>`)}
+      ${painel('Gasto em postos por mês (R$)', `<div style="padding:4px 16px 12px;">${graficoBarras(litrosMes.map(m => ({ rotulo: m.rotulo, valor: m.gasto,
+        dica: `${m.rotulo}/${String(m.ano).slice(2)}: ${fmtReais(m.gasto)} em ${m.nExt} abastecimento${m.nExt === 1 ? '' : 's'} em posto` })), { casas: 0, aria: 'Gasto em postos por mês, em reais', textoVazio: 'Nenhum abastecimento em posto com preço.' })}</div>`)}
+    </div>
     <div class="o-banner" style="color:var(--ink-700);">${ic('chart', 18)}<div class="txt"><b>Relatório de consumo</b>Evolução mês a mês, ranking por veículo e por motorista e alertas de consumo fora do padrão: <a href="#" data-ir-consumo>abrir o relatório</a>.</div></div>
     ${comBsoft ? `<div class="o-banner" style="color:var(--ink-700);">${ic('sync', 18)}<div class="txt"><b>Abastecimentos lançados no Bsoft</b>O MOVER.IA lê do Bsoft os abastecimentos da frota (só leitura) — o motorista é o da viagem ou do conjunto daquele cavalo. Os novos também chegam a cada sincronização. <a href="#" id="btnTrazerBsoft">Buscar agora</a></div></div>` : ''}
     ${painel('Consumo médio por veículo',
       veiculos.length ? tabela(['Placa', 'Média diesel', 'Média Arla', 'Abastecimentos', 'Diesel (total)', 'Arla (total)', 'Último km'],
-        veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td><b>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</b></td><td>${v.mediaArla ? fmtNum(v.mediaArla, 1) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td>${v.arla ? fmtNum(v.arla, 0) + ' L' : '<span class="sub">—</span>'}</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
+        veiculos.map(v => `<tr><td class="mono">${esc(v.placa)}</td><td style="min-width:140px;"><b>${v.media ? fmtNum(v.media, 2) + ' km/l' : '<span class="sub">—</span>'}</b>${v.media ? barraNivel(v.media / maxMediaVeic, { alerta: 0, critico: 0 }) : ''}</td><td>${v.mediaArla ? fmtNum(v.mediaArla, 1) + ' km/l' : '<span class="sub">—</span>'}</td><td>${v.n}</td><td>${fmtNum(v.litros, 0)} L</td><td>${v.arla ? fmtNum(v.arla, 0) + ' L' : '<span class="sub">—</span>'}</td><td class="mono">${fmtNum(v.ultimoKm, 0)}</td></tr>`))
         : vazio('Nenhum abastecimento registrado ainda. Os motoristas registram pelo app, no quadro Abastecimento do Início.'),
       veiculos.length ? botaoExportar('btnCsvConsumo') : '')}
     <div class="doc-tabs" style="max-width:420px;">
@@ -539,6 +610,8 @@ async function secaoAbastecimento(el){
     caixa.querySelectorAll('[data-bsoft-abast]').forEach(b => b.addEventListener('click', () => abrirEnviarBsoft(registros.find(a => a.id === b.dataset.bsoftAbast), el)));
   }
 
+  ligarDicasGraficos(el);
+  painelEstoqueTanques(document.getElementById('caixaTanques'), () => secaoAbastecimento(el));
   el.querySelectorAll('[data-filtro-abast]').forEach(b => b.addEventListener('click', () => { filtroAbastecimento = b.dataset.filtroAbast; secaoAbastecimento(el); }));
   const trazer = document.getElementById('btnTrazerBsoft');
   if(trazer) trazer.addEventListener('click', async (e) => {

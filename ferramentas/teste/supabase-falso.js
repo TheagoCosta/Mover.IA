@@ -100,6 +100,17 @@
       { id:'ag2', tipo:'Exame toxicológico', data_prevista:dia(-2), hora:null, local:'Clínica LabSaúde', status:'pendente', observacao:'Levar documento', ciente_em:iso(3000), concluido_em:null, motorista_id:'u-car', veiculo_id:null, motorista:{ nome:U.car.nome }, veiculo:null },
       { id:'ag3', tipo:'Troca de óleo', data_prevista:dia(-20), hora:null, local:null, status:'concluido', observacao:null, ciente_em:null, concluido_em:iso(20000), motorista_id:null, veiculo_id:'v5', motorista:null, veiculo:{ placa:'GBW-8C41' } },
       { id:'ag4', tipo:'Folga', data_prevista:dia(5), data_fim:dia(8), hora:null, local:null, status:'pendente', observacao:'Retorna na segunda', ciente_em:null, concluido_em:null, motorista_id:'u-car', veiculo_id:null, motorista:{ nome:U.car.nome }, veiculo:null },
+    ], tanque: [
+      { id:'tq1', nome:'Diesel 30.000 L (reserva)', produto:'diesel', capacidade_l:30000, abastece_bomba:false, ordem:1, ativo:true },
+      { id:'tq2', nome:'Diesel 15.000 L (bomba)', produto:'diesel', capacidade_l:15000, abastece_bomba:true, ordem:2, ativo:true },
+      { id:'tq3', nome:'Arla 5.000 L', produto:'arla', capacidade_l:5000, abastece_bomba:true, ordem:3, ativo:true },
+    ], tanque_movimento: [   // em ordem de data (o falso não ordena)
+      { id:'tm1', tanque_id:'tq1', tipo:'medicao', litros:22000, tanque_destino_id:null, data:iso(25 * 1440), criado_por:{ nome:'Admin Teste' } },
+      { id:'tm2', tanque_id:'tq2', tipo:'medicao', litros:9000, tanque_destino_id:null, data:iso(25 * 1440), criado_por:{ nome:'Admin Teste' } },
+      { id:'tm3', tanque_id:'tq3', tipo:'medicao', litros:3200, tanque_destino_id:null, data:iso(25 * 1440), criado_por:{ nome:'Admin Teste' } },
+      { id:'tm4', tanque_id:'tq1', tipo:'transferencia', litros:8000, tanque_destino_id:'tq2', data:iso(14 * 1440), criado_por:{ nome:'Admin Teste' } },
+      { id:'tm5', tanque_id:'tq1', tipo:'entrada', litros:15000, tanque_destino_id:null, data:iso(10 * 1440), preco_litro:5.89, fornecedor:'Distribuidora Teste', nota_numero:'4455', criado_por:{ nome:'Admin Teste' } },
+      { id:'tm6', tanque_id:'tq2', tipo:'medicao', litros:12100, tanque_destino_id:null, data:iso(7 * 1440), criado_por:{ nome:'Admin Teste' } },
     ], calendario_licenciamento: [], motorista_perfil: [], integracao_bsoft: [{ transportadora_id:'t1' }],
   };
 
