@@ -3,8 +3,8 @@
 // posto funcionam sem internet: o que não deu para enviar fica guardado no
 // celular (fila) e vai sozinho quando o sinal volta, na ordem em que foi feito.
 // Cada registro guardado leva a hora em que aconteceu (hora_celular); o banco
-// aceita essa hora se for das últimas 12 horas e marca "registrado sem sinal"
-// para o escritório (migração 20261028_02_registro_sem_sinal.sql).
+// aceita essa hora se for das últimas 24 horas e marca "registrado sem sinal"
+// para o escritório (migrações 20261028_02_registro_sem_sinal.sql e 20261102_02_sem_sinal_24h.sql).
 // Os ids são criados aqui, então reenviar o mesmo registro não duplica.
 // Ticket de descarga, oficina (fotos) e abastecimento na bomba própria
 // (senha do escritório) continuam precisando de sinal.

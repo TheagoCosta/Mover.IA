@@ -109,13 +109,13 @@ function cavaloDoConjunto(conjunto){
   const cavalo = itens.find(i => i.veiculo && i.veiculo.tipo === 'cavalo') || itens[0];
   return cavalo && cavalo.veiculo ? cavalo.veiculo.placa : '—';
 }
-// Registro feito sem sinal no app do motorista: vale a hora do celular (até 12 h antes) e mostra quando chegou
-// Passou de 12 h sem sinal: o banco grava a hora em que chegou, e aqui aparece a hora que o celular marcou
+// Registro feito sem sinal no app do motorista: vale a hora do celular (até 24 h antes) e mostra quando chegou
+// Passou de 24 h sem sinal: o banco grava a hora em que chegou, e aqui aparece a hora que o celular marcou
 function marcaSemSinal(r){
   if(!r || !r.recebido_em) return '';
   const usada = r.criado_em || r.data || r.inicio;
   const horaCelularRecusada = r.hora_celular && usada && Math.abs(new Date(usada) - new Date(r.hora_celular)) > 5 * 60000;
-  if(horaCelularRecusada) return `<div class="l2" title="O celular ficou mais de 12 h sem internet. A hora gravada é a de chegada; confira com o motorista a hora real.">⚠️ Mais de 12 h sem sinal · no celular: ${fmtDataHora(r.hora_celular)} · chegou em ${fmtDataHora(r.recebido_em)}</div>`;
+  if(horaCelularRecusada) return `<div class="l2" title="O celular ficou mais de 24 h sem internet. A hora gravada é a de chegada; confira com o motorista a hora real.">⚠️ Mais de 24 h sem sinal · no celular: ${fmtDataHora(r.hora_celular)} · chegou em ${fmtDataHora(r.recebido_em)}</div>`;
   return `<div class="l2" title="Feito sem internet no celular do motorista; a hora é a do celular.">📶 Registrado sem sinal · chegou em ${fmtDataHora(r.recebido_em)}</div>`;
 }
 function contarIrregularidades(checklist){ return (checklist.respostas || []).filter(r => r.resposta === 'bad').length; }
