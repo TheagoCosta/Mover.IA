@@ -2,9 +2,30 @@
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
 
-const SUPABASE_URL = 'https://otllslhjbyjtktxyvezy.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_eFeBsxW2lThWWBAHquuv5g_NWe9lgvf';
+// Ambiente de TESTE: outro projeto do Supabase ("Mover.IA Teste"), com a mesma estrutura
+// e só dados fictícios — para testar sem tocar nos dados reais nem no Bsoft.
+// Abrir o site com ?ambiente=teste liga (fica guardado neste navegador); ?ambiente=producao desliga.
+const PROJETOS_SUPABASE = {
+  producao: { url: 'https://otllslhjbyjtktxyvezy.supabase.co', chave: 'sb_publishable_eFeBsxW2lThWWBAHquuv5g_NWe9lgvf' },
+  teste: { url: 'https://bzswhaadwhgvefdtulbh.supabase.co', chave: 'sb_publishable_6BskaL1fRiRZEM1zewmI7g_ZUPcNK33' },
+};
+const AMBIENTE_TESTE = (() => {
+  const pedido = new URLSearchParams(location.search).get('ambiente');
+  try{
+    if(pedido === 'teste') localStorage.setItem('moveria:ambiente', 'teste');
+    else if(pedido === 'producao') localStorage.removeItem('moveria:ambiente');
+    return localStorage.getItem('moveria:ambiente') === 'teste';
+  } catch(e){ return pedido === 'teste'; }
+})();
+// separa o que o app guarda no aparelho (Início do motorista, itens do checklist) entre os dois ambientes
+const SUFIXO_AMBIENTE = AMBIENTE_TESTE ? ':teste' : '';
+const SUPABASE_URL = PROJETOS_SUPABASE[AMBIENTE_TESTE ? 'teste' : 'producao'].url;
+const SUPABASE_ANON_KEY = PROJETOS_SUPABASE[AMBIENTE_TESTE ? 'teste' : 'producao'].chave;
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+if(AMBIENTE_TESTE){
+  document.title = 'TESTE · ' + document.title;
+  document.body.insertAdjacentHTML('afterbegin', '<div class="faixa-teste">AMBIENTE DE TESTE · dados fictícios · <a href="?ambiente=producao">sair do teste</a></div>');
+}
 
 let session = null;
 let loginError = '';

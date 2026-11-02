@@ -275,7 +275,7 @@ function cardMedidorConducao(jornada){
 // Ficam guardados no aparelho para a próxima abertura já mostrar a tela na
 // hora (e atualizar em seguida). Apagados ao sair da conta.
 // ---------------------------------------------------------------------
-const CHAVE_CACHE_INICIO = 'moveria:inicio';
+const CHAVE_CACHE_INICIO = 'moveria:inicio' + SUFIXO_AMBIENTE;
 function salvarCacheInicio(dados){
   try{
     const { _doCache, ...usuario } = usuarioAtual;

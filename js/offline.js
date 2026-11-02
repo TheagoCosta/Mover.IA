@@ -137,6 +137,6 @@ function faixaFila(){
 }
 
 // Cópia de segurança para abrir sem sinal: itens do checklist
-const CHAVE_ITENS_CHECKLIST = 'moveria:checklist-itens';
+const CHAVE_ITENS_CHECKLIST = 'moveria:checklist-itens' + SUFIXO_AMBIENTE;
 function guardarItensChecklist(itens){ try{ if(itens.length) localStorage.setItem(CHAVE_ITENS_CHECKLIST, JSON.stringify(itens)); } catch(e){ /* ignora */ } }
 function itensChecklistGuardados(){ try{ return JSON.parse(localStorage.getItem(CHAVE_ITENS_CHECKLIST) || '[]'); } catch(e){ return []; } }

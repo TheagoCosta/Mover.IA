@@ -6,3 +6,8 @@ ferramentas/teste/teste.html
 *.zip
 .env
 conversas/
+
+ferramentas/teste/fotos/
+
+# senhas das contas do projeto de TESTE do Supabase (só no computador)
+*.local.txt

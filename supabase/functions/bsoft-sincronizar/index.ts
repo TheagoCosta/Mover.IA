@@ -165,6 +165,8 @@ function hojeBrasilia(deslocDias = 0) {
 // mesmo veículo e dia. Não importa de novo (bsoft_origem), nem o que o MOVER.IA enviou ao Bsoft
 // (bsoft_ref), nem o que o motorista já registrou no app (mesmo veículo, dia, km e litros).
 const PRECO_MAX_ARLA = 4.8, LITROS_MAX_ARLA = 150, MAX_ABAST_POR_RODADA = 500;
+const DIAS_ABASTECIMENTO_SINCRONIA = 30;              // janela da busca automática (a cada 15 min)
+const ESPERA_PDF_COM_ERRO_MS = 6 * 60 * 60 * 1000;    // PDF recusado pelo Bsoft: tenta de novo a cada 6 h
 type SbAdmin = ReturnType<typeof createClient>;
 async function importarAbastecimentos(api: ReturnType<typeof criarApi>, admin: SbAdmin, tid: string, dias: number) {
   const periodo = { dtInicio: hojeBrasilia(dias), dtFim: hojeBrasilia() };
@@ -536,8 +538,10 @@ Deno.serve(async (req: Request) => {
       return { motorista: null, por: null };
     };
 
-    const resumo = { periodo: `${hojeBrasilia(cfg.dias_retroativos)} a ${hojeBrasilia()}`, manifestos: manifestos.length, criadas: 0, ja_importadas: 0, pdfs: 0, pendentes: 0, fora_da_frota: 0, sem_motorista: [] as unknown[], erros: [] as string[], itens: [] as unknown[] };
+    const resumo = { periodo: `${hojeBrasilia(cfg.dias_retroativos)} a ${hojeBrasilia()}`, manifestos: manifestos.length, criadas: 0, ja_importadas: 0, pdfs: 0, pendentes: 0, fora_da_frota: 0, sem_motorista: [] as unknown[], erros: [] as string[], itens: [] as unknown[], pdfs_com_problema: [] as unknown[] };
     let novasNestaRodada = 0;
+    const falhasPdf: Record<string, { erro: string; em: string; desde: string; n: number }> = { ...((cfg.pdf_falhas as Record<string, { erro: string; em: string; desde: string; n: number }>) ?? {}) };
+    let falhasMudaram = false;
 
     for (const m of manifestos) {
       const idBsoft = String(m.id ?? '');
@@ -562,7 +566,14 @@ Deno.serve(async (req: Request) => {
         if (viagemExistente) {
           const { data: d0 } = await admin.from('documento').select('bsoft_ref').eq('referente_a', 'viagem').eq('referente_id', viagemExistente);
           const refs = (d0 ?? []).map(x => String(x.bsoft_ref ?? ''));
-          if (refs.includes(`mdfe:${idBsoft}`) && refs.filter(r => r.startsWith('cte:')).length >= chaves.length && !semOrigem.has(viagemExistente)) continue;
+          const ctesOk = refs.filter(r => r.startsWith('cte:')).length >= chaves.length && !semOrigem.has(viagemExistente);
+          if (refs.includes(`mdfe:${idBsoft}`) && ctesOk) continue;
+          // só falta o PDF do MDF-e, que o Bsoft recusou há pouco: nem consulta o Bsoft
+          const f = falhasPdf[`mdfe:${idBsoft}`];
+          if (ctesOk && f && Date.now() - new Date(f.em).getTime() < ESPERA_PDF_COM_ERRO_MS) {
+            resumo.pdfs_com_problema.push({ manifesto: String(m.nro ?? ''), tipo: 'MDF-e', numero: String(m.nro ?? ''), erro: f.erro, desde: f.desde, tentativas: f.n });
+            continue;
+          }
         }
         // CT-e do manifesto: número, origem e destino
         const ctes: { id: string; nro: string; origem: string | null; destino: string | null }[] = [];
@@ -621,6 +632,13 @@ Deno.serve(async (req: Request) => {
           ...ctes.map(c => ({ ref: `cte:${c.id}`, tipo: 'CT-e', numero: c.nro, caminho: `/transporte/v1/conhecimentos/${c.id}/obterDacte` }))];
         for (const p of pdfs) {
           if (tem.has(p.ref)) continue;
+          // PDF que o Bsoft recusou (ex.: MDF-e com cadastro incompleto lá): tenta de novo só a cada 6 h,
+          // e não repete o erro a cada 15 min — fica listado em "PDFs com problema" na tela Integração
+          const falha = falhasPdf[p.ref];
+          if (falha && Date.now() - new Date(falha.em).getTime() < ESPERA_PDF_COM_ERRO_MS) {
+            resumo.pdfs_com_problema.push({ manifesto: String(m.nro ?? ''), tipo: p.tipo, numero: p.numero, erro: falha.erro, desde: falha.desde, tentativas: falha.n });
+            continue;
+          }
           try {
             const r = await api.get(p.caminho) as { pdf?: string } | null;
             if (!r?.pdf) throw new Error('PDF vazio');
@@ -631,8 +649,13 @@ Deno.serve(async (req: Request) => {
             const { error: eDoc } = await admin.from('documento').insert({ transportadora_id: tid, referente_a: 'viagem', referente_id: viagemId, tipo: p.tipo, numero: p.numero || null, status: 'ok', arquivo_url: caminho, bsoft_ref: p.ref });
             if (eDoc) throw new Error(eDoc.message);
             resumo.pdfs++;
+            if (falha) { delete falhasPdf[p.ref]; falhasMudaram = true; }
           } catch (e) {
-            resumo.erros.push(`MDF-e ${m.nro}: PDF ${p.tipo} ${p.numero} — ${(e as Error).message}`);
+            const erro = (e as Error).message.slice(0, 300);
+            falhasPdf[p.ref] = { erro, em: new Date().toISOString(), desde: falha?.desde ?? new Date().toISOString(), n: (falha?.n ?? 0) + 1 };
+            falhasMudaram = true;
+            resumo.pdfs_com_problema.push({ manifesto: String(m.nro ?? ''), tipo: p.tipo, numero: p.numero, erro, desde: falhasPdf[p.ref].desde, tentativas: falhasPdf[p.ref].n });
+            if (!falha) resumo.erros.push(`MDF-e ${m.nro}: PDF ${p.tipo} ${p.numero} — ${erro}`);   // só na primeira vez
           }
         }
       } catch (e) {
@@ -643,14 +666,16 @@ Deno.serve(async (req: Request) => {
     // abastecimentos lançados no Bsoft nos últimos dias (para o Consumo); erro aqui não atrapalha os MDF-e
     let abastecimentos: unknown = null;
     if (gravar && Date.now() - inicioRodada < 90000) {
-      try { abastecimentos = await importarAbastecimentos(api, admin, tid!, Math.max(3, Number(cfg.dias_retroativos) || 3) + 2); }
+      // 30 dias: o escritório costuma lançar no Bsoft com atraso; o que já foi trazido é reconhecido e não duplica
+      try { abastecimentos = await importarAbastecimentos(api, admin, tid!, DIAS_ABASTECIMENTO_SINCRONIA); }
       catch (e) { resumo.erros.push('Abastecimentos: ' + (e as Error).message); }
     }
 
     if (gravar) {
       const status = resumo.erros.length && !resumo.criadas && !resumo.pdfs ? 'erro' : 'ok';
-      const guardado = { ...resumo, itens: undefined, sem_motorista: resumo.sem_motorista.slice(0, 30), erros: resumo.erros.slice(0, 30) };
-      await admin.from('integracao_bsoft').update({ ultima_execucao: new Date().toISOString(), ultimo_status: status, ultimo_resumo: guardado }).eq('transportadora_id', tid);
+      const guardado = { ...resumo, itens: undefined, sem_motorista: resumo.sem_motorista.slice(0, 30), erros: resumo.erros.slice(0, 30), pdfs_com_problema: resumo.pdfs_com_problema.slice(0, 30) };
+      await admin.from('integracao_bsoft').update({ ultima_execucao: new Date().toISOString(), ultimo_status: status, ultimo_resumo: guardado,
+        ...(falhasMudaram ? { pdf_falhas: falhasPdf } : {}) }).eq('transportadora_id', tid);
       await admin.from('sincronizacao_log').insert({ transportadora_id: tid, status: status === 'ok' ? 'sucesso' : 'erro', registros_processados: resumo.criadas, erro: resumo.erros.length ? resumo.erros.slice(0, 5).join(' | ') : null });
     }
     return jsonResponse({ ok: true, acao, ...resumo, abastecimentos });
