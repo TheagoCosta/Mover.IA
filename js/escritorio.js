@@ -110,8 +110,13 @@ function cavaloDoConjunto(conjunto){
   return cavalo && cavalo.veiculo ? cavalo.veiculo.placa : '—';
 }
 // Registro feito sem sinal no app do motorista: vale a hora do celular (até 12 h antes) e mostra quando chegou
+// Passou de 12 h sem sinal: o banco grava a hora em que chegou, e aqui aparece a hora que o celular marcou
 function marcaSemSinal(r){
-  return r && r.recebido_em ? `<div class="l2" title="Feito sem internet no celular do motorista; a hora é a do celular.">📶 Registrado sem sinal · chegou em ${fmtDataHora(r.recebido_em)}</div>` : '';
+  if(!r || !r.recebido_em) return '';
+  const usada = r.criado_em || r.data || r.inicio;
+  const horaCelularRecusada = r.hora_celular && usada && Math.abs(new Date(usada) - new Date(r.hora_celular)) > 5 * 60000;
+  if(horaCelularRecusada) return `<div class="l2" title="O celular ficou mais de 12 h sem internet. A hora gravada é a de chegada; confira com o motorista a hora real.">⚠️ Mais de 12 h sem sinal · no celular: ${fmtDataHora(r.hora_celular)} · chegou em ${fmtDataHora(r.recebido_em)}</div>`;
+  return `<div class="l2" title="Feito sem internet no celular do motorista; a hora é a do celular.">📶 Registrado sem sinal · chegou em ${fmtDataHora(r.recebido_em)}</div>`;
 }
 function contarIrregularidades(checklist){ return (checklist.respostas || []).filter(r => r.resposta === 'bad').length; }
 function loginDoEmail(email){ return String(email || '').endsWith('@motoristas.moveria.app') ? email.split('@')[0] : email; }
@@ -347,7 +352,7 @@ const COR_JORNADA = { ativa:'blue', pausada:'amber', encerrada:'green' };
 
 async function secaoJornadas(el){
   const jornadas = await consultar(sb.from('jornada')
-    .select('id, inicio, fim, status, assinatura_base64, motorista:motorista_id(nome), jornada_evento(tipo, motivo, observacao, criado_em, recebido_em)')
+    .select('id, inicio, fim, status, assinatura_base64, motorista:motorista_id(nome), jornada_evento(tipo, motivo, observacao, criado_em, recebido_em, hora_celular)')
     .order('inicio', { ascending:false }).limit(200));
   const linhas = jornadas.map(j => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
@@ -406,7 +411,7 @@ async function secaoJornadas(el){
 // ---------------------------------------------------------------------
 async function secaoChecklists(el){
   const checklists = await consultar(sb.from('checklist')
-    .select('id, criado_em, recebido_em, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))')
+    .select('id, criado_em, recebido_em, hora_celular, respostas, motorista:motorista_id(nome), conjunto:conjunto_id(id, conjunto_item(ordem, veiculo:veiculo_id(placa, tipo)))')
     .order('criado_em', { ascending:false }).limit(200));
   const nomeMot = (c) => c.motorista ? c.motorista.nome : '';
   const ordens = [

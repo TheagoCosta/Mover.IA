@@ -10,7 +10,7 @@ let filtroAbastecimento = 'todos';
 async function secaoAbastecimento(el){
   const [registros, comBsoft] = await Promise.all([
     consultar(sb.from('abastecimento')
-      .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, bsoft_ref, bsoft_origem, recebido_em, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
+      .select('id, data, tipo, km, litros, arla_litros, preco_litro_diesel, preco_litro_arla, odometro_bomba, posto, nota_numero, media_calculada, media_arla_calculada, confirmado_em, bsoft_ref, bsoft_origem, recebido_em, hora_celular, motorista:motorista_id(nome), veiculo:veiculo_id(placa), confirmado:confirmado_por(nome)')
       .order('data', { ascending:false }).limit(3000)),
     sb.from('integracao_bsoft').select('transportadora_id').maybeSingle().then(r => !!r.data),
   ]);
