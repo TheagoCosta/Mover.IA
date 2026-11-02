@@ -283,7 +283,16 @@ function paraCampoDataHora(iso){
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 const doCampoDataHora = (v) => v ? new Date(v).toISOString() : null;
-const numeroOuNulo = (v) => { const t = String(v ?? '').trim().replace(',', '.'); return t === '' ? null : Number(t); };
+// Número no jeito brasileiro: "10.000" = 10000 (ponto de milhar), "1.234,5" = 1234.5,
+// "5,89" e "5.89" = 5.89. Vazio = null; texto inválido = NaN.
+const numeroOuNulo = (v) => {
+  let t = String(v ?? '').trim().replace(/\s/g, '');
+  if(t === '') return null;
+  if(t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  else if(/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  const n = Number(t);
+  return Number.isFinite(n) ? n : NaN;
+};
 
 // Botão "Excluir" com confirmação; registra no Registro de acessos (gatilho no banco)
 async function excluirRegistro(tabela, id, pergunta, aoTerminar){

@@ -14,14 +14,7 @@ const ROTULO_TIPO_ABAST = { interno:'Interno', externo:'Externo' };
 function numBR(v, casas){ return Number(v).toLocaleString('pt-BR', { minimumFractionDigits:casas, maximumFractionDigits:casas }); }
 // Lê número no jeito brasileiro: "214.900" = 214900 (ponto de milhar),
 // "88.998,3" = 88998.3, "178,5" = 178.5; "178.5" (1–2 casas) = 178.5
-function lerNumero(id){
-  let t = String(document.getElementById(id).value || '').trim().replace(/\s/g, '');
-  if(!t) return null;
-  if(t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
-  else if(/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
-  const n = Number(t);
-  return Number.isFinite(n) ? n : NaN;
-}
+function lerNumero(id){ return numeroOuNulo(document.getElementById(id).value); }   // ver escritorio.js
 
 async function loadAbastecimentoMotorista(){
   const conjunto = await carregarMeuConjunto();

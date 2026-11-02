@@ -24,7 +24,7 @@ const SUPABASE_ANON_KEY = PROJETOS_SUPABASE[AMBIENTE_TESTE ? 'teste' : 'producao
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 if(AMBIENTE_TESTE){
   document.title = 'TESTE · ' + document.title;
-  document.body.insertAdjacentHTML('afterbegin', '<div class="faixa-teste">AMBIENTE DE TESTE · dados fictícios · <a href="?ambiente=producao">sair do teste</a></div>');
+  document.body.insertAdjacentHTML('afterbegin', '<div class="faixa-teste">TESTE<span> · dados fictícios</span> · <a href="?ambiente=producao">sair</a></div>');
 }
 
 let session = null;

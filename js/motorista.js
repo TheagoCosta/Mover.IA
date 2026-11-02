@@ -51,6 +51,12 @@ function placaCavalo(conjunto){
 
 // Jornada aberta (ativa ou pausada) com todos os eventos, pra calcular o
 // tempo de condução e mostrar a linha do tempo.
+// Cada leitura boa fica guardada no celular: sem sinal, vale a última conhecida
+// (o Início guardado pode ser de antes de a jornada começar).
+function chaveJornadaGuardada(){ return 'moveria:jornada' + SUFIXO_AMBIENTE + ':' + session.user.id; }
+function guardarJornada(jornada){ try{ localStorage.setItem(chaveJornadaGuardada(), JSON.stringify(jornada || null)); } catch(e){ /* sem espaço: segue */ } }
+// undefined = nada guardado ainda; null = guardado "sem jornada aberta"
+function jornadaGuardada(){ try{ const g = localStorage.getItem(chaveJornadaGuardada()); return g === null ? undefined : JSON.parse(g); } catch(e){ return undefined; } }
 async function buscarJornadaAberta(){
   const { data, error } = await sb.from('jornada')
     .select('id, inicio, status, jornada_evento(tipo, motivo, observacao, criado_em)')
@@ -58,8 +64,13 @@ async function buscarJornadaAberta(){
     .neq('status', 'encerrada')
     .order('inicio', { ascending: false })
     .limit(1);
-  if(error && ehErroDeRede(error)){ const c = lerCacheInicio(); return c ? c.dados.jornada || null : null; }   // sem sinal: a última conhecida
-  return (data && data[0]) || null;
+  if(error && ehErroDeRede(error)){
+    const g = jornadaGuardada(); if(g !== undefined) return g;
+    const c = lerCacheInicio(); return c ? c.dados.jornada || null : null;
+  }
+  const jornada = (data && data[0]) || null;
+  if(!error) guardarJornada(jornada);
+  return jornada;
 }
 async function carregarJornadaAtiva(){ return prepararJornada(jornadaComFila(await buscarJornadaAberta())); }
 // ordena os eventos e calcula parada atual e tempo de condução
@@ -327,12 +338,15 @@ async function buscarInicio(){
     // sem sinal: fica com o que estava guardado no aparelho (não apaga com dados vazios)
     const c = lerCacheInicio();
     if(c && c.usuarioId === session.user.id){
-      guardarTela('jornada', c.dados.jornada || null); guardarTela('viagem', c.dados.viagem || null); guardarTela('agendamentos', c.dados.agendamentos || []);
-      aplicarDadosInicio(c.dados, false);
-      return c.dados;
+      const g = jornadaGuardada();   // a jornada guardada é sempre a leitura mais recente
+      const d = g === undefined ? c.dados : { ...c.dados, jornada: g };
+      guardarTela('jornada', d.jornada || null); guardarTela('viagem', d.viagem || null); guardarTela('agendamentos', d.agendamentos || []);
+      aplicarDadosInicio(d, false);
+      return d;
     }
   }
   const dados = !error && data && typeof data === 'object' ? data : await carregarInicioPorPartes();
+  if(!error) guardarJornada(dados.jornada);
   // as telas Jornada, Viagem e Agendamentos já ficam prontas com o que veio aqui
   guardarTela('jornada', dados.jornada || null);
   guardarTela('viagem', dados.viagem || null);
