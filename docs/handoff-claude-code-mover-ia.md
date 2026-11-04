@@ -194,4 +194,5 @@ O plano gratuito pausa o projeto após dias sem uso (aconteceu em 13/10: ningué
 - Eixos que levantam — padrão (`eixos_levantam` null; função `eixos_levantam_efetivo`, espelhada em `eixosLevantamPadrao` no JS): carreta e dolly levantam o 1º eixo (o da frente); cavalo não levanta no rodotrem e, no bitrem (conjunto ativo sem dolly), levanta o último eixo. O escritório pode marcar outros no mapa ("voltar ao padrão" volta a null).
 - Medição do sulco: por enquanto quem faz é o **escritório** (aviso "Medir o sulco" no topo de Pneus › Por veículo); o mecânico também pode.
 - 01 e 02 aplicadas na PRODUÇÃO em 04/11 com aprovação do Thiago.
+- Aba **Por conjunto** (pedido do Thiago): a lista e o desenho são do conjunto inteiro (cavalo + carretas + dolly na ordem do engate, `dados.unidades`); veículo fora de conjunto aparece sozinho. "Medir todos do conjunto" lança o sulco de todos com o km do cavalo. Cada veículo mantém seu estepe, nº de eixos e eixos que levantam.
 - Testado no projeto de TESTE (regras do banco com rollback, telas como escritório e mecânico no celular) e no teste automático (`rodar-testes.js` agora abre as abas, o mapa e a ficha).

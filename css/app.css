@@ -514,7 +514,12 @@ body.tema-escritorio .pill.vencido{color:var(--signal-red-ink); background:var(-
 .pn-estepe{display:flex; align-items:center; gap:10px; font-size:11px; color:var(--text-secondary); border-top:1px dashed var(--border); padding-top:10px; width:100%; justify-content:center;}
 .pn-barra.levanta{background:repeating-linear-gradient(90deg, var(--asphalt-600) 0 6px, transparent 6px 10px);}
 .pn-barra.levanta span{color:var(--signal-amber); border-color:var(--signal-amber);}
-.pn-medir{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+.pn-medir-lista{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+.pn-conjunto{display:flex; flex-direction:column; align-items:stretch;}
+.pn-veic-tit{display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--text-secondary); margin-bottom:6px;}
+.pn-veic-tit b{font-size:14px; color:var(--text-primary);}
+.pn-veic-tit select{padding:4px 8px; font-size:12px;}
+.pn-engate{width:6px; height:18px; margin:4px auto; background:var(--asphalt-600); border-radius:3px;}
 .pn-levanta{display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; font-size:12px; color:var(--text-secondary); margin-top:10px;}
 .pn-levanta label{display:inline-flex; align-items:center; gap:4px; cursor:pointer;}
 .pn-levanta input{width:auto; margin:0;}

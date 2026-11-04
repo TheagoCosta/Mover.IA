@@ -52,7 +52,20 @@ async function buscarDadosPneus(){
   });
   // eixos que levantam: o que o escritório marcou, ou o padrão (igual a eixos_levantam_efetivo no banco)
   veiculos.forEach(v => { v.semDolly = cavaloSemDolly.has(v.id); atualizarLevantam(v); });
-  return { pneus, veiculos: veiculos.filter(v => v.ativo), todosVeiculos: veiculos, motoristaDo,
+  // "unidades": cada conjunto ativo (na ordem do engate) e os veículos que não estão em conjunto
+  const ativoPorId = Object.fromEntries(veiculos.filter(v => v.ativo).map(v => [v.id, v]));
+  const unidades = [], noConjunto = new Set();
+  conjuntos.filter(c => c.ativo).forEach(c => {
+    const vs = [...(c.conjunto_item || [])].sort((a, b) => a.ordem - b.ordem).map(i => ativoPorId[i.veiculo_id]).filter(Boolean);
+    if(!vs.length) return;
+    vs.sort((a, b) => (b.tipo === 'cavalo') - (a.tipo === 'cavalo'));   // cavalo sempre na frente
+    vs.forEach(v => noConjunto.add(v.id));
+    unidades.push({ id: c.id, conjunto: vs.length > 1, veiculos: vs, motorista: c.motorista ? c.motorista.nome : '' });
+  });
+  Object.values(ativoPorId).filter(v => !noConjunto.has(v.id)).forEach(v => unidades.push({ id: v.id, conjunto: false, veiculos: [v], motorista: motoristaDo[v.id] || '' }));
+  const unidadeDo = {};
+  unidades.forEach(u => u.veiculos.forEach(v => { unidadeDo[v.id] = u; }));
+  return { pneus, veiculos: veiculos.filter(v => v.ativo), todosVeiculos: veiculos, motoristaDo, unidades, unidadeDo,
     km: Object.fromEntries(kms.map(k => [k.veiculo_id, k])), carga: Object.fromEntries(cargas.map(c => [c.pneu_id, c])) };
 }
 
@@ -143,7 +156,7 @@ async function secaoPneus(el){
   const ativos = dados.pneus.filter(p => p.status !== 'sucata');
   const comAlerta = ativos.filter(alertaPneu);
   const n = (s) => dados.pneus.filter(p => p.status === s).length;
-  const ABAS = { veiculos: 'Por veículo', pneus: 'Todos os pneus', marcas: 'Comparar marcas' };
+  const ABAS = { veiculos: 'Por conjunto', pneus: 'Todos os pneus', marcas: 'Comparar marcas' };
 
   el.innerHTML = `
     <div class="kpi-row">
@@ -152,7 +165,7 @@ async function secaoPneus(el){
       ${kpi(n('recapagem'), 'Na recapagem')}
       ${kpi(comAlerta.length, 'Precisam de atenção', comAlerta.length ? 'Sulco baixo, sem medição ou recapagem atrasada' : 'Nenhum', comAlerta.length ? 'ambar' : 'verde')}
     </div>
-    ${dados.pneus.length ? '' : `<div class="o-banner" style="margin-bottom:14px;">${ic('pneu', 18)}<div class="txt"><b>Comece cadastrando os pneus</b>Abra um veículo em "Por veículo" e toque numa posição vazia para cadastrar o pneu que está montado ali (número de fogo, marca, km). Pneus do estoque se cadastram em "Todos os pneus". A partir daí cada troca, recapagem e medição de sulco forma o histórico de cada pneu e a comparação entre marcas.</div></div>`}
+    ${dados.pneus.length ? '' : `<div class="o-banner" style="margin-bottom:14px;">${ic('pneu', 18)}<div class="txt"><b>Comece cadastrando os pneus</b>Abra um conjunto em "Por conjunto" e toque numa posição vazia para cadastrar o pneu que está montado ali (número de fogo, marca, km). Pneus do estoque se cadastram em "Todos os pneus". A partir daí cada troca, recapagem e medição de sulco forma o histórico de cada pneu e a comparação entre marcas.</div></div>`}
     <div class="doc-tabs" style="max-width:560px;">
       ${Object.entries(ABAS).map(([k, l]) => `<button class="${abaPneus === k ? 'active' : ''}" data-aba-pneus="${k}">${l}</button>`).join('')}
     </div>
@@ -177,41 +190,61 @@ function resumoVeiculoPneus(v, dados){
   return { montados, rodando, posicoes, alertas, pior, medicaoMaisAntiga, diasSemMedir, estepe, naVezDeMedir: diasSemMedir != null && diasSemMedir > DIAS_SEM_MEDICAO };
 }
 
+// ---------- conjuntos (cavalo + carretas + dolly) ----------
+function nomeComposicao(u){
+  if(!u.conjunto) return tipoLabelGlobal[u.veiculos[0].tipo] || u.veiculos[0].tipo;
+  const tipos = u.veiculos.map(v => v.tipo), carretas = tipos.filter(t => t === 'carreta').length;
+  if(tipos.includes('dolly')) return 'Rodotrem';
+  return { 1: 'Carreta simples', 2: 'Bitrem', 3: 'Tritrem' }[carretas] || 'Conjunto';
+}
+const placasUnidade = (u) => u.veiculos.map(v => v.placa).join(' + ');
+function resumoUnidade(u, dados){
+  const rs = u.veiculos.map(v => resumoVeiculoPneus(v, dados));
+  const alertas = rs.flatMap(r => r.alertas);
+  const pior = alertas.find(a => a[0] === 'red') || alertas.find(a => a[0] === 'amber') || alertas[0];
+  const medicaoMaisAntiga = rs.map(r => r.medicaoMaisAntiga).filter(Boolean).sort()[0] || null;
+  const diasSemMedir = medicaoMaisAntiga ? Math.floor((Date.now() - new Date(medicaoMaisAntiga).getTime()) / 86400000) : null;
+  return { alertas, pior, medicaoMaisAntiga, diasSemMedir, naVezDeMedir: diasSemMedir != null && diasSemMedir > DIAS_SEM_MEDICAO,
+    montados: rs.reduce((s, r) => s + r.montados.length, 0), rodando: rs.reduce((s, r) => s + r.rodando.length, 0),
+    vagas: rs.reduce((s, r) => s + r.posicoes.filter(p => p !== 'EST1').length, 0),
+    estepes: rs.filter(r => r.estepe).length, semEstepe: u.veiculos.filter((v, i) => !rs[i].estepe).map(v => v.placa) };
+}
+// caminhões na vez de medir o sulco (medição na garagem pelo escritório, 1 a 2 vezes por mês), o mais atrasado primeiro
+const unidadesParaMedir = (dados) => dados.unidades.map(u => [u, resumoUnidade(u, dados)]).filter(([, r]) => r.naVezDeMedir).sort((a, b) => b[1].diasSemMedir - a[1].diasSemMedir);
+
 function listaVeiculosPneus(caixa, ctx){
   const { dados } = ctx;
   const ordens = [
-    ['placa', 'Placa de A a Z', porTexto(v => v.placa)],
-    ['alerta', 'Com alerta primeiro', (a, b) => resumoVeiculoPneus(b, dados).alertas.length - resumoVeiculoPneus(a, dados).alertas.length || porTexto(v => v.placa)(a, b)],
-    ['medicao', 'Medição mais antiga primeiro', (a, b) => porData(v => resumoVeiculoPneus(v, dados).medicaoMaisAntiga, 1)(a, b) || porTexto(v => v.placa)(a, b)],
-    ['tipo', 'Tipo (cavalo, carreta, dolly)', (a, b) => porTexto(v => v.tipo)(a, b) || porTexto(v => v.placa)(a, b)],
+    ['placa', 'Placa do cavalo (A a Z)', porTexto(u => u.veiculos[0].placa)],
+    ['alerta', 'Com alerta primeiro', (a, b) => resumoUnidade(b, dados).alertas.length - resumoUnidade(a, dados).alertas.length || porTexto(u => u.veiculos[0].placa)(a, b)],
+    ['medicao', 'Medição mais antiga primeiro', (a, b) => porData(u => resumoUnidade(u, dados).medicaoMaisAntiga, 1)(a, b) || porTexto(u => u.veiculos[0].placa)(a, b)],
+    ['tipo', 'Tipo (rodotrem, bitrem...)', (a, b) => porTexto(nomeComposicao)(a, b) || porTexto(u => u.veiculos[0].placa)(a, b)],
   ];
-  const texto = (v) => [v.placa, tipoLabelGlobal[v.tipo], v.modelo, dados.motoristaDo[v.id], resumoVeiculoPneus(v, dados).estepe ? '' : 'sem estepe'].join(' ');
-  // medição do sulco é feita pelo escritório (na garagem, 1 a 2 vezes por mês)
-  const medir = dados.veiculos.map(v => [v, resumoVeiculoPneus(v, dados)]).filter(([, r]) => r.naVezDeMedir).sort((a, b) => b[1].diasSemMedir - a[1].diasSemMedir);
-  caixa.innerHTML = `${medir.length ? `<div class="o-banner" style="margin-bottom:12px;">${ic('pneu', 18)}<div class="txt"><b>Medir o sulco (${medir.length} veículo${medir.length === 1 ? '' : 's'})</b>
-      Mais de ${DIAS_SEM_MEDICAO} dias sem medir — o mais atrasado primeiro. Abra o veículo e use "Medir todos".
-      <div class="pn-medir">${medir.slice(0, 30).map(([v, r]) => `<button type="button" class="btn btn-outline btn-sm" data-medir-veic="${v.id}"><span class="mono">${esc(v.placa)}</span> · ${r.diasSemMedir} dias</button>`).join('')}</div></div></div>` : ''}
+  const texto = (u) => [placasUnidade(u), nomeComposicao(u), u.motorista, ...u.veiculos.map(v => v.modelo)].join(' ');
+  const medir = unidadesParaMedir(dados);
+  caixa.innerHTML = `${medir.length ? `<div class="o-banner" style="margin-bottom:12px;">${ic('pneu', 18)}<div class="txt"><b>Medir o sulco (${medir.length} conjunto${medir.length === 1 ? '' : 's'})</b>
+      Mais de ${DIAS_SEM_MEDICAO} dias sem medir — o mais atrasado primeiro. Abra e use "Medir todos do conjunto".
+      <div class="pn-medir-lista">${medir.slice(0, 30).map(([u, r]) => `<button type="button" class="btn btn-outline btn-sm" data-medir-unid="${u.id}"><span class="mono">${esc(u.veiculos[0].placa)}</span> · ${r.diasSemMedir} dias</button>`).join('')}</div></div></div>` : ''}
     ${barraLista('pneus_veiculos', ordens, 'Pesquisar placa, modelo ou motorista')}<div id="listaVeicPneus"></div>`;
-  caixa.querySelectorAll('[data-medir-veic]').forEach(b => b.addEventListener('click', () => abrirMapaVeiculo(dados.veiculos.find(v => v.id === b.dataset.medirVeic), ctx)));
+  const abrir = (id) => abrirMapaUnidade(dados.unidades.find(u => u.id === id), ctx);
+  caixa.querySelectorAll('[data-medir-unid]').forEach(b => b.addEventListener('click', () => abrir(b.dataset.medirUnid)));
   const desenhar = () => {
-    const visiveis = aplicarLista('pneus_veiculos', dados.veiculos, ordens, texto);
+    const visiveis = aplicarLista('pneus_veiculos', dados.unidades, ordens, texto);
     const lista = document.getElementById('listaVeicPneus');
-    lista.innerHTML = painel(`Veículos (${visiveis.length})`, visiveis.length ? tabela(['Placa', 'Tipo', 'Motorista', 'Pneus montados', 'Estepe', 'Última medição', 'Km atual', 'Situação'],
-      visiveis.map(v => {
-        const r = resumoVeiculoPneus(v, dados), k = dados.km[v.id];
-        const vagas = r.posicoes.filter(p => p !== 'EST1').length;
-        const levantam = (v.levantam || []).length;
-        return `<tr class="clickable" data-veic-pneus="${v.id}">
-          <td class="mono">${esc(v.placa)}</td>
-          <td>${esc(tipoLabelGlobal[v.tipo] || v.tipo)}<div class="sub">${eixosVeiculo(v)} eixos${levantam ? ` (${levantam} levanta${levantam > 1 ? 'm' : ''})` : ''}${v.modelo ? ' · ' + esc(v.modelo) : ''}</div></td>
-          <td class="sub">${esc(dados.motoristaDo[v.id] || '—')}</td>
-          <td class="mono">${r.rodando.length} / ${vagas}</td>
-          <td>${r.estepe ? `<span class="mono">${esc(r.estepe.numero_fogo)}</span>` : r.montados.length ? badge('amber', 'Sem estepe') : '<span class="sub">—</span>'}</td>
+    lista.innerHTML = painel(`Conjuntos e veículos (${visiveis.length})`, visiveis.length ? tabela(['Conjunto', 'Tipo', 'Motorista', 'Pneus montados', 'Estepes', 'Última medição', 'Km atual', 'Situação'],
+      visiveis.map(u => {
+        const r = resumoUnidade(u, dados), k = dados.km[u.veiculos[0].id];
+        return `<tr class="clickable" data-unid-pneus="${u.id}">
+          <td><b class="mono">${esc(u.veiculos[0].placa)}</b>${u.veiculos.length > 1 ? `<div class="sub mono">${u.veiculos.slice(1).map(v => esc(v.placa)).join(' + ')}</div>` : ''}</td>
+          <td>${esc(nomeComposicao(u))}<div class="sub">${u.veiculos.reduce((s, v) => s + eixosVeiculo(v), 0)} eixos</div></td>
+          <td class="sub">${esc(u.motorista || '—')}</td>
+          <td class="mono">${r.rodando} / ${r.vagas}</td>
+          <td>${!r.montados ? '<span class="sub">—</span>' : r.semEstepe.length ? `${badge('amber', `${r.estepes} de ${u.veiculos.length}`)}<div class="sub">sem: ${r.semEstepe.map(esc).join(', ')}</div>` : badge('green', `${r.estepes} de ${u.veiculos.length}`)}</td>
           <td class="sub">${r.medicaoMaisAntiga ? `${fmtData(r.medicaoMaisAntiga)}<div class="sub">${r.diasSemMedir} dia${r.diasSemMedir === 1 ? '' : 's'}</div>` : '—'}</td>
           <td class="mono sub">${k && k.km != null ? fmtKm(k.km) + (k.placa_cavalo ? `<div class="sub">do cavalo ${esc(k.placa_cavalo)}</div>` : '') : '—'}</td>
-          <td>${r.pior ? badge(r.pior[0], r.alertas.length > 1 ? `${r.pior[1]} (+${r.alertas.length - 1})` : r.pior[1]) : r.montados.length ? badge('green', 'OK') : badge('grey', 'Sem pneus cadastrados')}</td></tr>`;
-      })) : vazio('Nenhum veículo encontrado.'));
-    lista.querySelectorAll('[data-veic-pneus]').forEach(tr => tr.addEventListener('click', () => abrirMapaVeiculo(dados.veiculos.find(v => v.id === tr.dataset.veicPneus), ctx)));
+          <td>${r.pior ? badge(r.pior[0], r.alertas.length > 1 ? `${r.pior[1]} (+${r.alertas.length - 1})` : r.pior[1]) : r.montados ? badge('green', 'OK') : badge('grey', 'Sem pneus cadastrados')}</td></tr>`;
+      })) : vazio('Nenhum conjunto encontrado.'));
+    lista.querySelectorAll('[data-unid-pneus]').forEach(tr => tr.addEventListener('click', () => abrir(tr.dataset.unidPneus)));
   };
   desenhar();
   ligarBarraLista(caixa, 'pneus_veiculos', desenhar);
@@ -327,65 +360,80 @@ function compararMarcas(caixa, ctx){
 }
 
 // ---------------------------------------------------------------------
-// Mapa do veículo (escritório e mecânico)
+// Mapa dos pneus (escritório e mecânico): o conjunto inteiro numa tela —
+// cavalo, carretas e dolly na ordem do engate. Veículo fora de conjunto aparece sozinho.
 // ---------------------------------------------------------------------
 function abrirMapaVeiculo(v, ctx){
+  const u = ctx.dados.unidadeDo[v.id] || { id: v.id, conjunto: false, veiculos: [v], motorista: ctx.dados.motoristaDo[v.id] || '' };
+  abrirMapaUnidade(u, ctx);
+}
+
+function blocoMapaVeiculo(v, ctx, primeiro){
   const { dados } = ctx;
   const montados = dados.pneus.filter(p => p.status === 'em_uso' && p.veiculo_id === v.id);
   const naPos = Object.fromEntries(montados.map(p => [p.posicao, p]));
   const posicoes = posicoesVeiculo(v);
   const foraDoMapa = montados.filter(p => !posicoes.includes(p.posicao));
-  const k = dados.km[v.id];
   const botao = (pos) => {
     const p = naPos[pos];
-    if(!p) return `<button type="button" class="pn-pneu vazio" data-pos-vazia="${pos}" title="${esc(rotuloPosicao(pos))} — vazio">${ic('plus', 16)}</button>`;
+    if(!p) return `<button type="button" class="pn-pneu vazio" data-pos-vazia="${pos}" data-veic="${v.id}" title="${esc(v.placa)} · ${esc(rotuloPosicao(pos))} — vazio">${ic('plus', 16)}</button>`;
     const a = alertaPneu(p);
-    return `<button type="button" class="pn-pneu cor-${a ? a[0] : corSulco(p.sulco_atual_mm == null ? null : Number(p.sulco_atual_mm))}" data-pneu-mapa="${p.id}" title="${esc(rotuloPosicao(pos))}">
+    return `<button type="button" class="pn-pneu cor-${a ? a[0] : corSulco(p.sulco_atual_mm == null ? null : Number(p.sulco_atual_mm))}" data-pneu-mapa="${p.id}" data-veic="${v.id}" title="${esc(v.placa)} · ${esc(rotuloPosicao(pos))}">
       <b>${esc(p.numero_fogo)}</b><span>${esc(p.marca.slice(0, 10))}</span><span>${p.sulco_atual_mm != null ? numGraf(p.sulco_atual_mm, 1) + ' mm' : '— mm'}</span></button>`;
   };
-  abrirModal(`${v.placa} — pneus`, `
-    <div class="l2" style="margin-bottom:10px;">${esc(tipoLabelGlobal[v.tipo] || v.tipo)} · ${eixosVeiculo(v)} eixos${dados.motoristaDo[v.id] ? ' · ' + esc(dados.motoristaDo[v.id]) : ''}
-      · km atual: <b>${k && k.km != null ? fmtKm(k.km) : 'sem km'}</b>${k && k.placa_cavalo ? ` (do cavalo ${esc(k.placa_cavalo)})` : ''}</div>
+  const padrao = v.tipo === 'cavalo' ? (v.semDolly ? 'bitrem: levanta o de trás' : 'não levanta') : 'levanta o da frente';
+  return `<div class="pn-veic">
+    <div class="pn-veic-tit"><b class="mono">${esc(v.placa)}</b><span>${esc(tipoLabelGlobal[v.tipo] || v.tipo)} · ${eixosVeiculo(v)} eixos</span>
+      ${ctx.gestao ? `<select data-eixos-veic="${v.id}" title="Quantidade de eixos" style="width:auto; margin-left:auto;">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<option value="${n}" ${n === eixosVeiculo(v) ? 'selected' : ''}>${n} eixo${n > 1 ? 's' : ''}</option>`).join('')}</select>` : ''}</div>
     <div class="pn-mapa">
-      <div class="pn-frente">frente</div>
+      ${primeiro ? '<div class="pn-frente">frente</div>' : ''}
       ${eixosDoVeiculo(v).map(x => `<div class="pn-eixo">
         <div class="pn-lado">${x.esquerda.map(botao).join('')}</div>
         <div class="pn-barra${eixoLevanta(v, x.eixo) ? ' levanta' : ''}"><span title="${eixoLevanta(v, x.eixo) ? 'Eixo que levanta (12h): vazio fica suspenso' : 'Eixo fixo (24h)'}">${x.eixo}${eixoLevanta(v, x.eixo) ? ' ↑' : ''}</span></div>
         <div class="pn-lado">${x.direita.map(botao).join('')}</div></div>`).join('')}
       <div class="pn-estepe"><span>Estepe</span>${botao('EST1')}</div>
     </div>
-    ${foraDoMapa.length ? `<div class="l2" style="margin-top:8px;">Fora do desenho (o nº de eixos mudou?): ${foraDoMapa.map(p => `<a href="#" data-pneu-mapa="${p.id}">${esc(p.numero_fogo)} (${esc(rotuloPosicao(p.posicao))})</a>`).join(', ')}</div>` : ''}
-    <div class="pn-legenda"><span class="cor-green"></span>sulco bom <span class="cor-amber"></span>recapar (≤ ${SULCO_RECAPAR_MM} mm) <span class="cor-red"></span>abaixo do limite legal (${numGraf(SULCO_LEGAL_MM, 1)} mm) <span class="cor-blue"></span>medir o sulco${(v.levantam || []).length ? ' · <b>↑</b> eixo que levanta (12h): só conta km carregado' : ''}</div>
-    ${ctx.gestao ?`<div class="pn-levanta"><span>Eixos que levantam (12h):</span>${eixosDoVeiculo(v).map(x => x.eixo).filter(e => !(v.tipo === 'cavalo' && e === 1)).map(e => `<label><input type="checkbox" data-eixo-levanta="${e}" ${eixoLevanta(v, e) ? 'checked' : ''}> ${e}º</label>`).join('')}<span class="sub">${v.eixos_levantam ? `marcado pelo escritório · <a href="#" id="pnLevantaPadrao">voltar ao padrão</a>` : `padrão: ${v.tipo === 'cavalo' ? (v.semDolly ? 'bitrem levanta o de trás' : 'não levanta (rodotrem)') : 'levanta o da frente'}`}</span></div>` : ''}
-    <div class="l2" style="margin-top:8px;">Toque num pneu para medir, retirar ou trocar de posição; numa posição vazia (+) para montar.</div>
-    <div class="o-acoes" style="margin-top:12px;">
-      ${montados.length ? `<button type="button" class="btn btn-outline btn-sm" id="btnMedirTodos">${ic('checksq', 14)} Medir todos</button>` : ''}
-      ${ctx.gestao ? `<label class="barra-ordem" style="margin:0;"><span>Eixos:</span><select id="pnEixos" style="width:auto;">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<option value="${n}" ${n === eixosVeiculo(v) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>` : ''}
-    </div>`);
+    ${foraDoMapa.length ? `<div class="l2" style="margin-top:6px;">Fora do desenho (o nº de eixos mudou?): ${foraDoMapa.map(p => `<a href="#" data-pneu-mapa="${p.id}" data-veic="${v.id}">${esc(p.numero_fogo)} (${esc(rotuloPosicao(p.posicao))})</a>`).join(', ')}</div>` : ''}
+    ${ctx.gestao ? `<div class="pn-levanta"><span>Levantam (12h):</span>${eixosDoVeiculo(v).map(x => x.eixo).filter(e => !(v.tipo === 'cavalo' && e === 1)).map(e => `<label><input type="checkbox" data-eixo-levanta="${e}" data-veic="${v.id}" ${eixoLevanta(v, e) ? 'checked' : ''}> ${e}º</label>`).join('')}
+      <span class="sub">${v.eixos_levantam ? `marcado pelo escritório · <a href="#" data-levanta-padrao="${v.id}">voltar ao padrão</a>` : `padrão: ${padrao}`}</span></div>` : ''}
+  </div>`;
+}
+
+function abrirMapaUnidade(u, ctx){
+  const { dados } = ctx;
+  const cav = u.veiculos[0], k = dados.km[cav.id];
+  const montados = dados.pneus.filter(p => p.status === 'em_uso' && u.veiculos.some(v => v.id === p.veiculo_id));
+  const algumLevanta = u.veiculos.some(v => (v.levantam || []).length);
+  abrirModal(u.conjunto ? `${nomeComposicao(u)} — pneus` : `${cav.placa} — pneus`, `
+    <div class="l2" style="margin-bottom:10px;">${u.conjunto ? `<span class="mono">${esc(placasUnidade(u))}</span> · ` : `${esc(tipoLabelGlobal[cav.tipo] || cav.tipo)} · `}${u.motorista ? esc(u.motorista) + ' · ' : ''}km atual: <b>${k && k.km != null ? fmtKm(k.km) : 'sem km'}</b>${k && k.placa_cavalo ? ` (do cavalo ${esc(k.placa_cavalo)})` : ''}</div>
+    ${montados.length ? `<div class="o-acoes" style="margin-bottom:10px;"><button type="button" class="btn btn-primary btn-sm" id="btnMedirTodos">${ic('checksq', 14)} Medir todos${u.conjunto ? ' do conjunto' : ''}</button></div>` : ''}
+    <div class="pn-conjunto">${u.veiculos.map((v, i) => blocoMapaVeiculo(v, ctx, i === 0)).join('<div class="pn-engate" aria-hidden="true"></div>')}</div>
+    <div class="pn-legenda"><span class="cor-green"></span>sulco bom <span class="cor-amber"></span>recapar (≤ ${SULCO_RECAPAR_MM} mm) <span class="cor-red"></span>abaixo do limite legal (${numGraf(SULCO_LEGAL_MM, 1)} mm) <span class="cor-blue"></span>medir o sulco${algumLevanta ? ' · <b>↑</b> eixo que levanta (12h): só conta km carregado' : ''}</div>
+    <div class="l2" style="margin-top:8px;">Toque num pneu para medir, retirar ou trocar de posição; numa posição vazia (+) para montar.</div>`);
   const modal = document.getElementById('modalGenerico');
-  modal.querySelectorAll('[data-pneu-mapa]').forEach(b => b.addEventListener('click', (e) => { e.preventDefault(); abrirPneu(dados.pneus.find(p => p.id === b.dataset.pneuMapa), ctx, v); }));
-  modal.querySelectorAll('[data-pos-vazia]').forEach(b => b.addEventListener('click', () => abrirMontar(v, b.dataset.posVazia, ctx)));
+  const veic = (id) => u.veiculos.find(v => v.id === id);
+  modal.querySelectorAll('[data-pneu-mapa]').forEach(b => b.addEventListener('click', (e) => { e.preventDefault(); abrirPneu(dados.pneus.find(p => p.id === b.dataset.pneuMapa), ctx, veic(b.dataset.veic)); }));
+  modal.querySelectorAll('[data-pos-vazia]').forEach(b => b.addEventListener('click', () => abrirMontar(veic(b.dataset.veic), b.dataset.posVazia, ctx)));
   const medir = document.getElementById('btnMedirTodos');
-  if(medir) medir.addEventListener('click', () => abrirMedirTodos(v, montados, ctx));
-  const eixos = document.getElementById('pnEixos');
-  if(eixos) eixos.addEventListener('change', async () => {
-    const { error } = await sb.from('veiculo').update({ eixos: Number(eixos.value) }).eq('id', v.id);
+  if(medir) medir.addEventListener('click', () => abrirMedirTodos(u, montados, ctx));
+  modal.querySelectorAll('[data-eixos-veic]').forEach(s => s.addEventListener('change', async () => {
+    const v = veic(s.dataset.eixosVeic);
+    const { error } = await sb.from('veiculo').update({ eixos: Number(s.value) }).eq('id', v.id);
     if(error){ alert('Não consegui salvar: ' + error.message); return; }
-    v.eixos = Number(eixos.value); atualizarLevantam(v);
-    abrirMapaVeiculo(v, ctx);
-  });
-  modal.querySelectorAll('[data-eixo-levanta]').forEach(c => c.addEventListener('change', async () => {
-    const novos = [...modal.querySelectorAll('[data-eixo-levanta]:checked')].map(x => Number(x.dataset.eixoLevanta));
-    salvarLevanta(novos, () => { c.checked = !c.checked; });
+    v.eixos = Number(s.value); atualizarLevantam(v);
+    abrirMapaUnidade(u, ctx);
   }));
-  const padrao = document.getElementById('pnLevantaPadrao');
-  if(padrao) padrao.addEventListener('click', (e) => { e.preventDefault(); salvarLevanta(null); });
-  async function salvarLevanta(novos, desfazer){
+  modal.querySelectorAll('[data-eixo-levanta]').forEach(c => c.addEventListener('change', () => {
+    const novos = [...modal.querySelectorAll(`[data-eixo-levanta][data-veic="${c.dataset.veic}"]:checked`)].map(x => Number(x.dataset.eixoLevanta));
+    salvarLevanta(veic(c.dataset.veic), novos, () => { c.checked = !c.checked; });
+  }));
+  modal.querySelectorAll('[data-levanta-padrao]').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); salvarLevanta(veic(a.dataset.levantaPadrao), null); }));
+  async function salvarLevanta(v, novos, desfazer){
     const { error } = await sb.from('veiculo').update({ eixos_levantam: novos }).eq('id', v.id);
     if(error){ alert('Não consegui salvar: ' + error.message); if(desfazer) desfazer(); return; }
     v.eixos_levantam = novos; atualizarLevantam(v);
     mostrarToast('Eixos que levantam salvos — o km dos pneus é recalculado');
-    abrirMapaVeiculo(v, ctx);
+    abrirMapaUnidade(u, ctx);
     ctx.aoMudar && ctx.aoMudar();
   }
 }
@@ -425,8 +473,8 @@ async function abrirPneu(p, ctx, veiculoMapa = null){
     <div class="section-label" style="margin:16px 0 6px;">Histórico</div>
     <div id="pnHistorico" class="l2">Carregando...</div>
     ${ctx.gestao ? `<div class="o-acoes" style="margin-top:12px;"><button type="button" class="btn btn-outline btn-sm" id="btnEditarPneu">Editar cadastro</button>
-      ${veiculoMapa ? `<button type="button" class="btn btn-outline btn-sm" id="btnVoltarMapa">Voltar ao ${esc(veiculoMapa.placa)}</button>` : ''}</div>`
-      : veiculoMapa ? `<div class="o-acoes" style="margin-top:12px;"><button type="button" class="btn btn-outline btn-sm" id="btnVoltarMapa">Voltar ao ${esc(veiculoMapa.placa)}</button></div>` : ''}`);
+      ${veiculoMapa ? `<button type="button" class="btn btn-outline btn-sm" id="btnVoltarMapa">Voltar ao desenho</button>` : ''}</div>`
+      : veiculoMapa ? `<div class="o-acoes" style="margin-top:12px;"><button type="button" class="btn btn-outline btn-sm" id="btnVoltarMapa">Voltar ao desenho</button></div>` : ''}`);
   document.querySelectorAll('#modalGenerico [data-acao-pneu]').forEach(b => b.addEventListener('click', () => {
     const acao = b.dataset.acaoPneu;
     if(acao === 'montar') return abrirMontar(null, null, ctx, p);
@@ -658,15 +706,17 @@ function abrirMovimentoPneu(tipo, p, ctx){
 }
 
 // ---------- medir todos os pneus do veículo de uma vez ----------
-function abrirMedirTodos(v, montados, ctx){
-  const ordem = posicoesVeiculo(v);
-  const lista = [...montados].sort((a, b) => ordem.indexOf(a.posicao) - ordem.indexOf(b.posicao));
-  abrirModal(`${v.placa} — medir todos`, `
+// u = conjunto inteiro (ou um veículo só); o km é o do cavalo, que é o mesmo para o conjunto todo
+function abrirMedirTodos(u, montados, ctx){
+  const cav = u.veiculos[0];
+  const grupos = u.veiculos.map(v => { const ordem = posicoesVeiculo(v); return [v, montados.filter(p => p.veiculo_id === v.id).sort((a, b) => ordem.indexOf(a.posicao) - ordem.indexOf(b.posicao))]; }).filter(([, l]) => l.length);
+  abrirModal(`${u.conjunto ? placasUnidade(u) : cav.placa} — medir todos`, `
     <form id="formMedirTodos">
-      <div class="o-form-grid">${campoKmPneu(v, ctx)}${campoDataPneu()}</div>
+      <div class="o-form-grid">${campoKmPneu(cav, ctx)}${campoDataPneu()}</div>
       <div class="l2" style="margin:10px 0 6px;">Sulco em mm (a menor medida de cada pneu). Deixe em branco o que não mediu.</div>
+      ${grupos.map(([v, lista]) => `${grupos.length > 1 ? `<div class="section-label" style="margin:12px 0 6px;">${esc(v.placa)} · ${esc(tipoLabelGlobal[v.tipo] || v.tipo)}</div>` : ''}
       <div class="pn-medir">${lista.map(p => `<label><span>${esc(rotuloPosicao(p.posicao))}<small>${esc(p.numero_fogo)} · ${esc(p.marca)}${p.sulco_atual_mm != null ? ' · antes ' + fmtMm(p.sulco_atual_mm) : ''}</small></span>
-        <input type="text" inputmode="decimal" data-sulco-pneu="${p.id}" placeholder="mm"></label>`).join('')}</div>
+        <input type="text" inputmode="decimal" data-sulco-pneu="${p.id}" placeholder="mm"></label>`).join('')}</div>`).join('')}
       <div class="err"></div>
       <button type="submit" style="margin-top:12px;">Salvar medições</button>
     </form>`);
@@ -784,7 +834,7 @@ async function loadPneusMecanico(){
   const atencao = dados.pneus.filter(alertaPneu);
   const cartao = (num, rot, cor = '') => `<div class="card" style="text-align:center; padding:12px; margin:0;"><div class="gauge-val" style="margin-top:0; font-size:20px; ${cor ? `color:${cor};` : ''}">${num}</div><div class="gauge-lbl">${rot}</div></div>`;
   montarTelaMecanico({
-    header: headerMecanico('Pneus', 'Toque no veículo para ver o mapa dos pneus'),
+    header: headerMecanico('Pneus', 'Toque no conjunto para ver o desenho dos pneus'),
     conteudo: `
       <div class="grid3" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:12px;">
         <div data-lista-mec="estoque" style="cursor:pointer;">${cartao(n('estoque'), 'Estoque')}</div>
@@ -799,21 +849,21 @@ async function loadPneusMecanico(){
     const termo = textoBusca(buscaPneusMecanico).trim();
     const caixa = document.getElementById('listaPneuMec');
     const pneusAchados = termo ? dados.pneus.filter(p => textoBusca(p.numero_fogo).includes(termo) && p.status !== 'sucata') : [];
-    const veics = dados.veiculos.filter(v => !termo || textoBusca(v.placa).includes(termo));
-    // caminhões na vez de medir o sulco (medição na garagem, 1 a 2 vezes por mês): o que está há mais tempo sem medir primeiro
-    const medir = termo ? [] : dados.veiculos.map(v => [v, resumoVeiculoPneus(v, dados)]).filter(([, r]) => r.naVezDeMedir).sort((a, b) => b[1].diasSemMedir - a[1].diasSemMedir);
+    const unids = dados.unidades.filter(u => !termo || u.veiculos.some(v => textoBusca(v.placa).includes(termo)));
+    // conjuntos na vez de medir o sulco (por enquanto quem mede é o escritório; o mecânico também pode)
+    const medir = termo ? [] : unidadesParaMedir(dados);
     caixa.innerHTML = `
-      ${medir.length ? `<div class="section-label">Medir o sulco (${medir.length})</div><div class="card lista">${medir.slice(0, 15).map(([v, r]) => `<div class="list-item" data-veic-mec="${v.id}" style="cursor:pointer;"><div class="li-ic">${ic('pneu', 16)}</div>
-        <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(v.placa)}</div><div class="li-sub">${r.diasSemMedir} dias sem medir · ${r.rodando.length} pneu${r.rodando.length === 1 ? '' : 's'}${dados.motoristaDo[v.id] ? ' · ' + esc(dados.motoristaDo[v.id]) : ''}</div></div>
+      ${medir.length ? `<div class="section-label">Medir o sulco (${medir.length})</div><div class="card lista">${medir.slice(0, 15).map(([u, r]) => `<div class="list-item" data-unid-mec="${u.id}" style="cursor:pointer;"><div class="li-ic">${ic('pneu', 16)}</div>
+        <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(placasUnidade(u))}</div><div class="li-sub">${r.diasSemMedir} dias sem medir · ${r.rodando} pneu${r.rodando === 1 ? '' : 's'}${u.motorista ? ' · ' + esc(u.motorista) : ''}</div></div>
         ${pillStatus('blue', 'Medir')}</div>`).join('')}</div>` : ''}
       ${pneusAchados.length ? `<div class="section-label">Pneus</div><div class="card lista">${pneusAchados.slice(0, 30).map(p => `<div class="list-item" data-pneu-mec="${p.id}" style="cursor:pointer;"><div class="li-ic">${ic('pneu', 16)}</div>
         <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(p.numero_fogo)}</div><div class="li-sub">${esc(descricaoPneu(p))} · ${esc(ondeEsta(p, dados))}</div></div></div>`).join('')}</div>` : ''}
-      <div class="section-label">Veículos</div>
-      <div class="card lista">${veics.map(v => { const r = resumoVeiculoPneus(v, dados);
-        return `<div class="list-item" data-veic-mec="${v.id}" style="cursor:pointer;"><div class="li-ic">${ic('truck', 16)}</div>
-          <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(v.placa)}</div><div class="li-sub">${esc(tipoLabelGlobal[v.tipo] || v.tipo)} · ${r.montados.length} pneu${r.montados.length === 1 ? '' : 's'}${dados.motoristaDo[v.id] ? ' · ' + esc(dados.motoristaDo[v.id]) : ''}</div></div>
+      <div class="section-label">Conjuntos</div>
+      <div class="card lista">${unids.map(u => { const r = resumoUnidade(u, dados);
+        return `<div class="list-item" data-unid-mec="${u.id}" style="cursor:pointer;"><div class="li-ic">${ic('truck', 16)}</div>
+          <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(placasUnidade(u))}</div><div class="li-sub">${esc(nomeComposicao(u))} · ${r.montados} pneu${r.montados === 1 ? '' : 's'}${u.motorista ? ' · ' + esc(u.motorista) : ''}</div></div>
           ${r.pior ? pillStatus(r.pior[0], r.pior[1]) : ''}</div>`; }).join('') || '<div class="li-sub" style="padding:12px;">Nenhum veículo encontrado.</div>'}</div>`;
-    caixa.querySelectorAll('[data-veic-mec]').forEach(el => el.addEventListener('click', () => abrirMapaVeiculo(dados.veiculos.find(v => v.id === el.dataset.veicMec), ctx)));
+    caixa.querySelectorAll('[data-unid-mec]').forEach(el => el.addEventListener('click', () => abrirMapaUnidade(dados.unidades.find(u => u.id === el.dataset.unidMec), ctx)));
     caixa.querySelectorAll('[data-pneu-mec]').forEach(el => el.addEventListener('click', () => abrirPneu(dados.pneus.find(p => p.id === el.dataset.pneuMec), ctx)));
   };
   desenhar();

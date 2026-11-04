@@ -45,9 +45,12 @@ const ROTEIROS = {
       if(txt.trim().length < 20) problemas.push('Pneus (' + aba + '): aba vazia');
     }
     abaPneus = 'veiculos'; loadEscritorio(); ${ESPERAR}
-    const veic = document.querySelector('[data-veic-pneus="v1"]');   // o falso tem pneus montados no v1
-    if(!veic) problemas.push('Pneus: lista de veículos vazia'); else {
+    const veic = document.querySelector('[data-unid-pneus="c1"]');   // o falso tem pneus montados no v1, que está no conjunto c1
+    if(!veic) problemas.push('Pneus: lista de conjuntos vazia'); else {
       veic.click(); await new Promise(r => setTimeout(r, 300));
+      if(document.querySelectorAll('#modalGenerico .pn-veic').length < 2) problemas.push('Pneus: o desenho não mostrou o conjunto inteiro');
+      const medirTodos = document.getElementById('btnMedirTodos');
+      if(!medirTodos) problemas.push('Pneus: sem botão Medir todos'); else { medirTodos.click(); await new Promise(r => setTimeout(r, 300)); if(!document.querySelector('#formMedirTodos [data-sulco-pneu]')) problemas.push('Pneus: Medir todos sem pneus'); fecharModal(); veic.click(); await new Promise(r => setTimeout(r, 300)); }
       const pn = document.querySelector('#modalGenerico [data-pneu-mapa]');
       if(!pn) problemas.push('Pneus: o mapa do veículo não mostrou os pneus'); else { pn.click(); ${ESPERAR} if(!document.getElementById('pnHistorico') || /Carregando|Não consegui/.test(document.getElementById('pnHistorico').innerText)) problemas.push('Pneus: a ficha do pneu não carregou o histórico'); }
       fecharModal();
