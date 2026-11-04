@@ -26,7 +26,7 @@ const SULCO_LEGAL_MM = 1.6;      // limite da lei (Resolução CONTRAN 558/80)
 const SULCO_RECAPAR_MM = 3;      // abaixo disso a carcaça corre risco — hora de recapar
 const DIAS_SEM_MEDICAO = 20;     // medição na garagem 1 a 2 vezes por mês
 const DIAS_NA_RECAPAGEM = 30;
-const EIXOS_PADRAO = { cavalo: 3, carreta: 3, dolly: 2 };
+const EIXOS_PADRAO = { cavalo: 3, carreta: 2, dolly: 2 };
 const CAMPOS_PNEU = 'id, numero_fogo, marca, modelo, medida, aplicacao, dot, data_compra, valor_compra, fornecedor, nota_numero, sulco_inicial_mm, vida_inicial, observacao, ' +
   'status, vida, veiculo_id, posicao, montado_em, km_montagem, km_rodado, km_vida, vidas_concluidas, sulco_vida_inicio, sulco_atual_mm, medido_em, km_vida_medicao, custo_total, ultimo_mov_em';
 let abaPneus = 'veiculos';
@@ -71,6 +71,7 @@ async function buscarDadosPneus(){
 
 // ---------- posições ----------
 function eixosVeiculo(v){
+  if(v.tipo === 'carreta' || v.tipo === 'dolly') return 2;   // sempre 2 eixos, conforme os documentos (Thiago, 04/11)
   if(v.eixos) return v.eixos;
   const m = /(\d)\s*E\b/i.exec(v.modelo || '');
   return m ? Number(m[1]) : (EIXOS_PADRAO[v.tipo] || 2);
@@ -384,7 +385,7 @@ function blocoMapaVeiculo(v, ctx, primeiro){
   const padrao = v.tipo === 'cavalo' ? (v.semDolly ? 'bitrem: levanta o de trás' : 'não levanta') : 'levanta o da frente';
   return `<div class="pn-veic">
     <div class="pn-veic-tit"><b class="mono">${esc(v.placa)}</b><span>${esc(tipoLabelGlobal[v.tipo] || v.tipo)} · ${eixosVeiculo(v)} eixos</span>
-      ${ctx.gestao ? `<select data-eixos-veic="${v.id}" title="Quantidade de eixos" style="width:auto; margin-left:auto;">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<option value="${n}" ${n === eixosVeiculo(v) ? 'selected' : ''}>${n} eixo${n > 1 ? 's' : ''}</option>`).join('')}</select>` : ''}</div>
+      ${ctx.gestao && v.tipo === 'cavalo' ? `<select data-eixos-veic="${v.id}" title="Quantidade de eixos" style="width:auto; margin-left:auto;">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<option value="${n}" ${n === eixosVeiculo(v) ? 'selected' : ''}>${n} eixo${n > 1 ? 's' : ''}</option>`).join('')}</select>` : ''}</div>
     <div class="pn-mapa">
       ${primeiro ? '<div class="pn-frente">frente</div>' : ''}
       ${eixosDoVeiculo(v).map(x => `<div class="pn-eixo">
