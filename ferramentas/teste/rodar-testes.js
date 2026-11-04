@@ -38,6 +38,20 @@ const ROTEIROS = {
     screen = 'abastecimento'; loadEscritorio(); ${ESPERAR}
     const compra = document.querySelector('[data-mov-tanque="entrada"]');
     if(!compra) problemas.push('Abastecimento: botão Compra dos tanques não apareceu'); else { compra.click(); await new Promise(r => setTimeout(r, 300)); if(!document.getElementById('formMovTanque')) problemas.push('Compra de combustível: a janela não abriu'); fecharModal(); }
+    // pneus: as três abas, o mapa de um veículo e a ficha de um pneu
+    for(const aba of ['veiculos', 'pneus', 'marcas']){
+      abaPneus = aba; screen = 'pneus'; loadEscritorio(); ${ESPERAR}
+      const txt = (document.getElementById('conteudoPneus') || {}).innerText || '';
+      if(txt.trim().length < 20) problemas.push('Pneus (' + aba + '): aba vazia');
+    }
+    abaPneus = 'veiculos'; loadEscritorio(); ${ESPERAR}
+    const veic = document.querySelector('[data-veic-pneus="v1"]');   // o falso tem pneus montados no v1
+    if(!veic) problemas.push('Pneus: lista de veículos vazia'); else {
+      veic.click(); await new Promise(r => setTimeout(r, 300));
+      const pn = document.querySelector('#modalGenerico [data-pneu-mapa]');
+      if(!pn) problemas.push('Pneus: o mapa do veículo não mostrou os pneus'); else { pn.click(); ${ESPERAR} if(!document.getElementById('pnHistorico') || /Carregando|Não consegui/.test(document.getElementById('pnHistorico').innerText)) problemas.push('Pneus: a ficha do pneu não carregou o histórico'); }
+      fecharModal();
+    }
     return { telas, problemas };`,
   motorista: `
     const problemas = [], telas = [];

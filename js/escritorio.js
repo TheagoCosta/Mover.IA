@@ -13,6 +13,7 @@ const SECOES_ESCRITORIO = [
   { k:'abastecimento', l:'Abastecimento', i:'fuel',    g:'Frota',     meta:() => 'Estoque dos tanques, abastecimentos registrados, litros e gastos em posto' },
   { k:'consumo',       l:'Consumo',       i:'chart',   g:'Frota',     meta:() => 'Média de consumo por veículo e por motorista, evolução e alertas' },
   { k:'oficina',       l:'Oficina',       i:'wrench',  g:'Frota',     meta:() => 'Chamados de manutenção — motoristas, mecânico e oficinas externas' },
+  { k:'pneus',         l:'Pneus',         i:'pneu',    g:'Frota',     meta:() => 'Onde está cada pneu, recapagens, sulco e qual marca rende mais' },
   { k:'motoristas',    l:'Motoristas',    i:'user',    g:'Pessoas',   meta:() => 'Documentação e situação de todos os motoristas' },
   { k:'relatorios',    l:'Relatório mensal', i:'doc',  g:'Pessoas',   meta:() => 'Resumo do mês de cada motorista — jornadas, viagens, checklists, abastecimentos e chamados' },
   { k:'capacitacoes',  l:'Capacitações',  i:'award',   g:'Pessoas',   meta:() => 'Treinamentos e certificações da equipe' },
@@ -79,7 +80,7 @@ function loadEscritorio(){
   const el = document.getElementById('screenContent');
   const renderizar = {
     painel: secaoPainel, motoristas: secaoMotoristas, veiculos: secaoVeiculos, viagens: secaoViagens, abastecimento: secaoAbastecimento, consumo: secaoConsumo, relatorios: secaoRelatorios,
-    oficina: secaoOficina, jornadas: secaoJornadas, checklists: secaoChecklists, documentos: () => loadDocumentos(),
+    oficina: secaoOficina, pneus: secaoPneus, jornadas: secaoJornadas, checklists: secaoChecklists, documentos: () => loadDocumentos(),
     capacitacoes: secaoCapacitacoes, agenda: secaoAgenda, usuarios: secaoUsuarios, privacidade: secaoPrivacidade, integracao: secaoIntegracao, config: secaoConfig,
   }[screen];
   Promise.resolve(renderizar(el)).catch(e => { el.innerHTML = `<div class="status">Erro ao carregar: ${esc(e.message)}</div>`; });

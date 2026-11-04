@@ -111,6 +111,15 @@
       { id:'tm4', tanque_id:'tq1', tipo:'transferencia', litros:8000, tanque_destino_id:'tq2', data:iso(14 * 1440), criado_por:{ nome:'Admin Teste' } },
       { id:'tm5', tanque_id:'tq1', tipo:'entrada', litros:15000, tanque_destino_id:null, data:iso(10 * 1440), preco_litro:5.89, fornecedor:'Distribuidora Teste', nota_numero:'4455', criado_por:{ nome:'Admin Teste' } },
       { id:'tm6', tanque_id:'tq2', tipo:'medicao', litros:12100, tanque_destino_id:null, data:iso(7 * 1440), criado_por:{ nome:'Admin Teste' } },
+    ], pneu: [
+      { id:'pn1', numero_fogo:'101', marca:'Michelin', modelo:'X Multi Z', medida:'295/80R22.5', aplicacao:'direcional', valor_compra:2600, sulco_inicial_mm:17, vida_inicial:0, status:'em_uso', vida:0, veiculo_id:'v1', posicao:'1E', montado_em:iso(90 * 1440), km_montagem:180000, km_rodado:0, km_vida:0, vidas_concluidas:[], sulco_vida_inicio:17, sulco_atual_mm:9.5, medido_em:iso(10 * 1440), km_vida_medicao:30000, custo_total:2600, ultimo_mov_em:iso(10 * 1440) },
+      { id:'pn2', numero_fogo:'102', marca:'Pirelli', modelo:'FR85', medida:'295/80R22.5', aplicacao:'tracao', valor_compra:2100, sulco_inicial_mm:18, vida_inicial:0, status:'em_uso', vida:1, veiculo_id:'v1', posicao:'2EE', montado_em:iso(60 * 1440), km_montagem:190000, km_rodado:95000, km_vida:0, vidas_concluidas:[{ vida:0, km:95000, fim:'recapagem' }], sulco_vida_inicio:15, sulco_atual_mm:2.8, medido_em:iso(70 * 1440), km_vida_medicao:20000, custo_total:2850, ultimo_mov_em:iso(60 * 1440) },
+      { id:'pn3', numero_fogo:'103', marca:'Pirelli', modelo:'FR85', medida:'295/80R22.5', aplicacao:'tracao', valor_compra:2100, sulco_inicial_mm:18, vida_inicial:0, status:'recapagem', vida:0, veiculo_id:null, posicao:null, km_rodado:88000, km_vida:88000, vidas_concluidas:[], sulco_vida_inicio:18, sulco_atual_mm:3, medido_em:iso(40 * 1440), km_vida_medicao:88000, custo_total:2100, ultimo_mov_em:iso(40 * 1440) },
+      { id:'pn4', numero_fogo:'104', marca:'Bridgestone', modelo:'R268', medida:'295/80R22.5', aplicacao:'livre', valor_compra:2300, sulco_inicial_mm:16, vida_inicial:0, status:'estoque', vida:0, veiculo_id:null, posicao:null, km_rodado:0, km_vida:0, vidas_concluidas:[], sulco_vida_inicio:16, sulco_atual_mm:16, custo_total:2300 },
+      { id:'pn5', numero_fogo:'105', marca:'Bridgestone', modelo:'R268', medida:'295/80R22.5', aplicacao:'livre', valor_compra:2300, sulco_inicial_mm:16, vida_inicial:0, status:'sucata', vida:1, veiculo_id:null, posicao:null, km_rodado:150000, km_vida:60000, vidas_concluidas:[{ vida:0, km:90000, fim:'recapagem' }, { vida:1, km:60000, fim:'sucata' }], sulco_vida_inicio:15, sulco_atual_mm:2, custo_total:3050 },
+    ], pneu_movimento: [
+      { id:'pm1', pneu_id:'pn1', tipo:'montagem', data:iso(90 * 1440), veiculo_id:'v1', posicao:'1E', km:180000, criado_por:{ nome:'Admin Teste' } },
+      { id:'pm2', pneu_id:'pn1', tipo:'inspecao', data:iso(10 * 1440), veiculo_id:'v1', posicao:'1E', km:210000, sulco_mm:9.5, criado_por:{ nome:'João Mecânico Teste' } },
     ], calendario_licenciamento: [], motorista_perfil: [], integracao_bsoft: [{ transportadora_id:'t1' }],
   };
 
@@ -153,7 +162,9 @@
       signOut: async () => ({}), signInWithPassword: async () => ({ error:{ message:'teste' } }), updateUser: async () => ({}),
     },
     from: (t) => Object.assign(consulta(t), { insert: gravacao(t, 'insert'), update: gravacao(t, 'update'), upsert: gravacao(t, 'upsert'), delete: () => gravacao(t, 'delete')('(filtro)') }),
-    rpc: async () => ({ error: null }),
+    rpc: async (nome) => nome === 'km_atual_veiculos'
+      ? ({ data: V.map(v => ({ veiculo_id: v.id, km: v.tipo === 'cavalo' || v.id <= 'v4' ? 214900 : null, data: iso(600), placa_cavalo: v.tipo === 'cavalo' ? null : 'GKH-1B12' })), error: null })
+      : ({ error: null }),
     storage: { from: (b) => ({ remove: async (l) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'remove', dados:l }); return { error:null }; }, upload: async (caminho) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'upload', dados:caminho }); return { error:null }; }, createSignedUrl: async () => ({ data:{ signedUrl:'/app/img/logo.png' }, error:null }), createSignedUrls: async (l) => ({ data: l.map(c => ({ path:c, signedUrl: /\.mp4$/.test(c) ? '/app/teste-video.mp4' : '/app/img/logo.png' })), error:null }) }) },
   };
   window.supabase = { createClient: () => cliente };

@@ -316,6 +316,7 @@ function ic(nome, tamanho = 18, cor = 'currentColor'){
     eye:'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12ZM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
     qr:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2M14 18h2v2M18 18h2v2',
     plus:'M12 5v14M5 12h14',
+    pneu:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM12 3v5.5M12 15.5V21M3 12h5.5M15.5 12H21',
     x:'M6 6l12 12M18 6 6 18',
     logout:'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
     pause:'M9 5v14M15 5v14',

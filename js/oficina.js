@@ -255,7 +255,7 @@ async function enviarChamadoMotorista(midias){
 // ---------------------------------------------------------------------
 // APP DO MECÂNICO
 // ---------------------------------------------------------------------
-const ABAS_MECANICO = [ { k:'chamados', l:'Chamados', i:'wrench' }, { k:'agenda', l:'Agenda', i:'cal' }, { k:'frota', l:'Frota', i:'truck' } ];
+const ABAS_MECANICO = [ { k:'chamados', l:'Chamados', i:'wrench' }, { k:'pneus', l:'Pneus', i:'pneu' }, { k:'agenda', l:'Agenda', i:'cal' }, { k:'frota', l:'Frota', i:'truck' } ];
 
 function montarTelaMecanico({ header, conteudo }){
   app.innerHTML = `
@@ -296,6 +296,7 @@ async function loadShellMecanico(){
 async function abrirTelaMecanico(){
   if(mecanicoTab === 'frota') return loadFrotaMecanico();
   if(mecanicoTab === 'agenda') return loadAgendaMecanico();
+  if(mecanicoTab === 'pneus') return loadPneusMecanico();   // js/pneus.js
 
   const { data: chamados, error } = await dadosTela('mec_chamados', async () => {
     const { data, error } = await sb.from('chamado_manutencao').select(CAMPOS_CHAMADO).order('criado_em', { ascending:false }).limit(200);
