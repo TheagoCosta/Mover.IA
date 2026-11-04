@@ -29,8 +29,29 @@ create trigger viagem_zz_concluida_em before insert or update on public.viagem f
 revoke all on function public.trg_viagem_concluida_em() from public, anon, authenticated;
 
 -- ---------- eixos que levantam ----------
-alter table public.veiculo add column if not exists eixos_levantam smallint[] not null default '{}'
+-- vazio (null) = padrão: carreta e dolly levantam o 1º eixo (o da frente); cavalo não levanta no
+-- rodotrem e, no bitrem (conjunto sem dolly), levanta o eixo de trás. O escritório pode marcar outros.
+alter table public.veiculo add column if not exists eixos_levantam smallint[]
   check (eixos_levantam <@ array[1,2,3,4,5,6,7,8,9]::smallint[]);
+
+create or replace function public.eixos_levantam_efetivo(p_veiculo uuid) returns smallint[]
+language sql stable security definer set search_path = public as $$
+  with v as (
+    select v.*, coalesce(v.eixos, (regexp_match(coalesce(v.modelo, ''), '(\d)\s*E\y', 'i'))[1]::smallint,
+      case v.tipo when 'dolly' then 2 else 3 end) n_eixos
+    from veiculo v where v.id = p_veiculo)
+  select coalesce(v.eixos_levantam, case
+    when v.tipo in ('carreta', 'dolly') then array[1]::smallint[]
+    when v.tipo = 'cavalo' and v.n_eixos >= 3
+      and exists (select 1 from conjunto_item ci join conjunto c on c.id = ci.conjunto_id and c.ativo where ci.veiculo_id = v.id)
+      and not exists (select 1 from conjunto_item ci join conjunto c on c.id = ci.conjunto_id and c.ativo
+                      join conjunto_item ci2 on ci2.conjunto_id = c.id join veiculo d on d.id = ci2.veiculo_id and d.tipo = 'dolly'
+                      where ci.veiculo_id = v.id)
+      then array[v.n_eixos]::smallint[]
+    else '{}'::smallint[] end)
+  from v;
+$$;
+revoke all on function public.eixos_levantam_efetivo(uuid) from public, anon, authenticated;
 
 create index if not exists abastecimento_veiculo_data_idx on public.abastecimento (veiculo_id, data) where km > 0;
 create index if not exists viagem_veiculo_idx on public.viagem (veiculo_id, criado_em);
@@ -76,8 +97,8 @@ language sql stable security definer set search_path = public as $$
       and m.transportadora_id = minha_transportadora() and eh_gestao_ou_mecanico()),
   mc as (
     select mont.*, cavalo_do_veiculo(mont.veiculo_id) cavalo,
-      substring(mont.posicao from '^(\d)')::smallint = any(v.eixos_levanta) levanta
-    from mont join (select id, eixos_levantam eixos_levanta from veiculo) v on v.id = mont.veiculo_id),
+      substring(mont.posicao from '^(\d)')::smallint = any(eixos_levantam_efetivo(mont.veiculo_id)) levanta
+    from mont),
   trechos as (
     select mc.pneu_id, mc.levanta, mc.vida_atual,
       greatest(0, coalesce(km_no_momento(mc.cavalo, mc.fim) - km_no_momento(mc.cavalo, mc.ini), 0)) total,

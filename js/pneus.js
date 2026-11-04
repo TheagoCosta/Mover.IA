@@ -44,8 +44,14 @@ async function buscarDadosPneus(){
     consultar(sb.rpc('km_atual_veiculos')),
     consultar(sb.rpc('pneu_km_carga')),
   ]);
-  const motoristaDo = {};
-  conjuntos.filter(c => c.ativo).forEach(c => (c.conjunto_item || []).forEach(i => { motoristaDo[i.veiculo_id] = c.motorista ? c.motorista.nome : ''; }));
+  const motoristaDo = {}, tipoDe = Object.fromEntries(veiculos.map(v => [v.id, v.tipo])), cavaloSemDolly = new Set();
+  conjuntos.filter(c => c.ativo).forEach(c => {
+    const itens = c.conjunto_item || [];
+    itens.forEach(i => { motoristaDo[i.veiculo_id] = c.motorista ? c.motorista.nome : ''; });
+    if(!itens.some(i => tipoDe[i.veiculo_id] === 'dolly')) itens.filter(i => tipoDe[i.veiculo_id] === 'cavalo').forEach(i => cavaloSemDolly.add(i.veiculo_id));
+  });
+  // eixos que levantam: o que o escritório marcou, ou o padrão (igual a eixos_levantam_efetivo no banco)
+  veiculos.forEach(v => { v.semDolly = cavaloSemDolly.has(v.id); atualizarLevantam(v); });
   return { pneus, veiculos: veiculos.filter(v => v.ativo), todosVeiculos: veiculos, motoristaDo,
     km: Object.fromEntries(kms.map(k => [k.veiculo_id, k])), carga: Object.fromEntries(cargas.map(c => [c.pneu_id, c])) };
 }
@@ -72,7 +78,15 @@ function rotuloPosicao(p){
   return `Eixo ${m[1]} · ${{ E: 'esquerdo', D: 'direito', EE: 'esquerdo externo', EI: 'esquerdo interno', DI: 'direito interno', DE: 'direito externo' }[m[2]]}`;
 }
 // eixo que levanta = "12h" (suspenso quando vazio); os outros rodam sempre = "24h"
-const eixoLevanta = (v, eixo) => !!v && (v.eixos_levantam || []).includes(Number(eixo));
+// Padrão (Thiago, 04/11): carreta e dolly levantam o 1º eixo (o da frente); cavalo não levanta no
+// rodotrem, e no bitrem (conjunto sem dolly) levanta o eixo de trás. O escritório pode mudar no mapa.
+function eixosLevantamPadrao(v, semDolly){
+  if(v.tipo === 'carreta' || v.tipo === 'dolly') return [1];
+  if(v.tipo === 'cavalo' && semDolly && eixosVeiculo(v) >= 3) return [eixosVeiculo(v)];
+  return [];
+}
+function atualizarLevantam(v){ v.levantamPadrao = eixosLevantamPadrao(v, v.semDolly); v.levantam = v.eixos_levantam || v.levantamPadrao; }
+const eixoLevanta = (v, eixo) => !!v && (v.levantam || v.eixos_levantam || []).includes(Number(eixo));
 function rotuloPosicaoCompleto(p, v){
   if(!p || p.startsWith('EST')) return rotuloPosicao(p);
   return `${rotuloPosicao(p)} · ${eixoLevanta(v, p[0]) ? '12h (levanta)' : '24h'}`;
@@ -172,7 +186,13 @@ function listaVeiculosPneus(caixa, ctx){
     ['tipo', 'Tipo (cavalo, carreta, dolly)', (a, b) => porTexto(v => v.tipo)(a, b) || porTexto(v => v.placa)(a, b)],
   ];
   const texto = (v) => [v.placa, tipoLabelGlobal[v.tipo], v.modelo, dados.motoristaDo[v.id], resumoVeiculoPneus(v, dados).estepe ? '' : 'sem estepe'].join(' ');
-  caixa.innerHTML = `${barraLista('pneus_veiculos', ordens, 'Pesquisar placa, modelo ou motorista')}<div id="listaVeicPneus"></div>`;
+  // medição do sulco é feita pelo escritório (na garagem, 1 a 2 vezes por mês)
+  const medir = dados.veiculos.map(v => [v, resumoVeiculoPneus(v, dados)]).filter(([, r]) => r.naVezDeMedir).sort((a, b) => b[1].diasSemMedir - a[1].diasSemMedir);
+  caixa.innerHTML = `${medir.length ? `<div class="o-banner" style="margin-bottom:12px;">${ic('pneu', 18)}<div class="txt"><b>Medir o sulco (${medir.length} veículo${medir.length === 1 ? '' : 's'})</b>
+      Mais de ${DIAS_SEM_MEDICAO} dias sem medir — o mais atrasado primeiro. Abra o veículo e use "Medir todos".
+      <div class="pn-medir">${medir.slice(0, 30).map(([v, r]) => `<button type="button" class="btn btn-outline btn-sm" data-medir-veic="${v.id}"><span class="mono">${esc(v.placa)}</span> · ${r.diasSemMedir} dias</button>`).join('')}</div></div></div>` : ''}
+    ${barraLista('pneus_veiculos', ordens, 'Pesquisar placa, modelo ou motorista')}<div id="listaVeicPneus"></div>`;
+  caixa.querySelectorAll('[data-medir-veic]').forEach(b => b.addEventListener('click', () => abrirMapaVeiculo(dados.veiculos.find(v => v.id === b.dataset.medirVeic), ctx)));
   const desenhar = () => {
     const visiveis = aplicarLista('pneus_veiculos', dados.veiculos, ordens, texto);
     const lista = document.getElementById('listaVeicPneus');
@@ -180,7 +200,7 @@ function listaVeiculosPneus(caixa, ctx){
       visiveis.map(v => {
         const r = resumoVeiculoPneus(v, dados), k = dados.km[v.id];
         const vagas = r.posicoes.filter(p => p !== 'EST1').length;
-        const levantam = (v.eixos_levantam || []).length;
+        const levantam = (v.levantam || []).length;
         return `<tr class="clickable" data-veic-pneus="${v.id}">
           <td class="mono">${esc(v.placa)}</td>
           <td>${esc(tipoLabelGlobal[v.tipo] || v.tipo)}<div class="sub">${eixosVeiculo(v)} eixos${levantam ? ` (${levantam} levanta${levantam > 1 ? 'm' : ''})` : ''}${v.modelo ? ' · ' + esc(v.modelo) : ''}</div></td>
@@ -335,8 +355,8 @@ function abrirMapaVeiculo(v, ctx){
       <div class="pn-estepe"><span>Estepe</span>${botao('EST1')}</div>
     </div>
     ${foraDoMapa.length ? `<div class="l2" style="margin-top:8px;">Fora do desenho (o nº de eixos mudou?): ${foraDoMapa.map(p => `<a href="#" data-pneu-mapa="${p.id}">${esc(p.numero_fogo)} (${esc(rotuloPosicao(p.posicao))})</a>`).join(', ')}</div>` : ''}
-    <div class="pn-legenda"><span class="cor-green"></span>sulco bom <span class="cor-amber"></span>recapar (≤ ${SULCO_RECAPAR_MM} mm) <span class="cor-red"></span>abaixo do limite legal (${numGraf(SULCO_LEGAL_MM, 1)} mm) <span class="cor-blue"></span>medir o sulco${(v.eixos_levantam || []).length ? ' · <b>↑</b> eixo que levanta (12h): só conta km carregado' : ''}</div>
-    ${ctx.gestao ?`<div class="pn-levanta"><span>Eixos que levantam (12h):</span>${eixosDoVeiculo(v).map(x => x.eixo).filter(e => !(v.tipo === 'cavalo' && e === 1)).map(e => `<label><input type="checkbox" data-eixo-levanta="${e}" ${eixoLevanta(v, e) ? 'checked' : ''}> ${e}º</label>`).join('')}</div>` : ''}
+    <div class="pn-legenda"><span class="cor-green"></span>sulco bom <span class="cor-amber"></span>recapar (≤ ${SULCO_RECAPAR_MM} mm) <span class="cor-red"></span>abaixo do limite legal (${numGraf(SULCO_LEGAL_MM, 1)} mm) <span class="cor-blue"></span>medir o sulco${(v.levantam || []).length ? ' · <b>↑</b> eixo que levanta (12h): só conta km carregado' : ''}</div>
+    ${ctx.gestao ?`<div class="pn-levanta"><span>Eixos que levantam (12h):</span>${eixosDoVeiculo(v).map(x => x.eixo).filter(e => !(v.tipo === 'cavalo' && e === 1)).map(e => `<label><input type="checkbox" data-eixo-levanta="${e}" ${eixoLevanta(v, e) ? 'checked' : ''}> ${e}º</label>`).join('')}<span class="sub">${v.eixos_levantam ? `marcado pelo escritório · <a href="#" id="pnLevantaPadrao">voltar ao padrão</a>` : `padrão: ${v.tipo === 'cavalo' ? (v.semDolly ? 'bitrem levanta o de trás' : 'não levanta (rodotrem)') : 'levanta o da frente'}`}</span></div>` : ''}
     <div class="l2" style="margin-top:8px;">Toque num pneu para medir, retirar ou trocar de posição; numa posição vazia (+) para montar.</div>
     <div class="o-acoes" style="margin-top:12px;">
       ${montados.length ? `<button type="button" class="btn btn-outline btn-sm" id="btnMedirTodos">${ic('checksq', 14)} Medir todos</button>` : ''}
@@ -351,17 +371,23 @@ function abrirMapaVeiculo(v, ctx){
   if(eixos) eixos.addEventListener('change', async () => {
     const { error } = await sb.from('veiculo').update({ eixos: Number(eixos.value) }).eq('id', v.id);
     if(error){ alert('Não consegui salvar: ' + error.message); return; }
-    v.eixos = Number(eixos.value);
+    v.eixos = Number(eixos.value); atualizarLevantam(v);
     abrirMapaVeiculo(v, ctx);
   });
   modal.querySelectorAll('[data-eixo-levanta]').forEach(c => c.addEventListener('change', async () => {
     const novos = [...modal.querySelectorAll('[data-eixo-levanta]:checked')].map(x => Number(x.dataset.eixoLevanta));
-    const { error } = await sb.from('veiculo').update({ eixos_levantam: novos }).eq('id', v.id);
-    if(error){ alert('Não consegui salvar: ' + error.message); c.checked = !c.checked; return; }
-    v.eixos_levantam = novos;
-    mostrarToast('Eixos que levantam salvos — o km dos pneus é recalculado');
-    ctx.aoMudar && ctx.aoMudar();
+    salvarLevanta(novos, () => { c.checked = !c.checked; });
   }));
+  const padrao = document.getElementById('pnLevantaPadrao');
+  if(padrao) padrao.addEventListener('click', (e) => { e.preventDefault(); salvarLevanta(null); });
+  async function salvarLevanta(novos, desfazer){
+    const { error } = await sb.from('veiculo').update({ eixos_levantam: novos }).eq('id', v.id);
+    if(error){ alert('Não consegui salvar: ' + error.message); if(desfazer) desfazer(); return; }
+    v.eixos_levantam = novos; atualizarLevantam(v);
+    mostrarToast('Eixos que levantam salvos — o km dos pneus é recalculado');
+    abrirMapaVeiculo(v, ctx);
+    ctx.aoMudar && ctx.aoMudar();
+  }
 }
 
 // ---------------------------------------------------------------------
