@@ -6,6 +6,10 @@
 //   • Lista de pneus: estoque, recapagem, sucata, alertas de sulco.
 //   • Comparar marcas: km por vida, desgaste (mm a cada 1.000 km) e custo por 1.000 km.
 // km = odômetro do veículo; na carreta/dolly o do cavalo que está puxando (último abastecimento).
+// Carregado × vazio (pneu_km_carga, migração 20261104_02): carregado = viagem em andamento (MDF-e até a
+// descarga). Eixo que levanta ("12h") fica suspenso vazio, então os pneus dele só contam km carregado;
+// os outros eixos são "24h". Estepe não soma km.
+// Sulco: medido na garagem pelo mecânico ou escritório, 1 a 2 vezes por mês (aviso com 20 dias).
 // O mecânico cadastra e lança movimentos; editar o cadastro e desfazer movimento é do escritório.
 // (arquivo carregado pelo index.html; todas as funções ficam globais)
 
@@ -20,7 +24,7 @@ const MOTIVOS_RETIRADA = ['Desgaste (recapar)', 'Rodízio', 'Furo', 'Corte ou bo
 const MOTIVOS_SUCATA = ['Recapadora recusou', 'Corte ou bolha', 'Estouro', 'Carcaça no fim', 'Desgaste abaixo do limite', 'Outro'];
 const SULCO_LEGAL_MM = 1.6;      // limite da lei (Resolução CONTRAN 558/80)
 const SULCO_RECAPAR_MM = 3;      // abaixo disso a carcaça corre risco — hora de recapar
-const DIAS_SEM_MEDICAO = 45;
+const DIAS_SEM_MEDICAO = 20;     // medição na garagem 1 a 2 vezes por mês
 const DIAS_NA_RECAPAGEM = 30;
 const EIXOS_PADRAO = { cavalo: 3, carreta: 3, dolly: 2 };
 const CAMPOS_PNEU = 'id, numero_fogo, marca, modelo, medida, aplicacao, dot, data_compra, valor_compra, fornecedor, nota_numero, sulco_inicial_mm, vida_inicial, observacao, ' +
@@ -33,15 +37,17 @@ let agruparModelo = false;
 const ehGestaoPneus = () => ['admin_transportadora', 'gestor', 'admin_mover_ia'].includes(usuarioAtual.papel);
 
 async function buscarDadosPneus(){
-  const [pneus, veiculos, conjuntos, kms] = await Promise.all([
+  const [pneus, veiculos, conjuntos, kms, cargas] = await Promise.all([
     consultar(sb.from('pneu').select(CAMPOS_PNEU).order('numero_fogo').limit(10000)),
-    consultar(sb.from('veiculo').select('id, placa, tipo, modelo, eixos, ativo').order('placa')),
+    consultar(sb.from('veiculo').select('id, placa, tipo, modelo, eixos, eixos_levantam, ativo').order('placa')),
     consultar(sb.from('conjunto').select('id, ativo, motorista:motorista_id(nome), conjunto_item(ordem, veiculo_id)')),
     consultar(sb.rpc('km_atual_veiculos')),
+    consultar(sb.rpc('pneu_km_carga')),
   ]);
   const motoristaDo = {};
   conjuntos.filter(c => c.ativo).forEach(c => (c.conjunto_item || []).forEach(i => { motoristaDo[i.veiculo_id] = c.motorista ? c.motorista.nome : ''; }));
-  return { pneus, veiculos: veiculos.filter(v => v.ativo), todosVeiculos: veiculos, motoristaDo, km: Object.fromEntries(kms.map(k => [k.veiculo_id, k])) };
+  return { pneus, veiculos: veiculos.filter(v => v.ativo), todosVeiculos: veiculos, motoristaDo,
+    km: Object.fromEntries(kms.map(k => [k.veiculo_id, k])), carga: Object.fromEntries(cargas.map(c => [c.pneu_id, c])) };
 }
 
 // ---------- posições ----------
@@ -65,15 +71,22 @@ function rotuloPosicao(p){
   if(!m) return p;
   return `Eixo ${m[1]} · ${{ E: 'esquerdo', D: 'direito', EE: 'esquerdo externo', EI: 'esquerdo interno', DI: 'direito interno', DE: 'direito externo' }[m[2]]}`;
 }
+// eixo que levanta = "12h" (suspenso quando vazio); os outros rodam sempre = "24h"
+const eixoLevanta = (v, eixo) => !!v && (v.eixos_levantam || []).includes(Number(eixo));
+function rotuloPosicaoCompleto(p, v){
+  if(!p || p.startsWith('EST')) return rotuloPosicao(p);
+  return `${rotuloPosicao(p)} · ${eixoLevanta(v, p[0]) ? '12h (levanta)' : '24h'}`;
+}
 
 // ---------- contas ----------
 function kmNaMontagemAtual(p, km){
-  if(p.status !== 'em_uso' || p.km_montagem == null) return 0;
+  if(p.status !== 'em_uso' || p.km_montagem == null || String(p.posicao).startsWith('EST')) return 0;   // estepe não roda
   const k = km[p.veiculo_id];
   return k && k.km != null && Number(k.km) >= Number(p.km_montagem) ? Number(k.km) - Number(p.km_montagem) : 0;
 }
-const kmVidaAtual = (p, km) => Number(p.km_vida) + kmNaMontagemAtual(p, km);
-const kmTotalPneu = (p, km) => Number(p.km_rodado) + kmNaMontagemAtual(p, km);
+// km que o pneu rodou de verdade: tira o que andou vazio com o eixo suspenso (eixo que levanta)
+const kmVidaAtual = (p, dados) => Math.max(0, Number(p.km_vida) + kmNaMontagemAtual(p, dados.km) - Number((dados.carga[p.id] || {}).km_suspenso_vida || 0));
+const kmTotalPneu = (p, dados) => Math.max(0, Number(p.km_rodado) + kmNaMontagemAtual(p, dados.km) - Number((dados.carga[p.id] || {}).km_suspenso || 0));
 // mm gastos a cada 1.000 km na vida atual (precisa de uma medição com pelo menos 5.000 km rodados — antes disso o número oscila muito)
 function desgastePneu(p){
   if(p.sulco_vida_inicio == null || p.sulco_atual_mm == null || !(Number(p.km_vida_medicao) >= 5000)) return null;
@@ -101,7 +114,7 @@ function alertaPneu(p){
 const fmtKm = (n) => n == null ? '—' : numGraf(n, 0) + ' km';
 const fmtMm = (n) => n == null ? '—' : numGraf(n, 1) + ' mm';
 function ondeEsta(p, dados){
-  if(p.status === 'em_uso'){ const v = dados.todosVeiculos.find(x => x.id === p.veiculo_id); return `${v ? v.placa : '?'} · ${rotuloPosicao(p.posicao)}`; }
+  if(p.status === 'em_uso'){ const v = dados.todosVeiculos.find(x => x.id === p.veiculo_id); return `${v ? v.placa : '?'} · ${rotuloPosicaoCompleto(p.posicao, v)}`; }
   return ROTULO_STATUS_PNEU[p.status];
 }
 function descricaoPneu(p){ return [p.marca, p.modelo, p.medida].filter(Boolean).join(' · '); }
@@ -142,7 +155,12 @@ function resumoVeiculoPneus(v, dados){
   const posicoes = posicoesVeiculo(v);
   const alertas = montados.map(alertaPneu).filter(Boolean);
   const pior = alertas.find(a => a[0] === 'red') || alertas.find(a => a[0] === 'amber') || alertas[0];
-  return { montados, posicoes, alertas, pior };
+  const rodando = montados.filter(p => !p.posicao.startsWith('EST'));
+  // a medição mais antiga entre os pneus que rodam (é ela que diz se o caminhão está na vez de medir)
+  const medicaoMaisAntiga = rodando.length ? rodando.map(p => p.medido_em || p.montado_em).sort()[0] : null;
+  const diasSemMedir = medicaoMaisAntiga ? Math.floor((Date.now() - new Date(medicaoMaisAntiga).getTime()) / 86400000) : null;
+  const estepe = montados.find(p => p.posicao.startsWith('EST')) || null;
+  return { montados, rodando, posicoes, alertas, pior, medicaoMaisAntiga, diasSemMedir, estepe, naVezDeMedir: diasSemMedir != null && diasSemMedir > DIAS_SEM_MEDICAO };
 }
 
 function listaVeiculosPneus(caixa, ctx){
@@ -150,22 +168,26 @@ function listaVeiculosPneus(caixa, ctx){
   const ordens = [
     ['placa', 'Placa de A a Z', porTexto(v => v.placa)],
     ['alerta', 'Com alerta primeiro', (a, b) => resumoVeiculoPneus(b, dados).alertas.length - resumoVeiculoPneus(a, dados).alertas.length || porTexto(v => v.placa)(a, b)],
+    ['medicao', 'Medição mais antiga primeiro', (a, b) => porData(v => resumoVeiculoPneus(v, dados).medicaoMaisAntiga, 1)(a, b) || porTexto(v => v.placa)(a, b)],
     ['tipo', 'Tipo (cavalo, carreta, dolly)', (a, b) => porTexto(v => v.tipo)(a, b) || porTexto(v => v.placa)(a, b)],
   ];
-  const texto = (v) => [v.placa, tipoLabelGlobal[v.tipo], v.modelo, dados.motoristaDo[v.id]].join(' ');
+  const texto = (v) => [v.placa, tipoLabelGlobal[v.tipo], v.modelo, dados.motoristaDo[v.id], resumoVeiculoPneus(v, dados).estepe ? '' : 'sem estepe'].join(' ');
   caixa.innerHTML = `${barraLista('pneus_veiculos', ordens, 'Pesquisar placa, modelo ou motorista')}<div id="listaVeicPneus"></div>`;
   const desenhar = () => {
     const visiveis = aplicarLista('pneus_veiculos', dados.veiculos, ordens, texto);
     const lista = document.getElementById('listaVeicPneus');
-    lista.innerHTML = painel(`Veículos (${visiveis.length})`, visiveis.length ? tabela(['Placa', 'Tipo', 'Motorista', 'Pneus montados', 'Km atual', 'Situação'],
+    lista.innerHTML = painel(`Veículos (${visiveis.length})`, visiveis.length ? tabela(['Placa', 'Tipo', 'Motorista', 'Pneus montados', 'Estepe', 'Última medição', 'Km atual', 'Situação'],
       visiveis.map(v => {
         const r = resumoVeiculoPneus(v, dados), k = dados.km[v.id];
         const vagas = r.posicoes.filter(p => p !== 'EST1').length;
+        const levantam = (v.eixos_levantam || []).length;
         return `<tr class="clickable" data-veic-pneus="${v.id}">
           <td class="mono">${esc(v.placa)}</td>
-          <td>${esc(tipoLabelGlobal[v.tipo] || v.tipo)}<div class="sub">${eixosVeiculo(v)} eixos${v.modelo ? ' · ' + esc(v.modelo) : ''}</div></td>
+          <td>${esc(tipoLabelGlobal[v.tipo] || v.tipo)}<div class="sub">${eixosVeiculo(v)} eixos${levantam ? ` (${levantam} levanta${levantam > 1 ? 'm' : ''})` : ''}${v.modelo ? ' · ' + esc(v.modelo) : ''}</div></td>
           <td class="sub">${esc(dados.motoristaDo[v.id] || '—')}</td>
-          <td class="mono">${r.montados.filter(p => p.posicao !== 'EST1').length} / ${vagas}</td>
+          <td class="mono">${r.rodando.length} / ${vagas}</td>
+          <td>${r.estepe ? `<span class="mono">${esc(r.estepe.numero_fogo)}</span>` : r.montados.length ? badge('amber', 'Sem estepe') : '<span class="sub">—</span>'}</td>
+          <td class="sub">${r.medicaoMaisAntiga ? `${fmtData(r.medicaoMaisAntiga)}<div class="sub">${r.diasSemMedir} dia${r.diasSemMedir === 1 ? '' : 's'}</div>` : '—'}</td>
           <td class="mono sub">${k && k.km != null ? fmtKm(k.km) + (k.placa_cavalo ? `<div class="sub">do cavalo ${esc(k.placa_cavalo)}</div>` : '') : '—'}</td>
           <td>${r.pior ? badge(r.pior[0], r.alertas.length > 1 ? `${r.pior[1]} (+${r.alertas.length - 1})` : r.pior[1]) : r.montados.length ? badge('green', 'OK') : badge('grey', 'Sem pneus cadastrados')}</td></tr>`;
       })) : vazio('Nenhum veículo encontrado.'));
@@ -181,11 +203,11 @@ function listaPneus(caixa, ctx){
     todos: ['Todos (menos sucata)', p => p.status !== 'sucata'], em_uso: ['Montados', p => p.status === 'em_uso'], estoque: ['Estoque', p => p.status === 'estoque'],
     recapagem: ['Recapagem', p => p.status === 'recapagem'], alerta: ['Atenção', p => !!alertaPneu(p)], sucata: ['Sucata', p => p.status === 'sucata'],
   };
-  const custo1000 = (p) => { const k = kmTotalPneu(p, dados.km); return k >= 1000 ? Number(p.custo_total) / k * 1000 : null; };
+  const custo1000 = (p) => { const k = kmTotalPneu(p, dados); return k >= 1000 ? Number(p.custo_total) / k * 1000 : null; };
   const ordens = [
     ['fogo', 'Nº de fogo', (a, b) => porTexto(p => p.numero_fogo.padStart(12, '0'))(a, b)],
     ['sulco', 'Menor sulco primeiro', (a, b) => porNumero(p => p.sulco_atual_mm == null ? null : Number(p.sulco_atual_mm))(a, b)],
-    ['km', 'Mais km rodados', (a, b) => kmTotalPneu(b, dados.km) - kmTotalPneu(a, dados.km)],
+    ['km', 'Mais km rodados', (a, b) => kmTotalPneu(b, dados) - kmTotalPneu(a, dados)],
     ['marca', 'Marca de A a Z', (a, b) => porTexto(descricaoPneu)(a, b)],
     ['onde', 'Onde está', (a, b) => porTexto(p => ondeEsta(p, dados))(a, b)],
   ];
@@ -206,7 +228,7 @@ function listaPneus(caixa, ctx){
         <td class="sub">${textoVida(p.vida)}</td>
         <td>${p.status === 'em_uso' ? esc(ondeEsta(p, dados)) : badge(COR_STATUS_PNEU[p.status], ROTULO_STATUS_PNEU[p.status])}</td>
         <td>${p.sulco_atual_mm != null ? badge(corSulco(Number(p.sulco_atual_mm)), fmtMm(p.sulco_atual_mm)) : '<span class="sub">—</span>'}</td>
-        <td class="mono sub">${numGraf(kmVidaAtual(p, dados.km), 0)} / ${numGraf(kmTotalPneu(p, dados.km), 0)}</td>
+        <td class="mono sub">${numGraf(kmVidaAtual(p, dados), 0)} / ${numGraf(kmTotalPneu(p, dados), 0)}</td>
         <td class="mono sub">${c == null ? '—' : fmtReais(c)}</td>
         <td>${a ? badge(a[0], a[1]) : ''}</td></tr>`; }))
       + (visiveis.length > 500 ? '<div class="l2" style="padding:10px 18px;">Mostrando os 500 primeiros — use a pesquisa.</div>' : '')
@@ -219,7 +241,7 @@ function listaPneus(caixa, ctx){
       visiveis.map(p => { const v = dados.todosVeiculos.find(x => x.id === p.veiculo_id), c = custo1000(p);
         return [p.numero_fogo, p.marca, p.modelo || '', p.medida || '', p.aplicacao ? ROTULO_APLICACAO[p.aplicacao] : '', p.dot || '', textoVida(p.vida), ROTULO_STATUS_PNEU[p.status],
           v ? v.placa : '', p.posicao ? rotuloPosicao(p.posicao) : '', p.sulco_atual_mm ?? '', p.medido_em ? fmtData(p.medido_em) : '',
-          Math.round(kmVidaAtual(p, dados.km)), Math.round(kmTotalPneu(p, dados.km)), numGraf(p.custo_total, 2), c == null ? '' : numGraf(c, 2),
+          Math.round(kmVidaAtual(p, dados)), Math.round(kmTotalPneu(p, dados)), numGraf(p.custo_total, 2), c == null ? '' : numGraf(c, 2),
           p.data_compra ? fmtData(p.data_compra) : '', p.fornecedor || '']; })));
   };
   desenhar();
@@ -237,11 +259,14 @@ function compararMarcas(caixa, ctx){
     const vidas = lista.flatMap(p => (p.vidas_concluidas || []).map(v => ({ ...v, km: Number(v.km) })));
     const vidasNovas = vidas.filter(v => Number(v.vida) === 0 && v.km > 0);
     const desgastes = lista.map(desgastePneu).filter(d => d != null);
-    const comKm = lista.filter(p => kmTotalPneu(p, dados.km) >= 10000);
-    const kmSoma = comKm.reduce((s, p) => s + kmTotalPneu(p, dados.km), 0);
+    const comKm = lista.filter(p => kmTotalPneu(p, dados) >= 10000);
+    const kmSoma = comKm.reduce((s, p) => s + kmTotalPneu(p, dados), 0);
     const custoSoma = comKm.reduce((s, p) => s + Number(p.custo_total), 0);
     const terminados = lista.filter(p => p.status === 'sucata');
+    const carg = lista.map(p => dados.carga[p.id]).filter(Boolean);
+    const kmCarregado = carg.reduce((s, c) => s + Number(c.km_carregado), 0), kmVazio = carg.reduce((s, c) => s + Number(c.km_vazio), 0);
     return { nome, n: lista.length,
+      pctCarregado: kmCarregado + kmVazio >= 1000 ? kmCarregado / (kmCarregado + kmVazio) * 100 : null, nCarga: carg.length,
       kmVida: media(vidas.filter(v => v.km > 0).map(v => v.km)), nVidas: vidas.filter(v => v.km > 0).length,
       kmNovo: media(vidasNovas.map(v => v.km)), nNovo: vidasNovas.length,
       desgaste: media(desgastes), nDesgaste: desgastes.length,
@@ -255,16 +280,17 @@ function compararMarcas(caixa, ctx){
     <div class="o-banner" style="margin-bottom:12px; color:var(--ink-700);">${ic('chart', 18)}<div class="txt"><b>Como ler</b>
       <strong>Custo por 1.000 km</strong> (compra + recapagens + consertos ÷ km rodados) é o número que decide qual marca compensa — quanto menor, melhor. Conta só pneus com mais de 10.000 km.
       <strong>Desgaste</strong> é quantos mm de sulco o pneu perde a cada 1.000 km — aparece cedo, já nas primeiras medições. <strong>Km por vida</strong> e <strong>recapagens</strong> ficam confiáveis quando os pneus completam vidas (recapagem ou sucata).
-      Compare pneus da mesma aplicação: direcional gasta diferente de tração.</div></div>
+      Compare pneus da mesma aplicação: direcional gasta diferente de tração. <strong>% carregado</strong> mostra quanto dos km foi com carga — pneu que roda mais carregado gasta mais, então leve isso em conta.</div></div>
     <div class="barra-lista">
       <label class="barra-ordem"><span>Aplicação:</span><select id="pnAplicacao"><option value="">Todas</option>${Object.entries(ROTULO_APLICACAO).map(([k, l]) => `<option value="${k}" ${aplicacaoMarcas === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="barra-ordem"><span>Agrupar por:</span><select id="pnAgrupar"><option value="marca">Marca</option><option value="modelo" ${agruparModelo ? 'selected' : ''}>Marca e modelo</option></select></label>
     </div>
     ${comCusto.length > 1 ? painel('Custo por 1.000 km', `<div style="padding:8px 14px 4px;">${graficoBarras(comCusto.slice(0, 12).map((l, i) => ({ rotulo: l.nome.slice(0, 14), valor: l.custo1000, destaque: i === 0, dica: `${l.nome}: ${fmtReais(l.custo1000)} por 1.000 km (${l.nCusto} pneus)` })), { casas: 2, aria: 'Custo por 1.000 km de cada marca' })}</div>`) : ''}
-    ${painel(`${agruparModelo ? 'Marcas e modelos' : 'Marcas'} (${linhas.length})`, linhas.length ? tabela(['', 'Pneus', 'R$ / 1.000 km', 'Desgaste (mm / 1.000 km)', 'Km por vida', 'Km da 1ª vida (novo)', 'Recapagens até a sucata', 'Sucata sem recapar'],
+    ${painel(`${agruparModelo ? 'Marcas e modelos' : 'Marcas'} (${linhas.length})`, linhas.length ? tabela(['', 'Pneus', 'R$ / 1.000 km', 'Desgaste (mm / 1.000 km)', '% carregado', 'Km por vida', 'Km da 1ª vida (novo)', 'Recapagens até a sucata', 'Sucata sem recapar'],
       linhas.map(l => `<tr><td><b>${esc(l.nome)}</b></td><td class="mono">${l.n}</td>
         <td class="mono">${cel(l.custo1000, l.custo1000 != null ? fmtReais(l.custo1000) : '', l.nCusto)}</td>
         <td class="mono">${cel(l.desgaste, numGraf(l.desgaste, 2), l.nDesgaste)}</td>
+        <td class="mono">${cel(l.pctCarregado, numGraf(l.pctCarregado, 0) + '%', l.nCarga)}</td>
         <td class="mono">${cel(l.kmVida, fmtKm(l.kmVida), l.nVidas)}</td>
         <td class="mono">${cel(l.kmNovo, fmtKm(l.kmNovo), l.nNovo)}</td>
         <td class="mono">${cel(l.recapagens, numGraf(l.recapagens, 1), l.nTerminados)}</td>
@@ -275,8 +301,8 @@ function compararMarcas(caixa, ctx){
   document.getElementById('pnAplicacao').addEventListener('change', (e) => { aplicacaoMarcas = e.target.value; compararMarcas(caixa, ctx); });
   document.getElementById('pnAgrupar').addEventListener('change', (e) => { agruparModelo = e.target.value === 'modelo'; compararMarcas(caixa, ctx); });
   const csv = document.getElementById('btnCsvMarcas');
-  if(csv) csv.addEventListener('click', () => baixarCSV('pneus_por_marca', ['Marca', 'Pneus', 'R$ por 1.000 km', 'Desgaste mm por 1.000 km', 'Km por vida', 'Km da 1ª vida', 'Recapagens até a sucata', '% sucata sem recapar'],
-    linhas.map(l => [l.nome, l.n, l.custo1000 == null ? '' : numGraf(l.custo1000, 2), l.desgaste == null ? '' : numGraf(l.desgaste, 2), l.kmVida == null ? '' : Math.round(l.kmVida),
+  if(csv) csv.addEventListener('click', () => baixarCSV('pneus_por_marca', ['Marca', 'Pneus', 'R$ por 1.000 km', 'Desgaste mm por 1.000 km', '% carregado', 'Km por vida', 'Km da 1ª vida', 'Recapagens até a sucata', '% sucata sem recapar'],
+    linhas.map(l => [l.nome, l.n, l.custo1000 == null ? '' : numGraf(l.custo1000, 2), l.desgaste == null ? '' : numGraf(l.desgaste, 2), l.pctCarregado == null ? '' : numGraf(l.pctCarregado, 0), l.kmVida == null ? '' : Math.round(l.kmVida),
       l.kmNovo == null ? '' : Math.round(l.kmNovo), l.recapagens == null ? '' : numGraf(l.recapagens, 1), l.semRecapar == null ? '' : numGraf(l.semRecapar, 0)])));
 }
 
@@ -304,12 +330,13 @@ function abrirMapaVeiculo(v, ctx){
       <div class="pn-frente">frente</div>
       ${eixosDoVeiculo(v).map(x => `<div class="pn-eixo">
         <div class="pn-lado">${x.esquerda.map(botao).join('')}</div>
-        <div class="pn-barra"><span>${x.eixo}</span></div>
+        <div class="pn-barra${eixoLevanta(v, x.eixo) ? ' levanta' : ''}"><span title="${eixoLevanta(v, x.eixo) ? 'Eixo que levanta (12h): vazio fica suspenso' : 'Eixo fixo (24h)'}">${x.eixo}${eixoLevanta(v, x.eixo) ? ' ↑' : ''}</span></div>
         <div class="pn-lado">${x.direita.map(botao).join('')}</div></div>`).join('')}
       <div class="pn-estepe"><span>Estepe</span>${botao('EST1')}</div>
     </div>
     ${foraDoMapa.length ? `<div class="l2" style="margin-top:8px;">Fora do desenho (o nº de eixos mudou?): ${foraDoMapa.map(p => `<a href="#" data-pneu-mapa="${p.id}">${esc(p.numero_fogo)} (${esc(rotuloPosicao(p.posicao))})</a>`).join(', ')}</div>` : ''}
-    <div class="pn-legenda"><span class="cor-green"></span>sulco bom <span class="cor-amber"></span>recapar (≤ ${SULCO_RECAPAR_MM} mm) <span class="cor-red"></span>abaixo do limite legal (${numGraf(SULCO_LEGAL_MM, 1)} mm) <span class="cor-blue"></span>medir o sulco</div>
+    <div class="pn-legenda"><span class="cor-green"></span>sulco bom <span class="cor-amber"></span>recapar (≤ ${SULCO_RECAPAR_MM} mm) <span class="cor-red"></span>abaixo do limite legal (${numGraf(SULCO_LEGAL_MM, 1)} mm) <span class="cor-blue"></span>medir o sulco${(v.eixos_levantam || []).length ? ' · <b>↑</b> eixo que levanta (12h): só conta km carregado' : ''}</div>
+    ${ctx.gestao ?`<div class="pn-levanta"><span>Eixos que levantam (12h):</span>${eixosDoVeiculo(v).map(x => x.eixo).filter(e => !(v.tipo === 'cavalo' && e === 1)).map(e => `<label><input type="checkbox" data-eixo-levanta="${e}" ${eixoLevanta(v, e) ? 'checked' : ''}> ${e}º</label>`).join('')}</div>` : ''}
     <div class="l2" style="margin-top:8px;">Toque num pneu para medir, retirar ou trocar de posição; numa posição vazia (+) para montar.</div>
     <div class="o-acoes" style="margin-top:12px;">
       ${montados.length ? `<button type="button" class="btn btn-outline btn-sm" id="btnMedirTodos">${ic('checksq', 14)} Medir todos</button>` : ''}
@@ -327,6 +354,14 @@ function abrirMapaVeiculo(v, ctx){
     v.eixos = Number(eixos.value);
     abrirMapaVeiculo(v, ctx);
   });
+  modal.querySelectorAll('[data-eixo-levanta]').forEach(c => c.addEventListener('change', async () => {
+    const novos = [...modal.querySelectorAll('[data-eixo-levanta]:checked')].map(x => Number(x.dataset.eixoLevanta));
+    const { error } = await sb.from('veiculo').update({ eixos_levantam: novos }).eq('id', v.id);
+    if(error){ alert('Não consegui salvar: ' + error.message); c.checked = !c.checked; return; }
+    v.eixos_levantam = novos;
+    mostrarToast('Eixos que levantam salvos — o km dos pneus é recalculado');
+    ctx.aoMudar && ctx.aoMudar();
+  }));
 }
 
 // ---------------------------------------------------------------------
@@ -349,10 +384,13 @@ async function abrirPneu(p, ctx, veiculoMapa = null){
       ${p.aplicacao ? linha('Aplicação', ROTULO_APLICACAO[p.aplicacao]) : ''}
       ${p.status === 'em_uso' ? linha('Onde está', `${esc(ondeEsta(p, dados))}<div class="sub">desde ${fmtData(p.montado_em)}${p.km_montagem != null ? ' · montado com ' + fmtKm(p.km_montagem) : ''}</div>`) : ''}
       ${linha('Sulco', p.sulco_atual_mm != null ? `${fmtMm(p.sulco_atual_mm)}<div class="sub">${p.medido_em ? 'medido em ' + fmtData(p.medido_em) : 'na compra'}${p.sulco_vida_inicio != null ? ` · começou a vida com ${fmtMm(p.sulco_vida_inicio)}` : ''}</div>` : 'nunca medido')}
-      ${linha('Km nesta vida', fmtKm(kmVidaAtual(p, dados.km)))}
-      ${linha('Km total', fmtKm(kmTotalPneu(p, dados.km)))}
+      ${linha('Km nesta vida', fmtKm(kmVidaAtual(p, dados)))}
+      ${linha('Km total', fmtKm(kmTotalPneu(p, dados)))}
+      ${(() => { const c = dados.carga[p.id]; if(!c || !(Number(c.km_carregado) + Number(c.km_vazio) > 0)) return '';
+        const tot = Number(c.km_carregado) + Number(c.km_vazio);
+        return linha('Carregado / vazio', `${fmtKm(c.km_carregado)} carregado · ${fmtKm(c.km_vazio)} vazio<div class="sub">${numGraf(Number(c.km_carregado) / tot * 100, 0)}% carregado (viagem do MDF-e até a descarga; km pelos abastecimentos do cavalo)${Number(c.km_suspenso) > 0 ? ` · ${fmtKm(c.km_suspenso)} suspenso no eixo que levanta (não conta)` : ''}</div>`); })()}
       ${d != null ? linha('Desgaste', `${numGraf(d, 2)} mm a cada 1.000 km${falta != null && p.status === 'em_uso' ? `<div class="sub">${falta > 0 ? `dá para rodar ~${fmtKm(falta)} até ${SULCO_RECAPAR_MM} mm (recapar)` : 'já chegou no ponto de recapar'}</div>` : ''}`) : ''}
-      ${linha('Custo até agora', `${fmtReais(p.custo_total)}${kmTotalPneu(p, dados.km) >= 1000 ? `<div class="sub">${fmtReais(Number(p.custo_total) / kmTotalPneu(p, dados.km) * 1000)} por 1.000 km</div>` : ''}`)}
+      ${linha('Custo até agora', `${fmtReais(p.custo_total)}${kmTotalPneu(p, dados) >= 1000 ? `<div class="sub">${fmtReais(Number(p.custo_total) / kmTotalPneu(p, dados) * 1000)} por 1.000 km</div>` : ''}`)}
       ${p.data_compra || p.fornecedor ? linha('Compra', [p.data_compra && fmtData(p.data_compra), p.valor_compra != null && fmtReais(p.valor_compra), p.fornecedor && esc(p.fornecedor), p.nota_numero && 'nota ' + esc(p.nota_numero)].filter(Boolean).join(' · ')) : ''}
       ${p.dot ? linha('DOT (fabricação)', esc(p.dot)) : ''}
       ${p.observacao ? linha('Observação', esc(p.observacao)) : ''}
@@ -736,7 +774,12 @@ async function loadPneusMecanico(){
     const caixa = document.getElementById('listaPneuMec');
     const pneusAchados = termo ? dados.pneus.filter(p => textoBusca(p.numero_fogo).includes(termo) && p.status !== 'sucata') : [];
     const veics = dados.veiculos.filter(v => !termo || textoBusca(v.placa).includes(termo));
+    // caminhões na vez de medir o sulco (medição na garagem, 1 a 2 vezes por mês): o que está há mais tempo sem medir primeiro
+    const medir = termo ? [] : dados.veiculos.map(v => [v, resumoVeiculoPneus(v, dados)]).filter(([, r]) => r.naVezDeMedir).sort((a, b) => b[1].diasSemMedir - a[1].diasSemMedir);
     caixa.innerHTML = `
+      ${medir.length ? `<div class="section-label">Medir o sulco (${medir.length})</div><div class="card lista">${medir.slice(0, 15).map(([v, r]) => `<div class="list-item" data-veic-mec="${v.id}" style="cursor:pointer;"><div class="li-ic">${ic('pneu', 16)}</div>
+        <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(v.placa)}</div><div class="li-sub">${r.diasSemMedir} dias sem medir · ${r.rodando.length} pneu${r.rodando.length === 1 ? '' : 's'}${dados.motoristaDo[v.id] ? ' · ' + esc(dados.motoristaDo[v.id]) : ''}</div></div>
+        ${pillStatus('blue', 'Medir')}</div>`).join('')}</div>` : ''}
       ${pneusAchados.length ? `<div class="section-label">Pneus</div><div class="card lista">${pneusAchados.slice(0, 30).map(p => `<div class="list-item" data-pneu-mec="${p.id}" style="cursor:pointer;"><div class="li-ic">${ic('pneu', 16)}</div>
         <div class="li-body"><div class="li-title" style="font-family:var(--font-mono);">${esc(p.numero_fogo)}</div><div class="li-sub">${esc(descricaoPneu(p))} · ${esc(ondeEsta(p, dados))}</div></div></div>`).join('')}</div>` : ''}
       <div class="section-label">Veículos</div>

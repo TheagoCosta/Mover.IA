@@ -164,6 +164,8 @@
     from: (t) => Object.assign(consulta(t), { insert: gravacao(t, 'insert'), update: gravacao(t, 'update'), upsert: gravacao(t, 'upsert'), delete: () => gravacao(t, 'delete')('(filtro)') }),
     rpc: async (nome) => nome === 'km_atual_veiculos'
       ? ({ data: V.map(v => ({ veiculo_id: v.id, km: v.tipo === 'cavalo' || v.id <= 'v4' ? 214900 : null, data: iso(600), placa_cavalo: v.tipo === 'cavalo' ? null : 'GKH-1B12' })), error: null })
+      : nome === 'pneu_km_carga'
+      ? ({ data: [{ pneu_id: 'pn1', km_carregado: 21000, km_vazio: 13900, km_suspenso: 0, km_suspenso_vida: 0 }], error: null })
       : ({ error: null }),
     storage: { from: (b) => ({ remove: async (l) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'remove', dados:l }); return { error:null }; }, upload: async (caminho) => { window.__chamadas.push({ tabela:'storage:' + b, tipo:'upload', dados:caminho }); return { error:null }; }, createSignedUrl: async () => ({ data:{ signedUrl:'/app/img/logo.png' }, error:null }), createSignedUrls: async (l) => ({ data: l.map(c => ({ path:c, signedUrl: /\.mp4$/.test(c) ? '/app/teste-video.mp4' : '/app/img/logo.png' })), error:null }) }) },
   };
