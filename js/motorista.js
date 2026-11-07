@@ -13,6 +13,7 @@ let docAbaMotorista = 'meus';
 
 const MOTIVOS_PARADA = [
   'Parado na garagem',
+  'Parado no pátio',
   'Parada no posto',
   'Chegada no local de carregamento',
   'Em carregamento',
