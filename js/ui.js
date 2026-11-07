@@ -455,6 +455,19 @@ function calcularConducao(eventos, agora = new Date()){
   if(inicioTrecho) totalMin += continuoMin;
   return { totalMin, continuoMin, rodando: !!inicioTrecho, paradas, trabalhoParadoMin, descansoMin };
 }
+// Jornadas que começaram com menos de 11 h de descanso desde a jornada anterior
+// do mesmo motorista (CLT 235-C §3º). Devolve Map: id da jornada → minutos de descanso.
+const DESCANSO_MINIMO_MIN = 11 * 60;
+function descansosCurtos(jornadas){
+  const curtos = new Map(), ultimoFim = new Map();
+  [...jornadas].sort((a, b) => new Date(a.inicio) - new Date(b.inicio)).forEach(j => {
+    const fim = ultimoFim.get(j.motorista_id);
+    const min = fim ? (new Date(j.inicio) - new Date(fim)) / 60000 : null;
+    if(min !== null && min >= 0 && min < DESCANSO_MINIMO_MIN) curtos.set(j.id, min);
+    if(j.fim) ultimoFim.set(j.motorista_id, j.fim);
+  });
+  return curtos;
+}
 const TIPO_EVENTO_LABEL = { inicio:'Começou a dirigir', pausa:'Parada', retomada:'Fim da parada', fim:'Fim do dia' };
 const TIPO_EVENTO_ICONE = { inicio:'play', pausa:'pause', retomada:'play', fim:'flag' };
 
