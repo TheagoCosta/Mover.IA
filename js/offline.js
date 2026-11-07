@@ -1,5 +1,5 @@
 // MOVER.IA — registro sem sinal (app do motorista)
-// Jornada (início e fim de parada, repouso), checklist e abastecimento em
+// Jornada (início e fim de parada), checklist e abastecimento em
 // posto funcionam sem internet: o que não deu para enviar fica guardado no
 // celular (fila) e vai sozinho quando o sinal volta, na ordem em que foi feito.
 // Cada registro guardado leva a hora em que aconteceu (hora_celular); o banco
@@ -112,13 +112,14 @@ function jornadaComFila(jornada){
   let j = jornada ? { ...jornada, jornada_evento: [...(jornada.jornada_evento || [])] } : null;
   lerFila().forEach(item => {
     if(!item.jornada) return;
-    const { acao, jornadaId, motivo, observacao, hora } = item.jornada;
+    const { acao, jornadaId, novaJornadaId, motivo, observacao, hora } = item.jornada;
     const quando = hora || item.hora;   // hora: horário corrigido pelo motorista
     const ev = (tipo) => ({ tipo, motivo: motivo || null, observacao: observacao || null, criado_em: quando });
     if(acao === 'iniciar'){ j = { id: jornadaId, inicio: quando, status: 'ativa', jornada_evento: [ev('inicio')] }; return; }
     if(!j || j.id !== jornadaId) return;
     if(acao === 'pausa'){ j.status = 'pausada'; j.jornada_evento.push(ev('pausa')); }
     if(acao === 'retomada'){ j.status = 'ativa'; j.jornada_evento.push(ev('retomada')); }
+    if(acao === 'novoDia') j = { id: novaJornadaId, inicio: quando, status: 'ativa', jornada_evento: [ev('inicio')] };
     if(acao === 'encerrar') j = null;
   });
   return j;

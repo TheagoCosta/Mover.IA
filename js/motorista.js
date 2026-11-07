@@ -13,8 +13,8 @@ let docAbaMotorista = 'meus';
 
 // Jornada só por paradas: fora de uma parada o motorista está dirigindo.
 // categoria: trabalho conta como jornada (carga, descarga, fila); descanso não.
-// ticket: pede a foto do ticket ao encerrar. fechaDia: encerra a jornada do dia.
-const MOTIVO_REPOUSO = 'Repouso / pernoite';
+// ticket: pede a foto do ticket ao encerrar.
+// O motorista não marca repouso: parada longa já é o repouso e fecha o dia sozinha.
 const MOTIVOS_PARADA = [
   { motivo:'Carregamento', categoria:'trabalho', ticket:true },
   { motivo:'Descarga', categoria:'trabalho', ticket:true },
@@ -27,11 +27,10 @@ const MOTIVOS_PARADA = [
   { motivo:'Pausa para manutenção', categoria:'trabalho' },
   { motivo:'Pausa para alimentação', categoria:'descanso' },
   { motivo:'Descanso', categoria:'descanso' },
-  { motivo:MOTIVO_REPOUSO, categoria:'descanso', fechaDia:true },
   { motivo:'Outro', categoria:'trabalho' },
 ];
 const dadosMotivo = (motivo) => MOTIVOS_PARADA.find(m => m.motivo === motivo) || null;
-const DESCANSO_MINIMO_MIN = 11 * 60;   // CLT 235-C §3º
+const PARADA_FECHA_DIA_MIN = 8 * 60;   // CLT 235-C §3º: o repouso pode ser dividido, com 8 h seguidas no mínimo
 
 let jornadaEmEdicaoId = null;
 let motivoSelecionado = null;
@@ -266,7 +265,7 @@ async function abrirTelaMotorista(){
 function cardJornadaResumo(jornada){
   if(!jornada) return `
     <div class="card clickable" data-ir="tab:jornada" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-      <div><div class="card-dark-title">Em repouso</div><div class="card-dark-sub">Ao sair, toque aqui para encerrar a parada</div></div>
+      <div><div class="card-dark-title">Parado</div><div class="card-dark-sub">Ao sair, toque aqui para encerrar a parada</div></div>
       ${pillStatus('grey', 'Parado')}
     </div>`;
   if(jornada.status === 'pausada') return `
@@ -457,16 +456,14 @@ function saudacaoHorario(){
 // ---------------------------------------------------------------------
 async function loadAbaJornada(){
   const jornada = prepararJornada(jornadaComFila(await dadosTela('jornada', buscarJornadaAberta, () => { if(motoristaScreen === 'home' && motoristaTab === 'jornada') loadAbaJornada(); })));
-  const [repousoDesde, pendentes] = await Promise.all([jornada ? null : ultimoFimJornada(), ticketsPendentes()]);
+  const [paradoDesde, pendentes] = await Promise.all([jornada ? null : ultimoFimJornada(), ticketsPendentes()]);
   let principal;
   if(!jornada){
-    const repousoMin = repousoDesde ? (Date.now() - new Date(repousoDesde)) / 60000 : null;
     principal = `
       <div class="card em-breve-box" style="padding:26px 18px;">
         <div class="ic-grande">${ic('clock', 32)}</div>
-        <div class="card-dark-title">Em repouso</div>
-        <div class="card-dark-sub" style="margin-bottom:16px;">${repousoDesde ? `Desde ${fmtData(repousoDesde)} às ${fmtHora(repousoDesde)} (há ${fmtMinutos(repousoMin)}). ` : ''}Ao encerrar a parada, o app entende que você começou a dirigir.</div>
-        ${repousoMin !== null && repousoMin < DESCANSO_MINIMO_MIN ? `<div class="card-dark-sub" style="margin-bottom:12px;">O descanso mínimo é de 11 horas.</div>` : ''}
+        <div class="card-dark-title">Parado</div>
+        <div class="card-dark-sub" style="margin-bottom:16px;">${paradoDesde ? `Desde ${fmtData(paradoDesde)} às ${fmtHora(paradoDesde)} (há ${fmtMinutos((Date.now() - new Date(paradoDesde)) / 60000)}). ` : ''}Ao encerrar a parada, o app entende que você começou a dirigir.</div>
         <button class="btn btn-primary" id="btnJornadaFimParada">${ic('play', 16)} Encerrar parada</button>
       </div>`;
   } else if(jornada.status === 'ativa'){
@@ -502,7 +499,7 @@ async function loadAbaJornada(){
           <div class="li-body"><div class="li-title">${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</div><div class="li-sub">${fmtHora(ev.criado_em)}${ev.observacao ? ' · ' + esc(ev.observacao) : ''}</div></div></div>`).join('')}</div>` : ''}
       <div class="section-label">Histórico</div>
       <div class="card lista"><div class="list-item clickable" data-ir="historicoJornada">
-        <div class="li-ic">${ic('cal', 16)}</div><div class="li-body"><div class="li-title">Jornadas anteriores</div><div class="li-sub">Linha do tempo e assinatura de cada dia</div></div><div class="chev">${ic('chev', 16)}</div>
+        <div class="li-ic">${ic('cal', 16)}</div><div class="li-body"><div class="li-title">Jornadas anteriores</div><div class="li-sub">Linha do tempo de cada dia</div></div><div class="chev">${ic('chev', 16)}</div>
       </div></div>`,
   });
 
@@ -516,7 +513,7 @@ async function loadAbaJornada(){
   }));
 }
 
-// Quando começou o repouso atual (o fim da última jornada)
+// Sem jornada aberta: parado desde o fim da última jornada
 async function ultimoFimJornada(){
   const { data, error } = await sb.from('jornada').select('fim').eq('motorista_id', session.user.id)
     .eq('status', 'encerrada').order('fim', { ascending:false }).limit(1);
@@ -526,16 +523,17 @@ async function ultimoFimJornada(){
 // Paradas dos últimos 7 dias que pediam ticket e ficaram sem foto
 async function ticketsPendentes(){
   const { data, error } = await sb.from('jornada')
-    .select('id, jornada_evento(id, tipo, motivo, criado_em, ticket_exigido, ticket_url, ticket_dispensa)')
+    .select('id, jornada_evento(id, tipo, motivo, criado_em, registrado_em, ticket_exigido, ticket_url, ticket_dispensa)')
     .eq('motorista_id', session.user.id).gte('inicio', new Date(Date.now() - 7 * 86400000).toISOString());
   if(error || !data) return [];
   const lista = [];
   data.forEach(j => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
-    eventos.forEach((ev, i) => {
+    eventos.forEach(ev => {
       if(!ev.ticket_exigido || ev.ticket_url || ev.ticket_dispensa) return;
-      const pausa = eventos.slice(0, i).reverse().find(e => e.tipo === 'pausa');
-      lista.push({ id: ev.id, motivo: pausa ? pausa.motivo : 'Parada', fim: ev.criado_em });
+      // o fim do dia tem a mesma hora da parada que o fechou
+      const pausa = eventos.filter(e => e.tipo === 'pausa' && new Date(e.criado_em) <= new Date(ev.criado_em)).pop();
+      lista.push({ id: ev.id, motivo: pausa ? pausa.motivo : 'Parada', fim: ev.tipo === 'fim' ? ev.registrado_em : ev.criado_em });
     });
   });
   return lista.sort((a, b) => new Date(b.fim) - new Date(a.fim));
@@ -595,10 +593,10 @@ const caixaFotoTicket = (texto) => `<div class="ticket-box">
 // celular e vai depois (ver js/offline.js)
 function avisoGuardado(r){ if(r.guardado) mostrarToast('📶 Sem sinal — guardado no celular, vai sozinho quando o sinal voltar'); }
 
-// Fim do repouso: abre a jornada do dia
+// Sem jornada aberta (primeiro uso, ou o escritório encerrou): abre a jornada do dia
 async function iniciarJornada(horaInformada){
   const jornadaId = novoId();
-  const r = await gravarOuGuardar('Fim do repouso', [
+  const r = await gravarOuGuardar('Fim da parada', [
     { tabela: 'jornada', op: 'insert', dados: { id: jornadaId, transportadora_id: usuarioAtual.transportadora_id, motorista_id: session.user.id, status: 'ativa', hora_informada: horaInformada } },
     { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaId, tipo: 'inicio', hora_informada: horaInformada } },
   ], { jornada: { acao: 'iniciar', jornadaId, hora: horaInformada } });
@@ -610,7 +608,7 @@ async function iniciarJornada(horaInformada){
 
 async function loadJornadaFimParada(){
   const jornada = await carregarJornadaAtiva();
-  const motivo = jornada ? jornada.motivoAtual : MOTIVO_REPOUSO;
+  const motivo = jornada ? jornada.motivoAtual : null;
   const desde = jornada ? jornada.pausadaDesde : await ultimoFimJornada();
   const pedeTicket = !!(jornada && (dadosMotivo(motivo) || {}).ticket);
   let foto = null;
@@ -645,12 +643,25 @@ async function loadJornadaFimParada(){
       if(envio.erro) mostrarToast('📶 A foto não foi enviada. O ticket fica pendente na aba Jornada.');
       else ticketUrl = envio.caminho;
     }
-    const r = await gravarOuGuardar('Fim da parada', [
+    // Parada longa foi o repouso: o dia fecha no início dela e o novo abre agora
+    const fimDaParada = h.hora ? new Date(h.hora) : new Date();
+    const fechaDia = (fimDaParada - new Date(desde)) / 60000 >= PARADA_FECHA_DIA_MIN;
+    const ticket = { ticket_exigido: pedeTicket, ticket_url: ticketUrl };
+    const novaJornadaId = novoId();
+    const r = await gravarOuGuardar('Fim da parada', fechaDia ? [
+      { tabela: 'jornada', op: 'update', id: jornada.id, dados: { status: 'encerrada', fechada_por_parada: true } },
+      { tabela: 'jornada_evento', op: 'insert', dados: { id: eventoId, jornada_id: jornada.id, tipo: 'fim', ...ticket } },
+      { tabela: 'jornada', op: 'insert', dados: { id: novaJornadaId, transportadora_id: usuarioAtual.transportadora_id, motorista_id: session.user.id, status: 'ativa', hora_informada: h.hora } },
+      { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: novaJornadaId, tipo: 'inicio', hora_informada: h.hora } },
+    ] : [
       { tabela: 'jornada', op: 'update', id: jornada.id, dados: { status: 'ativa' } },
-      { tabela: 'jornada_evento', op: 'insert', dados: { id: eventoId, jornada_id: jornada.id, tipo: 'retomada', hora_informada: h.hora, ticket_exigido: pedeTicket, ticket_url: ticketUrl } },
-    ], { jornada: { acao: 'retomada', jornadaId: jornada.id, hora: h.hora } });
+      { tabela: 'jornada_evento', op: 'insert', dados: { id: eventoId, jornada_id: jornada.id, tipo: 'retomada', hora_informada: h.hora, ...ticket } },
+    ], { jornada: fechaDia
+      ? { acao: 'novoDia', jornadaId: jornada.id, novaJornadaId, hora: h.hora }
+      : { acao: 'retomada', jornadaId: jornada.id, hora: h.hora } });
     if(r.erro) return voltar(r.erro);
     avisoGuardado(r);
+    if(fechaDia) invalidarTravaChecklist();
     irParaMotorista('tab:jornada');
   });
 }
@@ -703,9 +714,9 @@ async function loadJornadaPausa(){
     conteudo: `
       <div class="section-label">O que está acontecendo?</div>
       <div class="card lista">
-        ${MOTIVOS_PARADA.map(({ motivo: m, fechaDia }) => `
+        ${MOTIVOS_PARADA.map(({ motivo: m }) => `
           <div class="list-item clickable" data-motivo="${esc(m)}">
-            <div class="li-body"><div class="li-title">${esc(m)}</div>${fechaDia ? '<div class="li-sub">Fecha o dia: pede a sua assinatura</div>' : ''}</div>
+            <div class="li-body"><div class="li-title">${esc(m)}</div></div>
             <div class="chev" data-marca>${motivoSelecionado === m ? ic('check', 18, '#ffc53d') : ''}</div>
           </div>`).join('')}
       </div>
@@ -728,23 +739,14 @@ async function confirmarPausa(){
   if(h.erro){ alert(h.erro); return; }
   const obs = document.getElementById('pausaObs').value.trim();
   const dados = dadosMotivo(motivoSelecionado);
-  // Repouso fecha o dia: o motorista assina, e fim e assinado_em são definidos pelo banco
-  const assinatura = dados.fechaDia ? await pedirAssinatura({ titulo: 'Assinatura — fechar o dia', texto: `${usuarioAtual.nome} · ${fmtDataHora(new Date())}`, botao: 'Assinar e fechar o dia' }) : null;
-  if(dados.fechaDia && !assinatura) return;
   btn.disabled = true; btn.textContent = 'Salvando...';
 
-  const r = dados.fechaDia
-    ? await gravarOuGuardar('Repouso', [
-        { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'encerrada', assinatura_base64: assinatura, hora_informada: h.hora } },
-        { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'fim', motivo: motivoSelecionado, categoria: dados.categoria, observacao: obs || null, hora_informada: h.hora } },
-      ], { jornada: { acao: 'encerrar', jornadaId: jornadaEmEdicaoId } })
-    : await gravarOuGuardar(`Parada: ${motivoSelecionado}`, [
-        { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'pausada' } },
-        { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, categoria: dados.categoria, observacao: obs || null, hora_informada: h.hora } },
-      ], { jornada: { acao: 'pausa', jornadaId: jornadaEmEdicaoId, motivo: motivoSelecionado, observacao: obs || null, hora: h.hora } });
+  const r = await gravarOuGuardar(`Parada: ${motivoSelecionado}`, [
+    { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'pausada' } },
+    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, categoria: dados.categoria, observacao: obs || null, hora_informada: h.hora } },
+  ], { jornada: { acao: 'pausa', jornadaId: jornadaEmEdicaoId, motivo: motivoSelecionado, observacao: obs || null, hora: h.hora } });
   if(r.erro){ alert('Erro ao registrar parada: ' + r.erro); btn.disabled = false; btn.textContent = 'Confirmar parada'; return; }
   avisoGuardado(r);
-  if(dados.fechaDia){ invalidarTravaChecklist(); if(!r.guardado) mostrarToast('✅ Dia fechado. Bom descanso'); }
 
   motivoSelecionado = null;
   irParaMotorista('tab:jornada');

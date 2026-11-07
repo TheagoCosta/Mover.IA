@@ -1,14 +1,18 @@
 -- Jornada só por paradas (pedido do Thiago, 07/11): o motorista informa o início e o fim de cada
--- parada; fora delas ele está dirigindo. O dia fecha sozinho na parada "Repouso / pernoite" e abre
--- quando o repouso termina, então jornada.inicio e jornada.fim continuam existindo.
+-- parada; fora delas ele está dirigindo. Ele não marca repouso: uma parada longa já é o repouso.
+-- Ao encerrá-la, o app fecha o dia no início da parada e abre o novo, então jornada.inicio e
+-- jornada.fim continuam existindo.
 --
+-- fechada_por_parada: o dia foi fechado assim; o fim da jornada é o início da última parada.
 -- hora_informada: horário que o motorista corrigiu. Vale como horário do registro (criado_em, ou
 --   inicio/fim da jornada), e registrado_em guarda quando ele realmente registrou.
 -- categoria: trabalho (carga, descarga, fila, pátio: conta como jornada) ou descanso.
 -- ticket_*: foto do ticket, guardada no evento de fim da parada. Sem o ticket a parada fica pendente
 --   até ele enviar a foto ou dizer por que não tem (ticket_dispensa).
 
-alter table public.jornada add column if not exists hora_informada timestamptz;
+alter table public.jornada
+  add column if not exists hora_informada timestamptz,
+  add column if not exists fechada_por_parada boolean not null default false;
 
 alter table public.jornada_evento
   add column if not exists hora_informada timestamptz,
@@ -51,12 +55,12 @@ begin
       new.inicio := least(v_base, new.hora_informada);
     end if;
     new.recebido_em := recebido_sem_sinal(least(v_base, coalesce(new.hora_celular, v_base)));
-    new.status := 'ativa'; new.fim := null;
+    new.status := 'ativa'; new.fim := null; new.fechada_por_parada := false;
     new.assinatura_base64 := null; new.assinado_em := null;
     return new;
   end if;
-  if (to_jsonb(new) - 'status' - 'fim' - 'assinatura_base64' - 'assinado_em' - 'hora_celular' - 'recebido_em' - 'hora_informada')
-     is distinct from (to_jsonb(old) - 'status' - 'fim' - 'assinatura_base64' - 'assinado_em' - 'hora_celular' - 'recebido_em' - 'hora_informada') then
+  if (to_jsonb(new) - 'status' - 'fim' - 'assinatura_base64' - 'assinado_em' - 'hora_celular' - 'recebido_em' - 'hora_informada' - 'fechada_por_parada')
+     is distinct from (to_jsonb(old) - 'status' - 'fim' - 'assinatura_base64' - 'assinado_em' - 'hora_celular' - 'recebido_em' - 'hora_informada' - 'fechada_por_parada') then
     raise exception 'Você só pode registrar paradas.' using errcode = '42501';
   end if;
   if new.status not in ('ativa', 'pausada', 'encerrada') then
@@ -66,18 +70,22 @@ begin
     if old.status = 'encerrada' then
       new.fim := old.fim; new.assinatura_base64 := old.assinatura_base64; new.assinado_em := old.assinado_em;
       new.recebido_em := old.recebido_em; new.hora_informada := old.hora_informada;
+      new.fechada_por_parada := old.fechada_por_parada;
       return new;
     end if;
     -- a hora informada no início da jornada não vale para o fim
     v_informada := case when new.hora_informada is distinct from old.hora_informada then new.hora_informada end;
     if v_informada is not null then perform conferir_hora_informada(v_informada, v_base); end if;
     select max(criado_em) into v_ultimo from jornada_evento where jornada_id = new.id;
-    new.fim := greatest(least(v_base, coalesce(v_informada, v_base)), coalesce(v_ultimo, old.inicio));
+    new.fechada_por_parada := new.fechada_por_parada and old.status = 'pausada';
+    new.fim := case when new.fechada_por_parada then coalesce(v_ultimo, old.inicio)
+      else greatest(least(v_base, coalesce(v_informada, v_base)), coalesce(v_ultimo, old.inicio)) end;
     new.recebido_em := recebido_sem_sinal(least(v_base, coalesce(new.hora_celular, v_base)));
     new.assinado_em := case when new.assinatura_base64 is null then null else v_base end;
   else
     new.fim := null; new.assinatura_base64 := null; new.assinado_em := null;
     new.recebido_em := old.recebido_em; new.hora_informada := old.hora_informada;
+    new.fechada_por_parada := false;
   end if;
   return new;
 end $function$;
@@ -87,13 +95,13 @@ create or replace function public.trg_jornada_evento_regras_motorista()
  language plpgsql
  set search_path to 'public'
 as $function$
-declare v_status text; v_fim timestamptz; v_inicio timestamptz; v_ultimo timestamptz; v_base timestamptz; v_usada timestamptz;
+declare v_status text; v_fim timestamptz; v_inicio timestamptz; v_ultimo timestamptz; v_base timestamptz; v_usada timestamptz; v_por_parada boolean;
 begin
   if pode_tudo() then return new; end if;
   if new.tipo not in ('inicio', 'pausa', 'retomada', 'fim') then
     raise exception 'Tipo de evento inválido.' using errcode = '42501';
   end if;
-  select status, fim, inicio into v_status, v_fim, v_inicio from jornada where id = new.jornada_id;
+  select status, fim, inicio, fechada_por_parada into v_status, v_fim, v_inicio, v_por_parada from jornada where id = new.jornada_id;
   select max(criado_em) into v_ultimo from jornada_evento where jornada_id = new.jornada_id;
   v_base := hora_do_registro(new.hora_celular);
   v_usada := v_base;
@@ -113,7 +121,7 @@ begin
     raise exception 'Arquivo de ticket inválido.' using errcode = '42501';
   end if;
   if v_status = 'encerrada' and (new.tipo <> 'fim'
-      or (v_fim < now() - interval '10 minutes' and new.hora_celular is null and new.hora_informada is null)
+      or (v_fim < now() - interval '10 minutes' and new.hora_celular is null and new.hora_informada is null and not v_por_parada)
       or exists (select 1 from jornada_evento e where e.jornada_id = new.jornada_id and e.tipo = 'fim')) then
     raise exception 'Esta jornada já foi encerrada.' using errcode = '42501';
   end if;
