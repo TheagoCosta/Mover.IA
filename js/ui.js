@@ -434,19 +434,28 @@ function pillDoc(doc){ const s = statusDocumento(doc); return pillStatus(COR_STA
 const LIMITE_CONDUCAO_CONTINUA_MIN = 5 * 60 + 30; // Lei 13.103: 5h30 seguidas
 function calcularConducao(eventos, agora = new Date()){
   let totalMin = 0, inicioTrecho = null, paradas = 0;
+  let trabalhoParadoMin = 0, descansoMin = 0, parada = null;   // trabalho parado (carga, fila) conta como jornada
+  const fecharParada = (t) => {
+    if(!parada) return;
+    const min = (t - parada.inicio) / 60000;
+    if(parada.categoria === 'descanso') descansoMin += min; else trabalhoParadoMin += min;
+    parada = null;
+  };
   (eventos || []).forEach(ev => {
     const t = new Date(ev.criado_em);
-    if(ev.tipo === 'inicio' || ev.tipo === 'retomada'){ if(!inicioTrecho) inicioTrecho = t; }
+    if(ev.tipo === 'inicio' || ev.tipo === 'retomada'){ fecharParada(t); if(!inicioTrecho) inicioTrecho = t; }
     else if(ev.tipo === 'pausa' || ev.tipo === 'fim'){
-      if(ev.tipo === 'pausa') paradas++;
+      if(ev.tipo === 'fim') fecharParada(t);
+      if(ev.tipo === 'pausa'){ paradas++; parada = { inicio: t, categoria: ev.categoria }; }
       if(inicioTrecho){ totalMin += (t - inicioTrecho) / 60000; inicioTrecho = null; }
     }
   });
+  fecharParada(agora);
   const continuoMin = inicioTrecho ? (agora - inicioTrecho) / 60000 : 0;
   if(inicioTrecho) totalMin += continuoMin;
-  return { totalMin, continuoMin, rodando: !!inicioTrecho, paradas };
+  return { totalMin, continuoMin, rodando: !!inicioTrecho, paradas, trabalhoParadoMin, descansoMin };
 }
-const TIPO_EVENTO_LABEL = { inicio:'Início da jornada', pausa:'Parada', retomada:'Retomada', fim:'Fim da jornada' };
+const TIPO_EVENTO_LABEL = { inicio:'Começou a dirigir', pausa:'Parada', retomada:'Fim da parada', fim:'Fim do dia' };
 const TIPO_EVENTO_ICONE = { inicio:'play', pausa:'pause', retomada:'play', fim:'flag' };
 
 // ---------- exportar planilha (abre no Excel) ----------

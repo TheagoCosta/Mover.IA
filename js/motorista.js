@@ -11,21 +11,32 @@ let chkAnswers = {};
 let chkObs = {};
 let docAbaMotorista = 'meus';
 
+// Jornada só por paradas: fora de uma parada o motorista está dirigindo.
+// categoria: trabalho conta como jornada (carga, descarga, fila); descanso não.
+// ticket: pede a foto do ticket ao encerrar. fechaDia: encerra a jornada do dia.
+const MOTIVO_REPOUSO = 'Repouso / pernoite';
 const MOTIVOS_PARADA = [
-  'Parado na garagem',
-  'Parado no pátio',
-  'Parada no posto',
-  'Chegada no local de carregamento',
-  'Em carregamento',
-  'Chegada no local de descarga',
-  'Em descarga',
-  'Pausa para alimentação',
-  'Pausa para manutenção',
-  'Outro'
+  { motivo:'Carregamento', categoria:'trabalho', ticket:true },
+  { motivo:'Descarga', categoria:'trabalho', ticket:true },
+  { motivo:'Balança', categoria:'trabalho', ticket:true },
+  { motivo:'Parado no pátio', categoria:'trabalho', ticket:true },
+  { motivo:'Usina', categoria:'trabalho', ticket:true },
+  { motivo:'Terminal', categoria:'trabalho', ticket:true },
+  { motivo:'Parado na garagem', categoria:'trabalho' },
+  { motivo:'Parada no posto', categoria:'trabalho' },
+  { motivo:'Pausa para manutenção', categoria:'trabalho' },
+  { motivo:'Pausa para alimentação', categoria:'descanso' },
+  { motivo:'Descanso', categoria:'descanso' },
+  { motivo:MOTIVO_REPOUSO, categoria:'descanso', fechaDia:true },
+  { motivo:'Outro', categoria:'trabalho' },
 ];
+const dadosMotivo = (motivo) => MOTIVOS_PARADA.find(m => m.motivo === motivo) || null;
+const DESCANSO_MINIMO_MIN = 11 * 60;   // CLT 235-C §3º
 
 let jornadaEmEdicaoId = null;
 let motivoSelecionado = null;
+let ticketPendenteAtual = null;
+let jornadaUltimoEvento = null;
 let jornadaDetalheId = null;
 
 // ---------------------------------------------------------------------
@@ -152,7 +163,7 @@ function definirTrava(conjunto, ultimo, jornadaAberta){
 function liberadoComChecklistVencido(tela, aba){
   if(tela === 'perfil' || tela === 'privacidade') return true;
   if(tela === 'home' && aba === 'checklist') return true;
-  if(travaChecklist.jornadaAberta && ((tela === 'home' && aba === 'jornada') || tela === 'jornadaPausa' || tela === 'jornadaEncerrar')) return true;
+  if(travaChecklist.jornadaAberta && ((tela === 'home' && aba === 'jornada') || tela === 'jornadaPausa' || tela === 'jornadaFimParada' || tela === 'ticketPendente')) return true;
   return false;
 }
 
@@ -225,7 +236,7 @@ async function abrirTelaMotorista(){
   if(motoristaScreen === 'documentosConjunto'){ motoristaScreen = 'documentos'; docAbaMotorista = 'veiculo'; }
 
   const subtelas = {
-    jornadaPausa: loadJornadaPausa, jornadaEncerrar: loadJornadaEncerrar, abastecimento: loadAbastecimentoMotorista,
+    jornadaPausa: loadJornadaPausa, jornadaFimParada: loadJornadaFimParada, ticketPendente: loadTicketPendente, abastecimento: loadAbastecimentoMotorista,
     documentos: loadDocumentosMotorista, historicoJornada: loadHistoricoJornadas, historicoJornadaDetalhe: loadHistoricoJornadaDetalhe,
     conjunto: loadConjuntoMotorista, perfil: loadPerfilMotorista, oficina: loadOficinaMotorista,
     agendamentos: loadAgendamentosMotorista, capacitacoes: loadCapacitacoesMotorista, notificacoes: loadNotificacoesMotorista,
@@ -255,7 +266,7 @@ async function abrirTelaMotorista(){
 function cardJornadaResumo(jornada){
   if(!jornada) return `
     <div class="card clickable" data-ir="tab:jornada" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-      <div><div class="card-dark-title">Nenhuma jornada aberta</div><div class="card-dark-sub">Toque para iniciar sua jornada</div></div>
+      <div><div class="card-dark-title">Em repouso</div><div class="card-dark-sub">Ao sair, toque aqui para encerrar a parada</div></div>
       ${pillStatus('grey', 'Parado')}
     </div>`;
   if(jornada.status === 'pausada') return `
@@ -446,24 +457,24 @@ function saudacaoHorario(){
 // ---------------------------------------------------------------------
 async function loadAbaJornada(){
   const jornada = prepararJornada(jornadaComFila(await dadosTela('jornada', buscarJornadaAberta, () => { if(motoristaScreen === 'home' && motoristaTab === 'jornada') loadAbaJornada(); })));
+  const [repousoDesde, pendentes] = await Promise.all([jornada ? null : ultimoFimJornada(), ticketsPendentes()]);
   let principal;
   if(!jornada){
+    const repousoMin = repousoDesde ? (Date.now() - new Date(repousoDesde)) / 60000 : null;
     principal = `
       <div class="card em-breve-box" style="padding:26px 18px;">
         <div class="ic-grande">${ic('clock', 32)}</div>
-        <div class="card-dark-title">Nenhuma jornada aberta</div>
-        <div class="card-dark-sub" style="margin-bottom:16px;">Inicie quando começar a trabalhar. O app conta o tempo de direção e avisa a hora de parar.</div>
-        <button class="btn btn-primary" id="btnJornadaIniciar">${ic('play', 16)} Iniciar jornada</button>
+        <div class="card-dark-title">Em repouso</div>
+        <div class="card-dark-sub" style="margin-bottom:16px;">${repousoDesde ? `Desde ${fmtData(repousoDesde)} às ${fmtHora(repousoDesde)} (há ${fmtMinutos(repousoMin)}). ` : ''}Ao encerrar a parada, o app entende que você começou a dirigir.</div>
+        ${repousoMin !== null && repousoMin < DESCANSO_MINIMO_MIN ? `<div class="card-dark-sub" style="margin-bottom:12px;">O descanso mínimo é de 11 horas.</div>` : ''}
+        <button class="btn btn-primary" id="btnJornadaFimParada">${ic('play', 16)} Encerrar parada</button>
       </div>`;
   } else if(jornada.status === 'ativa'){
     principal = `
       ${jornada.conducao.continuoMin >= LIMITE_CONDUCAO_CONTINUA_MIN ? `<div class="alert-card vencido">${ic('alert', 18)}<div class="txt"><b>Hora de parar</b><span>Você passou de 5h30 dirigindo sem parar.</span></div></div>` : ''}
       ${cardMedidorConducao(jornada)}
-      <div class="card-dark-sub" style="text-align:center; margin:-4px 0 12px;">Jornada iniciada às ${fmtHora(jornada.inicio)} · ${fmtMinutos(jornada.conducao.totalMin)} de condução · ${jornada.conducao.paradas} parada${jornada.conducao.paradas === 1 ? '' : 's'}</div>
-      <div class="grid2" style="margin-bottom:6px;">
-        <button class="btn btn-outline" id="btnJornadaPausar">${ic('pause', 15)} Registrar parada</button>
-        <button class="btn btn-danger" id="btnJornadaEncerrar">${ic('stop', 15)} Encerrar</button>
-      </div>`;
+      <div class="card-dark-sub" style="text-align:center; margin:-4px 0 12px;">Dirigindo · jornada iniciada às ${fmtHora(jornada.inicio)} · ${fmtMinutos(jornada.conducao.totalMin)} de condução · ${jornada.conducao.paradas} parada${jornada.conducao.paradas === 1 ? '' : 's'}</div>
+      <button class="btn btn-primary" id="btnJornadaPausar" style="margin-bottom:6px;">${ic('pause', 15)} Iniciar parada</button>`;
   } else {
     principal = `
       <div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
@@ -471,10 +482,7 @@ async function loadAbaJornada(){
         <div class="card-dark-sub">Desde ${fmtHora(jornada.pausadaDesde)} (há ${fmtMinutos((Date.now() - new Date(jornada.pausadaDesde)) / 60000)}) · ${fmtMinutos(jornada.conducao.totalMin)} de condução hoje</div></div>
         ${pillStatus('amber', 'Parada')}
       </div>
-      <div class="grid2" style="margin-bottom:6px;">
-        <button class="btn btn-primary" id="btnJornadaRetomar">${ic('play', 15)} Retomar</button>
-        <button class="btn btn-danger" id="btnJornadaEncerrar">${ic('stop', 15)} Encerrar</button>
-      </div>`;
+      <button class="btn btn-primary" id="btnJornadaFimParada" style="margin-bottom:6px;">${ic('play', 15)} Encerrar parada</button>`;
   }
 
   montarTelaMotorista({
@@ -482,6 +490,12 @@ async function loadAbaJornada(){
     header: headerPrincipal('Jornada', 'Controle de horas — Lei do Motorista'),
     conteudo: `
       ${principal}
+      ${pendentes.length ? `<div class="section-label">Tickets pendentes</div>
+        <div class="card lista">${pendentes.map(p => `
+          <div class="list-item clickable" data-ticket-pendente="${p.id}">
+            <div class="li-ic">${ic('cam', 16)}</div>
+            <div class="li-body"><div class="li-title">${esc(p.motivo)}</div><div class="li-sub">${fmtData(p.fim)} às ${fmtHora(p.fim)} · enviar o ticket</div></div>
+            <div class="chev">${ic('chev', 16)}</div></div>`).join('')}</div>` : ''}
       ${jornada ? `<div class="section-label">Linha do tempo — hoje</div>
         <div class="card lista">${jornada.eventos.map(ev => `
           <div class="list-item"><div class="li-ic">${ic(TIPO_EVENTO_ICONE[ev.tipo] || 'clock', 16)}</div>
@@ -492,55 +506,210 @@ async function loadAbaJornada(){
       </div></div>`,
   });
 
-  const ini = document.getElementById('btnJornadaIniciar');
-  if(ini) ini.addEventListener('click', () => { ini.disabled = true; iniciarJornada(); });
   const pausar = document.getElementById('btnJornadaPausar');
   if(pausar) pausar.addEventListener('click', () => { jornadaEmEdicaoId = jornada.id; motivoSelecionado = null; irParaMotorista('jornadaPausa'); });
-  const retomar = document.getElementById('btnJornadaRetomar');
-  if(retomar) retomar.addEventListener('click', () => { retomar.disabled = true; atualizarJornada(jornada.id, 'ativa', 'retomada'); });
-  const encerrar = document.getElementById('btnJornadaEncerrar');
-  if(encerrar) encerrar.addEventListener('click', () => { jornadaEmEdicaoId = jornada.id; irParaMotorista('jornadaEncerrar'); });
+  const fimParada = document.getElementById('btnJornadaFimParada');
+  if(fimParada) fimParada.addEventListener('click', () => irParaMotorista('jornadaFimParada'));
+  document.querySelectorAll('[data-ticket-pendente]').forEach(el => el.addEventListener('click', () => {
+    ticketPendenteAtual = pendentes.find(p => p.id === el.dataset.ticketPendente);
+    irParaMotorista('ticketPendente');
+  }));
 }
+
+// Quando começou o repouso atual (o fim da última jornada)
+async function ultimoFimJornada(){
+  const { data, error } = await sb.from('jornada').select('fim').eq('motorista_id', session.user.id)
+    .eq('status', 'encerrada').order('fim', { ascending:false }).limit(1);
+  return error || !data || !data[0] ? null : data[0].fim;
+}
+
+// Paradas dos últimos 7 dias que pediam ticket e ficaram sem foto
+async function ticketsPendentes(){
+  const { data, error } = await sb.from('jornada')
+    .select('id, jornada_evento(id, tipo, motivo, criado_em, ticket_exigido, ticket_url, ticket_dispensa)')
+    .eq('motorista_id', session.user.id).gte('inicio', new Date(Date.now() - 7 * 86400000).toISOString());
+  if(error || !data) return [];
+  const lista = [];
+  data.forEach(j => {
+    const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+    eventos.forEach((ev, i) => {
+      if(!ev.ticket_exigido || ev.ticket_url || ev.ticket_dispensa) return;
+      const pausa = eventos.slice(0, i).reverse().find(e => e.tipo === 'pausa');
+      lista.push({ id: ev.id, motivo: pausa ? pausa.motivo : 'Parada', fim: ev.criado_em });
+    });
+  });
+  return lista.sort((a, b) => new Date(b.fim) - new Date(a.fim));
+}
+
+// Campo "às que horas": vem com a hora atual e o motorista corrige se esqueceu de marcar.
+function campoHoraParada(id, rotulo){
+  const agora = new Date();
+  const valor = `${String(agora.getHours()).padStart(2, '0')}:${String(agora.getMinutes()).padStart(2, '0')}`;
+  return `<div class="section-label">${esc(rotulo)}</div>
+    <input type="time" id="${id}" value="${valor}" data-original="${valor}" style="width:100%;">
+    <div class="li-sub" style="margin-top:6px;">Esqueceu de marcar na hora? Corrija aqui.</div>`;
+}
+// Sem mudança devolve null (vale a hora do toque). Horário à frente do relógio é de ontem.
+function lerHoraParada(id, naoAntesDe){
+  const campo = document.getElementById(id);
+  if(!campo.value) return { erro: 'Informe o horário.' };
+  if(campo.value === campo.dataset.original) return { hora: null };
+  const [h, m] = campo.value.split(':').map(Number);
+  const d = new Date(); d.setHours(h, m, 0, 0);
+  if(d > new Date()) d.setDate(d.getDate() - 1);
+  if(naoAntesDe && d < new Date(naoAntesDe)) return { erro: `O horário não pode ser antes de ${fmtHora(naoAntesDe)}, o último registro.` };
+  return { hora: d.toISOString() };
+}
+
+// Foto do ticket: precisa de sinal. Sem sinal a parada fica com o ticket pendente.
+async function enviarTicketJornada(eventoId, arquivo){
+  const pdf = /pdf/i.test(arquivo.type) || /\.pdf$/i.test(arquivo.name || '');
+  const blob = pdf ? arquivo : await comprimirImagem(arquivo, 2000, 0.85);
+  const ext = pdf ? 'pdf' : (blob.type === 'image/jpeg' ? 'jpg' : (((arquivo.name || '').split('.').pop() || 'jpg').toLowerCase()));
+  const caminho = `${usuarioAtual.transportadora_id}/jornada/${session.user.id}/Ticket_${eventoId}_${Date.now()}.${ext}`;
+  const { error } = await sb.storage.from('documentos').upload(caminho, blob, { contentType: pdf ? 'application/pdf' : (blob.type || 'image/jpeg') });
+  return error ? { erro: error.message } : { caminho };
+}
+function ligarFotoTicket(aoEscolher){
+  const inp = document.getElementById('inpTicketParada');
+  document.getElementById('btnTicketParada').addEventListener('click', () => inp.click());
+  inp.addEventListener('change', () => {
+    const arquivo = inp.files && inp.files[0] ? inp.files[0] : null;
+    aoEscolher(arquivo);
+    const caixa = document.getElementById('ticketParadaEscolhido');
+    if(!arquivo){ caixa.innerHTML = ''; return; }
+    const foto = /^image\//.test(arquivo.type) && !/heic/i.test(arquivo.type);
+    caixa.innerHTML = foto ? `<img alt="Ticket" src="${URL.createObjectURL(arquivo)}">` : `<div class="card-dark-sub" style="margin-top:8px;">${ic('doc', 14)} ${esc(arquivo.name)}</div>`;
+    document.getElementById('btnTicketParada').innerHTML = `${ic('cam', 16)} Trocar a foto`;
+  });
+}
+const caixaFotoTicket = (texto) => `<div class="ticket-box">
+    <div class="card-dark-title">Ticket</div>
+    <div class="card-dark-sub">${esc(texto)}</div>
+    <input type="file" id="inpTicketParada" accept="image/*,application/pdf" hidden>
+    <button type="button" class="btn btn-outline" id="btnTicketParada" style="margin-top:10px;">${ic('cam', 16)} Fotografar o ticket</button>
+    <div id="ticketParadaEscolhido"></div>
+  </div>`;
 
 // Jornada: cada ação grava a jornada e o evento; sem sinal fica guardada no
 // celular e vai depois (ver js/offline.js)
 function avisoGuardado(r){ if(r.guardado) mostrarToast('📶 Sem sinal — guardado no celular, vai sozinho quando o sinal voltar'); }
 
-async function iniciarJornada(){
+// Fim do repouso: abre a jornada do dia
+async function iniciarJornada(horaInformada){
   const jornadaId = novoId();
-  const r = await gravarOuGuardar('Início da jornada', [
-    { tabela: 'jornada', op: 'insert', dados: { id: jornadaId, transportadora_id: usuarioAtual.transportadora_id, motorista_id: session.user.id, status: 'ativa' } },
-    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaId, tipo: 'inicio' } },
-  ], { jornada: { acao: 'iniciar', jornadaId } });
-  if(r.erro){ alert('Erro ao iniciar jornada: ' + r.erro); loadShellMotorista(); return; }
+  const r = await gravarOuGuardar('Fim do repouso', [
+    { tabela: 'jornada', op: 'insert', dados: { id: jornadaId, transportadora_id: usuarioAtual.transportadora_id, motorista_id: session.user.id, status: 'ativa', hora_informada: horaInformada } },
+    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaId, tipo: 'inicio', hora_informada: horaInformada } },
+  ], { jornada: { acao: 'iniciar', jornadaId, hora: horaInformada } });
+  if(r.erro) return r;
   avisoGuardado(r);
   invalidarTravaChecklist();
-  loadShellMotorista();
+  return r;
 }
 
-async function atualizarJornada(jornadaId, novoStatus, tipoEvento){
-  const r = await gravarOuGuardar(TIPO_EVENTO_LABEL[tipoEvento] || 'Jornada', [
-    { tabela: 'jornada', op: 'update', id: jornadaId, dados: { status: novoStatus } },
-    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaId, tipo: tipoEvento } },
-  ], { jornada: { acao: tipoEvento, jornadaId } });
-  if(r.erro){ alert('Erro: ' + r.erro); loadShellMotorista(); return; }
-  avisoGuardado(r);
-  loadShellMotorista();
-}
-
-function loadJornadaPausa(){
+async function loadJornadaFimParada(){
+  const jornada = await carregarJornadaAtiva();
+  const motivo = jornada ? jornada.motivoAtual : MOTIVO_REPOUSO;
+  const desde = jornada ? jornada.pausadaDesde : await ultimoFimJornada();
+  const pedeTicket = !!(jornada && (dadosMotivo(motivo) || {}).ticket);
+  let foto = null;
   montarTelaMotorista({
     voltarPara: 'tab:jornada',
-    header: headerVoltar('Registrar parada'),
+    header: headerVoltar('Encerrar parada'),
+    conteudo: `
+      <div class="card"><div class="card-dark-title">${esc(motivo || 'Parada')}</div>
+        ${desde ? `<div class="card-dark-sub">Desde ${fmtData(desde)} às ${fmtHora(desde)}</div>` : ''}</div>
+      ${campoHoraParada('fimParadaHora', 'Terminou às')}
+      <div style="height:14px;"></div>
+      ${pedeTicket ? caixaFotoTicket('Tire a foto do ticket com os horários de entrada e saída. Sem ele agora, encerre e envie depois.') : ''}
+      <button class="btn btn-primary" id="btnConfirmarFimParada">${ic('check', 16)} Encerrar parada</button>`,
+  });
+  if(pedeTicket) ligarFotoTicket(a => { foto = a; });
+  const btn = document.getElementById('btnConfirmarFimParada');
+  btn.addEventListener('click', async () => {
+    const h = lerHoraParada('fimParadaHora', desde);
+    if(h.erro){ alert(h.erro); return; }
+    btn.disabled = true; btn.textContent = 'Salvando...';
+    const voltar = (erro) => { alert('Erro ao encerrar a parada: ' + erro); btn.disabled = false; btn.innerHTML = `${ic('check', 16)} Encerrar parada`; };
+    if(!jornada){
+      const r = await iniciarJornada(h.hora);
+      if(r.erro) return voltar(r.erro);
+      irParaMotorista('tab:jornada');
+      return;
+    }
+    const eventoId = novoId();
+    let ticketUrl = null;
+    if(foto){
+      const envio = await enviarTicketJornada(eventoId, foto);
+      if(envio.erro) mostrarToast('📶 A foto não foi enviada. O ticket fica pendente na aba Jornada.');
+      else ticketUrl = envio.caminho;
+    }
+    const r = await gravarOuGuardar('Fim da parada', [
+      { tabela: 'jornada', op: 'update', id: jornada.id, dados: { status: 'ativa' } },
+      { tabela: 'jornada_evento', op: 'insert', dados: { id: eventoId, jornada_id: jornada.id, tipo: 'retomada', hora_informada: h.hora, ticket_exigido: pedeTicket, ticket_url: ticketUrl } },
+    ], { jornada: { acao: 'retomada', jornadaId: jornada.id, hora: h.hora } });
+    if(r.erro) return voltar(r.erro);
+    avisoGuardado(r);
+    irParaMotorista('tab:jornada');
+  });
+}
+
+function loadTicketPendente(){
+  const p = ticketPendenteAtual;
+  if(!p){ irParaMotorista('tab:jornada'); return; }
+  let foto = null;
+  montarTelaMotorista({
+    voltarPara: 'tab:jornada',
+    header: headerVoltar('Ticket pendente'),
+    conteudo: `
+      <div class="card"><div class="card-dark-title">${esc(p.motivo)}</div><div class="card-dark-sub">Terminou em ${fmtData(p.fim)} às ${fmtHora(p.fim)}</div></div>
+      ${caixaFotoTicket('Tire a foto do ticket com os horários de entrada e saída.')}
+      <button class="btn btn-primary" id="btnEnviarPendente">${ic('check', 16)} Enviar ticket</button>
+      <div class="section-label">Não recebeu ticket?</div>
+      <textarea id="ticketDispensa" class="m-textarea" rows="2" placeholder="Explique por que não tem o ticket"></textarea>
+      <button class="btn btn-outline" id="btnSemTicket" style="margin-top:10px;">Não tenho o ticket</button>`,
+  });
+  ligarFotoTicket(a => { foto = a; });
+  const concluir = async (args) => {
+    const { error } = await sb.rpc('anexar_ticket_parada', { p_evento: p.id, ...args });
+    if(error){ alert('Não consegui salvar: ' + error.message); return false; }
+    limparCacheTelas(); ticketPendenteAtual = null;
+    mostrarToast('✅ Ticket resolvido');
+    irParaMotorista('tab:jornada');
+    return true;
+  };
+  const enviar = document.getElementById('btnEnviarPendente');
+  enviar.addEventListener('click', async () => {
+    if(!foto){ alert('Tire a foto do ticket primeiro.'); return; }
+    enviar.disabled = true; enviar.textContent = 'Enviando...';
+    const envio = await enviarTicketJornada(p.id, foto);
+    if(envio.erro) alert('Não consegui enviar a foto: ' + envio.erro);
+    if(envio.erro || !(await concluir({ p_caminho: envio.caminho }))){ enviar.disabled = false; enviar.innerHTML = `${ic('check', 16)} Enviar ticket`; }
+  });
+  document.getElementById('btnSemTicket').addEventListener('click', () => {
+    const motivo = document.getElementById('ticketDispensa').value.trim();
+    if(!motivo){ alert('Explique por que não tem o ticket.'); return; }
+    concluir({ p_dispensa: motivo });
+  });
+}
+
+async function loadJornadaPausa(){
+  const jornada = await carregarJornadaAtiva();
+  jornadaUltimoEvento = jornada && jornada.eventos.length ? jornada.eventos[jornada.eventos.length - 1].criado_em : null;
+  montarTelaMotorista({
+    voltarPara: 'tab:jornada',
+    header: headerVoltar('Iniciar parada'),
     conteudo: `
       <div class="section-label">O que está acontecendo?</div>
       <div class="card lista">
-        ${MOTIVOS_PARADA.map(m => `
+        ${MOTIVOS_PARADA.map(({ motivo: m, fechaDia }) => `
           <div class="list-item clickable" data-motivo="${esc(m)}">
-            <div class="li-body"><div class="li-title">${esc(m)}</div></div>
+            <div class="li-body"><div class="li-title">${esc(m)}</div>${fechaDia ? '<div class="li-sub">Fecha o dia: pede a sua assinatura</div>' : ''}</div>
             <div class="chev" data-marca>${motivoSelecionado === m ? ic('check', 18, '#ffc53d') : ''}</div>
           </div>`).join('')}
       </div>
+      ${campoHoraParada('pausaHora', 'Começou às')}
       <div class="section-label">Observação (opcional)</div>
       <textarea id="pausaObs" class="m-textarea" rows="3" placeholder="Detalhe o motivo, se precisar"></textarea>
       <button class="btn btn-primary" id="btnConfirmarPausa" style="margin-top:14px;" ${motivoSelecionado ? '' : 'disabled'}>Confirmar parada</button>`,
@@ -555,50 +724,29 @@ function loadJornadaPausa(){
 
 async function confirmarPausa(){
   const btn = document.getElementById('btnConfirmarPausa');
-  btn.disabled = true; btn.textContent = 'Salvando...';
+  const h = lerHoraParada('pausaHora', jornadaUltimoEvento);
+  if(h.erro){ alert(h.erro); return; }
   const obs = document.getElementById('pausaObs').value.trim();
+  const dados = dadosMotivo(motivoSelecionado);
+  // Repouso fecha o dia: o motorista assina, e fim e assinado_em são definidos pelo banco
+  const assinatura = dados.fechaDia ? await pedirAssinatura({ titulo: 'Assinatura — fechar o dia', texto: `${usuarioAtual.nome} · ${fmtDataHora(new Date())}`, botao: 'Assinar e fechar o dia' }) : null;
+  if(dados.fechaDia && !assinatura) return;
+  btn.disabled = true; btn.textContent = 'Salvando...';
 
-  const r = await gravarOuGuardar(`Parada: ${motivoSelecionado}`, [
-    { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'pausada' } },
-    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, observacao: obs || null } },
-  ], { jornada: { acao: 'pausa', jornadaId: jornadaEmEdicaoId, motivo: motivoSelecionado, observacao: obs || null } });
+  const r = dados.fechaDia
+    ? await gravarOuGuardar('Repouso', [
+        { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'encerrada', assinatura_base64: assinatura, hora_informada: h.hora } },
+        { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'fim', motivo: motivoSelecionado, categoria: dados.categoria, observacao: obs || null, hora_informada: h.hora } },
+      ], { jornada: { acao: 'encerrar', jornadaId: jornadaEmEdicaoId } })
+    : await gravarOuGuardar(`Parada: ${motivoSelecionado}`, [
+        { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'pausada' } },
+        { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'pausa', motivo: motivoSelecionado, categoria: dados.categoria, observacao: obs || null, hora_informada: h.hora } },
+      ], { jornada: { acao: 'pausa', jornadaId: jornadaEmEdicaoId, motivo: motivoSelecionado, observacao: obs || null, hora: h.hora } });
   if(r.erro){ alert('Erro ao registrar parada: ' + r.erro); btn.disabled = false; btn.textContent = 'Confirmar parada'; return; }
   avisoGuardado(r);
+  if(dados.fechaDia){ invalidarTravaChecklist(); if(!r.guardado) mostrarToast('✅ Dia fechado. Bom descanso'); }
 
   motivoSelecionado = null;
-  irParaMotorista('tab:jornada');
-}
-
-function loadJornadaEncerrar(){
-  montarTelaMotorista({
-    voltarPara: 'tab:jornada',
-    header: headerVoltar('Encerrar jornada'),
-    conteudo: `
-      <div class="section-label">Observação final (opcional)</div>
-      <textarea id="encerrarObs" class="m-textarea" rows="3" placeholder="Alguma observação sobre a jornada?"></textarea>
-      <div class="li-sub" style="margin:10px 0 14px;">Ao tocar no botão, abre a tela para você assinar com o dedo.</div>
-      <button class="btn btn-danger" id="btnConfirmarEncerramento">${ic('check', 16)} Assinar e encerrar jornada</button>`,
-  });
-  document.getElementById('btnConfirmarEncerramento').addEventListener('click', async () => {
-    const assinatura = await pedirAssinatura({ titulo: 'Assinatura — encerrar jornada', texto: `${usuarioAtual.nome} · ${fmtDataHora(new Date())}`, botao: 'Assinar e encerrar' });
-    if(assinatura) confirmarEncerramento(assinatura);
-  });
-}
-
-async function confirmarEncerramento(assinaturaBase64){
-  const btn = document.getElementById('btnConfirmarEncerramento');
-  btn.disabled = true; btn.textContent = 'Salvando...';
-  const obs = document.getElementById('encerrarObs').value.trim();
-
-  // fim e assinado_em são definidos pelo banco
-  const r = await gravarOuGuardar('Fim da jornada', [
-    { tabela: 'jornada', op: 'update', id: jornadaEmEdicaoId, dados: { status: 'encerrada', assinatura_base64: assinaturaBase64 } },
-    { tabela: 'jornada_evento', op: 'insert', dados: { id: novoId(), jornada_id: jornadaEmEdicaoId, tipo: 'fim', observacao: obs || null } },
-  ], { jornada: { acao: 'encerrar', jornadaId: jornadaEmEdicaoId } });
-  if(r.erro){ alert('Erro ao encerrar jornada: ' + r.erro); btn.disabled = false; btn.textContent = 'Assinar e encerrar jornada'; return; }
-  invalidarTravaChecklist();
-
-  if(r.guardado) avisoGuardado(r); else mostrarToast('✅ Jornada encerrada');
   irParaMotorista('tab:jornada');
 }
 

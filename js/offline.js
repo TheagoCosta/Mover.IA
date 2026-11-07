@@ -1,5 +1,5 @@
 // MOVER.IA — registro sem sinal (app do motorista)
-// Jornada (iniciar, parada, retomar, encerrar), checklist e abastecimento em
+// Jornada (início e fim de parada, repouso), checklist e abastecimento em
 // posto funcionam sem internet: o que não deu para enviar fica guardado no
 // celular (fila) e vai sozinho quando o sinal volta, na ordem em que foi feito.
 // Cada registro guardado leva a hora em que aconteceu (hora_celular); o banco
@@ -7,7 +7,8 @@
 // para o escritório (migrações 20261028_02_registro_sem_sinal.sql e 20261102_02_sem_sinal_24h.sql).
 // Os ids são criados aqui, então reenviar o mesmo registro não duplica.
 // Ticket de descarga, oficina (fotos) e abastecimento na bomba própria
-// (senha do escritório) continuam precisando de sinal.
+// (senha do escritório) continuam precisando de sinal. O ticket de parada
+// também, mas a parada salva sem ele e o ticket fica pendente na aba Jornada.
 // (arquivo carregado pelo index.html; todas as funções ficam globais,
 // então um arquivo pode chamar funções dos outros normalmente)
 
@@ -111,9 +112,10 @@ function jornadaComFila(jornada){
   let j = jornada ? { ...jornada, jornada_evento: [...(jornada.jornada_evento || [])] } : null;
   lerFila().forEach(item => {
     if(!item.jornada) return;
-    const { acao, jornadaId, motivo, observacao } = item.jornada;
-    const ev = (tipo) => ({ tipo, motivo: motivo || null, observacao: observacao || null, criado_em: item.hora });
-    if(acao === 'iniciar'){ j = { id: jornadaId, inicio: item.hora, status: 'ativa', jornada_evento: [ev('inicio')] }; return; }
+    const { acao, jornadaId, motivo, observacao, hora } = item.jornada;
+    const quando = hora || item.hora;   // hora: horário corrigido pelo motorista
+    const ev = (tipo) => ({ tipo, motivo: motivo || null, observacao: observacao || null, criado_em: quando });
+    if(acao === 'iniciar'){ j = { id: jornadaId, inicio: quando, status: 'ativa', jornada_evento: [ev('inicio')] }; return; }
     if(!j || j.id !== jornadaId) return;
     if(acao === 'pausa'){ j.status = 'pausada'; j.jornada_evento.push(ev('pausa')); }
     if(acao === 'retomada'){ j.status = 'ativa'; j.jornada_evento.push(ev('retomada')); }
