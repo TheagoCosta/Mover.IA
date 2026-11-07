@@ -10,6 +10,9 @@ const BIBLIOTECAS = {
   pdf: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js',
   qr:  'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
   ocr: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
+  excel: 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js',
+  jspdf: 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
+  jspdfTabela: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',   // depois do jspdf
 };
 const bibliotecasCarregando = {};
 function carregarBiblioteca(nome){

@@ -16,7 +16,9 @@ let docAbaMotorista = 'meus';
 // ticket: pede a foto do ticket ao encerrar.
 // O motorista não marca repouso: parada longa já é o repouso e fecha o dia sozinha.
 const MOTIVOS_PARADA = [
+  { motivo:'Chegada no local de carregamento', categoria:'trabalho' },
   { motivo:'Carregamento', categoria:'trabalho', ticket:true },
+  { motivo:'Chegada no local de descarga', categoria:'trabalho' },
   { motivo:'Descarga', categoria:'trabalho', ticket:true },
   { motivo:'Balança', categoria:'trabalho', ticket:true },
   { motivo:'Parado no pátio', categoria:'trabalho', ticket:true },

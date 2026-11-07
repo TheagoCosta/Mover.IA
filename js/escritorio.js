@@ -382,7 +382,9 @@ async function secaoJornadas(el){
   ];
   const textoLinha = (l) => [nomeMot(l), fmtData(l.j.inicio), ROTULO_JORNADA[l.j.status]].join(' ');
   let visiveis = linhas;
-  el.innerHTML = `${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="listaJornadas"></div>`;
+  el.innerHTML = `<div style="margin-bottom:12px;"><button type="button" class="btn btn-primary btn-sm" id="btnRelatorioJornada">${ic('doc', 15)} Relatório de jornada (Excel e PDF)</button></div>
+    ${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="listaJornadas"></div>`;
+  document.getElementById('btnRelatorioJornada').addEventListener('click', abrirRelatorioJornada);
   function desenhar(){
     visiveis = aplicarLista('jornadas', linhas, ordens, textoLinha);
     const caixa = document.getElementById('listaJornadas');
