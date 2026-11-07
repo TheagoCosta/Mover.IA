@@ -468,6 +468,12 @@ function descansosCurtos(jornadas){
   });
   return curtos;
 }
+// Parada de menos de 8 h não fecha o dia: jornada acima de 13 h (24 h - 11 h) também não teve o descanso
+const JORNADA_MAXIMA_MIN = 24 * 60 - DESCANSO_MINIMO_MIN;
+function alertaDescanso(j, descansoAntes){
+  if(descansoAntes !== undefined) return `Descanso de ${fmtMinutos(descansoAntes)}`;
+  return (new Date(j.fim || Date.now()) - new Date(j.inicio)) / 60000 > JORNADA_MAXIMA_MIN ? 'Mais de 13h sem descanso' : '';
+}
 const TIPO_EVENTO_LABEL = { inicio:'Começou a dirigir', pausa:'Parada', retomada:'Fim da parada', fim:'Fim do dia' };
 const TIPO_EVENTO_ICONE = { inicio:'play', pausa:'pause', retomada:'play', fim:'flag' };
 
