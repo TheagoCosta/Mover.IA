@@ -356,16 +356,24 @@ function abrirCorrigirJornada(j, el){
 const ROTULO_JORNADA = { ativa:'Em andamento', pausada:'Em parada', encerrada:'Encerrada' };
 const COR_JORNADA = { ativa:'blue', pausada:'amber', encerrada:'green' };
 
-// Ticket que o Claude leu e não bateu com a parada, ou que não deu para ler
+// Ticket lido (ver js/leitura-ticket.js) que não bateu com a parada, ou que não deu para ler
 const ticketARevisar = (ev) => ['divergente', 'ilegivel'].includes(ev.ticket_leitura) && !ev.ticket_revisado_em;
 function textoLeituraTicket(ev){
   const d = ev.ticket_leitura_dados || {};
-  const dataBR = (t) => t ? ` de ${t.split('-').reverse().join('/')}` : '';
-  const dif = (m) => m > 10 ? ` (${fmtMinutos(m)} de diferença)` : '';
-  const partes = [];
-  if(d.entrada) partes.push(`entrada ${d.entrada}${dataBR(d.data_entrada)}${dif(d.dif_entrada_min)}`);
-  if(d.saida) partes.push(`saída ${d.saida}${dataBR(d.data_saida)}${dif(d.dif_saida_min)}`);
-  return partes.length ? `Lido no ticket: ${partes.join(' · ')}` : (d.motivo || 'Não consegui ler os horários');
+  const dif = (m) => m > TOLERANCIA_TICKET_MIN ? ` (${fmtMinutos(m)} de diferença)` : '';
+  if(d.origem === 'escritorio'){
+    const partes = [];
+    if(d.entrada) partes.push(`entrada ${d.entrada}${dif(d.dif_entrada_min)}`);
+    if(d.saida) partes.push(`saída ${d.saida}${dif(d.dif_saida_min)}`);
+    return `Informado pelo escritório: ${partes.join(' · ')}`;
+  }
+  if(!d.horarios || !d.horarios.length) return d.motivo || 'O app não achou horários na foto';
+  let texto = `Horários achados no ticket: ${d.horarios.join(', ')}`;
+  if(ev.ticket_leitura === 'divergente'){
+    if(d.dif_entrada_min > TOLERANCIA_TICKET_MIN) texto += ` · nenhum perto do início da parada (o mais perto é ${d.entrada}${dif(d.dif_entrada_min)})`;
+    if(d.dif_saida_min > TOLERANCIA_TICKET_MIN) texto += ` · nenhum perto do fim da parada (o mais perto é ${d.saida}${dif(d.dif_saida_min)})`;
+  }
+  return texto;
 }
 
 async function secaoJornadas(el){
@@ -379,19 +387,46 @@ async function secaoJornadas(el){
     const aRevisar = eventos.filter(ticketARevisar).length;
     return { j, eventos, semTicket, aRevisar, alerta: alertaDescanso(j, curtos.get(j.id)), c: calcularConducao(eventos, j.fim ? new Date(j.fim) : new Date()) };
   });
-  // O que o Claude leu no ticket e o que o escritório pode fazer com isso
+  // Cada ticket com a parada dele. Parada que fechou o dia termina no início da jornada seguinte.
+  const tickets = new Map();
+  linhas.forEach(l => {
+    const seguinte = l.j.fim ? jornadas.filter(x => x.motorista_id === l.j.motorista_id && x.id !== l.j.id && new Date(x.inicio) >= new Date(l.j.fim))
+      .sort((a, b) => new Date(a.inicio) - new Date(b.inicio))[0] : null;
+    l.eventos.filter(ev => ev.ticket_url).forEach(ev => tickets.set(ev.id, { ev, linha: l, parada: paradaDoTicket(l.eventos, ev, seguinte ? seguinte.inicio : null) }));
+  });
+  const salvarLeituraTicket = async (id, status, dados, revisado) => {
+    const mudancas = { ticket_leitura: status, ticket_leitura_dados: dados, ticket_lido_em: new Date().toISOString(),
+      ticket_revisado_em: revisado ? new Date().toISOString() : null, ticket_revisado_por: revisado ? session.user.id : null };
+    const { error } = await sb.from('jornada_evento').update(mudancas).eq('id', id);
+    if(error) throw error;
+    const t = tickets.get(id);
+    Object.assign(t.ev, mudancas);
+    t.linha.aRevisar = t.linha.eventos.filter(ticketARevisar).length;
+  };
+  const lerTicket = async (id) => {
+    const t = tickets.get(id);
+    if(!t.parada){ await salvarLeituraTicket(id, 'ilegivel', { motivo: 'Parada sem início registrado' }); return; }
+    const horarios = await lerHorariosTicket(t.ev.ticket_url);
+    const r = conferirHorariosTicket({ horarios }, t.parada.inicios, t.parada.fim);
+    await salvarLeituraTicket(id, horarios.length ? r.status : 'ilegivel', { ...r.dados, horarios });
+  };
+  // O que o app leu no ticket e o que o escritório pode fazer com isso
   const detalheLeitura = (ev) => {
-    const lerDeNovo = `<button type="button" class="btn btn-outline btn-sm" data-ler-ticket="${ev.id}">Ler de novo</button>`;
-    if(ev.ticket_leitura === 'ok') return `<div class="l2">${esc(textoLeituraTicket(ev))} · confere com a parada</div>`;
-    if(ev.ticket_leitura === 'lendo') return '<div class="l2">Lendo o ticket...</div>';
-    if(!ev.ticket_leitura) return `<div class="l2" style="margin-top:4px;">Ticket ainda não lido <button type="button" class="btn btn-outline btn-sm" data-ler-ticket="${ev.id}">Ler agora</button></div>`;
-    const rotulo = ev.ticket_leitura === 'divergente' ? badge('red', 'Ticket não bate') : badge('amber', 'Ticket não lido');
-    return `<div style="margin-top:4px;">${ev.ticket_revisado_em ? badge('green', 'Ticket revisado') : rotulo}</div>
-      <div class="l2">${esc(textoLeituraTicket(ev))}</div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
-        ${ev.ticket_revisado_em ? '' : `<button type="button" class="btn btn-primary btn-sm" data-revisar-ticket="${ev.id}">Marcar como revisado</button>`}
-        ${lerDeNovo}
-      </div>`;
+    const botoes = (extra) => `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">${extra}
+        <button type="button" class="btn btn-outline btn-sm" data-informar-ticket="${ev.id}">Digitar horários do ticket</button>
+        <button type="button" class="btn btn-outline btn-sm" data-ler-ticket="${ev.id}">Ler de novo</button></div>
+      <div id="informar-${ev.id}" hidden style="margin-top:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+          <label class="l2">Entrada<br><input type="time" id="entrada-${ev.id}" value="${esc((ev.ticket_leitura_dados || {}).entrada || '')}"></label>
+          <label class="l2">Saída<br><input type="time" id="saida-${ev.id}" value="${esc((ev.ticket_leitura_dados || {}).saida || '')}"></label>
+          <button type="button" class="btn btn-primary btn-sm" data-salvar-informado="${ev.id}">Salvar</button>
+        </div></div>`;
+    if(!ev.ticket_leitura) return `<div class="l2" style="margin-top:4px;">Ticket ainda não lido</div>${botoes('')}`;
+    if(ev.ticket_leitura === 'ok') return `<div class="l2">${esc(textoLeituraTicket(ev))} · confere com a parada</div>${botoes('')}`;
+    const rotulo = ev.ticket_revisado_em ? badge('green', 'Ticket revisado')
+      : ev.ticket_leitura === 'divergente' ? badge('red', 'Ticket não bate') : badge('amber', 'Ticket não lido');
+    return `<div style="margin-top:4px;">${rotulo}</div><div class="l2">${esc(textoLeituraTicket(ev))}</div>
+      ${botoes(ev.ticket_revisado_em ? '' : `<button type="button" class="btn btn-primary btn-sm" data-revisar-ticket="${ev.id}">Marcar como revisado</button>`)}`;
   };
   // Horário corrigido pelo motorista e situação do ticket de cada registro
   const detalheEvento = (ev) => `
@@ -414,7 +449,7 @@ async function secaoJornadas(el){
   const textoLinha = (l) => [nomeMot(l), fmtData(l.j.inicio), ROTULO_JORNADA[l.j.status]].join(' ');
   let visiveis = linhas;
   el.innerHTML = `<div style="margin-bottom:12px;"><button type="button" class="btn btn-primary btn-sm" id="btnRelatorioJornada">${ic('doc', 15)} Relatório de jornada (Excel e PDF)</button></div>
-    ${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="listaJornadas"></div>`;
+    ${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="leituraTickets" class="l2" style="margin-bottom:8px;"></div><div id="listaJornadas"></div>`;
   document.getElementById('btnRelatorioJornada').addEventListener('click', abrirRelatorioJornada);
   function desenhar(){
     visiveis = aplicarLista('jornadas', linhas, ordens, textoLinha);
@@ -447,19 +482,36 @@ async function secaoJornadas(el){
       if(error){ alert('Não consegui abrir o ticket: ' + error.message); return; }
       abrirVisualizador([{ url: data.signedUrl, tipo: /\.pdf$/i.test(caminho) ? 'application/pdf' : 'imagem' }], 0, 'Ticket');
     }));
+    const depoisDoTicket = (aviso) => { if(window.limparCacheTelas) limparCacheTelas(); fecharModal(); mostrarToast(aviso); desenhar(); };
     document.querySelectorAll('[data-revisar-ticket]').forEach(b => b.addEventListener('click', async () => {
       b.disabled = true;
       const { error } = await sb.from('jornada_evento').update({ ticket_revisado_em: new Date().toISOString(), ticket_revisado_por: session.user.id }).eq('id', b.dataset.revisarTicket);
       if(error){ b.disabled = false; alert('Não consegui salvar: ' + error.message); return; }
-      if(window.limparCacheTelas) limparCacheTelas();
-      fecharModal(); mostrarToast('✅ Ticket revisado'); secaoJornadas(el);
+      const t = tickets.get(b.dataset.revisarTicket);
+      t.ev.ticket_revisado_em = new Date().toISOString();
+      t.linha.aRevisar = t.linha.eventos.filter(ticketARevisar).length;
+      depoisDoTicket('✅ Ticket revisado');
     }));
     document.querySelectorAll('[data-ler-ticket]').forEach(b => b.addEventListener('click', async () => {
-      b.disabled = true; b.textContent = 'Lendo...';
-      const { error } = await sb.functions.invoke('ler-ticket', { body: { evento_id: b.dataset.lerTicket, forcar: true } });
-      if(error){ b.disabled = false; b.textContent = 'Ler de novo'; alert('Não consegui ler o ticket agora. Tente de novo em alguns minutos.'); return; }
-      if(window.limparCacheTelas) limparCacheTelas();
-      fecharModal(); mostrarToast('✅ Ticket lido'); secaoJornadas(el);
+      b.disabled = true; b.textContent = 'Lendo... (pode levar meio minuto)';
+      try{ await lerTicket(b.dataset.lerTicket); }
+      catch(e){ b.disabled = false; b.textContent = 'Ler de novo'; alert('Não consegui ler o ticket: ' + (e.message || e)); return; }
+      depoisDoTicket('✅ Ticket lido');
+    }));
+    document.querySelectorAll('[data-informar-ticket]').forEach(b => b.addEventListener('click', () => {
+      const caixa = document.getElementById('informar-' + b.dataset.informarTicket);
+      caixa.hidden = !caixa.hidden;
+    }));
+    // O escritório digita os horários do ticket: vale como revisado, e a diferença com a parada fica registrada
+    document.querySelectorAll('[data-salvar-informado]').forEach(b => b.addEventListener('click', async () => {
+      const id = b.dataset.salvarInformado, t = tickets.get(id);
+      const entrada = document.getElementById('entrada-' + id).value || null, saida = document.getElementById('saida-' + id).value || null;
+      if(!entrada && !saida){ alert('Digite a entrada, a saída ou as duas.'); return; }
+      const r = t.parada ? conferirHorariosTicket({ entrada, saida }, t.parada.inicios, t.parada.fim) : { status: 'divergente', dados: { entrada, saida } };
+      b.disabled = true;
+      try{ await salvarLeituraTicket(id, r.status, { ...r.dados, entrada, saida, origem: 'escritorio' }, true); }
+      catch(e){ b.disabled = false; alert('Não consegui salvar: ' + (e.message || e)); return; }
+      depoisDoTicket(r.status === 'ok' ? '✅ Horários salvos: conferem com a parada' : '✅ Horários salvos. Diferença com a parada: use "Corrigir horários" se precisar');
     }));
     document.getElementById('btnCorrigirJornada').addEventListener('click', () => abrirCorrigirJornada(j, el));
     document.getElementById('btnExcluirJornada').addEventListener('click', () =>
@@ -471,6 +523,21 @@ async function secaoJornadas(el){
   };
   desenhar();
   ligarBarraLista(el, 'jornadas', desenhar);
+  lerTicketsNaoLidos();
+
+  // Lê sozinho, um por vez, os tickets que ainda não foram lidos. Para se o escritório sair da tela.
+  async function lerTicketsNaoLidos(){
+    const fila = [...tickets.values()].filter(t => !t.ev.ticket_leitura).map(t => t.ev.id);
+    const aviso = document.getElementById('leituraTickets');
+    for(let i = 0; i < fila.length; i++){
+      if(!aviso.isConnected) return;
+      aviso.textContent = `Lendo os tickets das paradas: ${i + 1} de ${fila.length}...`;
+      try{ await lerTicket(fila[i]); } catch(e){ /* fica sem leitura e tenta na próxima vez */ }
+      if(!aviso.isConnected) return;
+      if(!document.getElementById('modalGenerico')) desenhar();
+    }
+    aviso.textContent = '';
+  }
 }
 
 // ---------------------------------------------------------------------
