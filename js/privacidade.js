@@ -6,8 +6,8 @@
 // Mudou o texto da política? Suba VERSAO_PRIVACIDADE (ex: '1.1') e a data: todo mundo
 // vê a nova versão no próximo acesso e o registro de leitura começa de novo.
 
-const VERSAO_PRIVACIDADE = '1.0';
-const DATA_PRIVACIDADE = '14/10/2026';
+const VERSAO_PRIVACIDADE = '1.1';
+const DATA_PRIVACIDADE = '09/11/2026';
 const CONTATO_PRIVACIDADE = 'thiagomgc02@gmail.com';
 const PRAZO_RESPOSTA_DIAS = 15;   // LGPD art. 19, II
 
@@ -58,6 +58,7 @@ function htmlPoliticaPrivacidade(empresa){
     <ul>
       <li><b>Escritório da sua transportadora</b> (pessoas autorizadas). O mecânico só vê os chamados de oficina e a frota — não vê documentos nem dados pessoais.</li>
       <li><b>Fornecedores que fazem o sistema funcionar:</b> Supabase (banco de dados e arquivos, com servidores em São Paulo) e o serviço de avisos do seu celular (Google ou Apple), que recebe só o texto do aviso.</li>
+      <li><b>Anthropic</b> (empresa dos Estados Unidos, serviço de inteligência artificial Claude): recebe a foto dos tickets de parada para ler os horários de entrada e saída. A foto pode mostrar seu nome e CPF, mas só os horários são guardados no MOVER.IA. Pelas regras da Anthropic, esse conteúdo não é usado para treinar a inteligência artificial e é apagado em até 30 dias, salvo exceções como investigação de uso indevido ou exigência legal.</li>
       <li><b>Sistema de transporte da empresa</b> (TMS), quando a integração estiver ativa, para viagens e documentos fiscais.</li>
       <li><b>Autoridades públicas</b>, quando a lei exigir.</li>
     </ul>
@@ -65,7 +66,7 @@ function htmlPoliticaPrivacidade(empresa){
 
     <h4>5. Onde e por quanto tempo guardamos</h4>
     <ul>
-      <li>Os dados ficam em servidores no <b>Brasil</b> (São Paulo).</li>
+      <li>Os dados ficam em servidores no <b>Brasil</b> (São Paulo). A exceção é a foto do ticket, enviada para leitura fora do Brasil (veja o item 4).</li>
       <li>Guardamos enquanto você tiver vínculo com a transportadora e, depois, pelo prazo que a lei exige — em geral, até <b>5 anos após o fim do contrato</b> (prazos trabalhistas), ou mais quando outra lei pedir. Depois disso, os dados são apagados ou anonimizados.</li>
       <li>Ao sair da conta em um aparelho, ele deixa de receber os avisos.</li>
     </ul>

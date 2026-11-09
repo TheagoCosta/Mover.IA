@@ -522,16 +522,26 @@ async function ultimoFimJornada(){
   return error || !data || !data[0] ? null : data[0].fim;
 }
 
+// Manda ler o ticket enviado, em segundo plano. Passar pela aba Jornada cobre também a foto
+// que saiu sem sinal; no máximo uma tentativa por ticket cada vez que o app abre.
+const ticketsJaPedidos = new Set();
+function pedirLeituraTicket(eventoId){
+  if(ticketsJaPedidos.has(eventoId)) return;
+  ticketsJaPedidos.add(eventoId);
+  sb.functions.invoke('ler-ticket', { body: { evento_id: eventoId } }).catch(() => {});
+}
+
 // Paradas dos últimos 7 dias que pediam ticket e ficaram sem foto
 async function ticketsPendentes(){
   const { data, error } = await sb.from('jornada')
-    .select('id, jornada_evento(id, tipo, motivo, criado_em, registrado_em, ticket_exigido, ticket_url, ticket_dispensa)')
+    .select('id, jornada_evento(id, tipo, motivo, criado_em, registrado_em, ticket_exigido, ticket_url, ticket_dispensa, ticket_leitura)')
     .eq('motorista_id', session.user.id).gte('inicio', new Date(Date.now() - 7 * 86400000).toISOString());
   if(error || !data) return [];
   const lista = [];
   data.forEach(j => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
     eventos.forEach(ev => {
+      if(ev.ticket_url && !ev.ticket_leitura) pedirLeituraTicket(ev.id);
       if(!ev.ticket_exigido || ev.ticket_url || ev.ticket_dispensa) return;
       // o fim do dia tem a mesma hora da parada que o fechou
       const pausa = eventos.filter(e => e.tipo === 'pausa' && new Date(e.criado_em) <= new Date(ev.criado_em)).pop();
