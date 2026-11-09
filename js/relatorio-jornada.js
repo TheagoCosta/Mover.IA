@@ -165,7 +165,7 @@ async function baixarPlanilhaJornada(dados){
   const wb = new ExcelJS.Workbook();
   wb.creator = 'MOVER.IA';
   wb.calcProperties.fullCalcOnLoad = true;
-  const P = Math.max(9, ...dados.dias.map(d => d.paradas.length));   // paradas por linha
+  const P = Math.max(6, ...dados.dias.map(d => d.paradas.length));   // paradas por linha: 6 colunas, mais só se algum dia precisar
   const N = Math.max(5, ...dados.dias.map(d => d.noturnos.length));  // trechos noturnos por linha
   const L1 = 6;   // primeira linha de dados
   const periodo = nomeMes(dados.mes);
