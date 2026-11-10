@@ -178,14 +178,15 @@ async function secaoPainel(el){
   // horas de condução por dia (últimos 7 dias, todos os motoristas)
   const dias = [...Array(7)].map((_, i) => inicioDoDia(new Date(Date.now() - (6 - i) * 86400000)));
   const horasDia = dias.map(() => 0);
-  jornadas.forEach(j => {
-    const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+  const partesSemana = dividirPorDescanso(jornadas);   // parada de 11 h ou mais começa outra jornada, como na seção Jornadas
+  partesSemana.forEach(j => {
+    const eventos = [...j.jornada_evento].sort((a, b) => (new Date(a.criado_em) - new Date(b.criado_em)) || (ORDEM_EVENTO[a.tipo] - ORDEM_EVENTO[b.tipo]));
     const idx = dias.findIndex(d => d.getTime() === inicioDoDia(new Date(j.inicio)).getTime());
-    if(idx >= 0) horasDia[idx] += calcularConducao(eventos).totalMin / 60;
+    if(idx >= 0) horasDia[idx] += calcularConducao(eventos, j.fim ? new Date(j.fim) : new Date()).totalMin / 60;
   });
   const letraDia = ['dom','seg','ter','qua','qui','sex','sáb'];
-  const curtosSemana = descansosCurtos(jornadas);
-  const descansoCurtoSemana = jornadas.filter(j => alertaDescanso(j, curtosSemana.get(j.id))).length;
+  const curtosSemana = descansosCurtos(partesSemana);
+  const descansoCurtoSemana = partesSemana.filter(j => alertaDescanso(j, curtosSemana.get(j.id))).length;
   const ticketsRevisarSemana = jornadas.reduce((s, j) => s + (j.jornada_evento || []).filter(ticketARevisar).length, 0);
 
   // viagens abertas por semana (8 semanas, a última é a atual)
@@ -380,19 +381,23 @@ async function secaoJornadas(el){
   const jornadas = await consultar(sb.from('jornada')
     .select('id, inicio, fim, status, assinatura_base64, motorista_id, motorista:motorista_id(nome), jornada_evento(id, tipo, motivo, observacao, criado_em, recebido_em, hora_celular, hora_informada, registrado_em, categoria, ticket_exigido, ticket_url, ticket_dispensa, ticket_leitura, ticket_leitura_dados, ticket_revisado_em)')
     .order('inicio', { ascending:false }).limit(200));
-  const curtos = descansosCurtos(jornadas);
-  const linhas = jornadas.map(j => {
-    const eventos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+  // Parada de 11 h ou mais começa outra linha, como no relatório (dividirPorDescanso, js/relatorio-jornada.js).
+  // l.p = a linha (parte); l.j = a jornada do app, que é o que se corrige ou exclui.
+  const partes = dividirPorDescanso(jornadas);
+  const curtos = descansosCurtos(partes);
+  const linhas = partes.map(p => {
+    const eventos = [...p.jornada_evento].sort((a, b) => (new Date(a.criado_em) - new Date(b.criado_em)) || (ORDEM_EVENTO[a.tipo] - ORDEM_EVENTO[b.tipo]));
     const semTicket = eventos.filter(e => e.ticket_exigido && !e.ticket_url).length;
     const aRevisar = eventos.filter(ticketARevisar).length;
-    return { j, eventos, semTicket, aRevisar, alerta: alertaDescanso(j, curtos.get(j.id)), c: calcularConducao(eventos, j.fim ? new Date(j.fim) : new Date()) };
+    return { p, j: p.original, eventos, semTicket, aRevisar, alerta: alertaDescanso(p, curtos.get(p.id)), c: calcularConducao(eventos, p.fim ? new Date(p.fim) : new Date()) };
   });
-  // Cada ticket com a parada dele. Parada que fechou o dia termina no início da jornada seguinte.
+  // Cada ticket com a parada dele (contada na jornada do app inteira). Parada que fechou o dia termina no início da jornada seguinte.
   const tickets = new Map();
-  linhas.forEach(l => {
-    const seguinte = l.j.fim ? jornadas.filter(x => x.motorista_id === l.j.motorista_id && x.id !== l.j.id && new Date(x.inicio) >= new Date(l.j.fim))
+  jornadas.forEach(j => {
+    const todos = [...(j.jornada_evento || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+    const seguinte = j.fim ? jornadas.filter(x => x.motorista_id === j.motorista_id && x.id !== j.id && new Date(x.inicio) >= new Date(j.fim))
       .sort((a, b) => new Date(a.inicio) - new Date(b.inicio))[0] : null;
-    l.eventos.filter(ev => ev.ticket_url).forEach(ev => tickets.set(ev.id, { ev, linha: l, parada: paradaDoTicket(l.eventos, ev, seguinte ? seguinte.inicio : null) }));
+    todos.filter(ev => ev.ticket_url).forEach(ev => tickets.set(ev.id, { ev, linha: linhas.find(l => l.eventos.includes(ev)), parada: paradaDoTicket(todos, ev, seguinte ? seguinte.inicio : null) }));
   });
   const salvarLeituraTicket = async (id, status, dados, revisado) => {
     const mudancas = { ticket_leitura: status, ticket_leitura_dados: dados, ticket_lido_em: new Date().toISOString(),
@@ -438,15 +443,16 @@ async function secaoJornadas(el){
 
   const nomeMot = (l) => l.j.motorista ? l.j.motorista.nome : '';
   const ordens = [
-    ['recentes', 'Mais recentes primeiro', porData(l => l.j.inicio, -1)],
-    ['antigas', 'Mais antigas primeiro', porData(l => l.j.inicio, 1)],
-    ['az', 'Motorista de A a Z', (a, b) => porTexto(nomeMot)(a, b) || porData(l => l.j.inicio, -1)(a, b)],
-    ['za', 'Motorista de Z a A', (a, b) => porTexto(nomeMot, -1)(a, b) || porData(l => l.j.inicio, -1)(a, b)],
+    ['recentes', 'Mais recentes primeiro', porData(l => l.p.inicio, -1)],
+    ['antigas', 'Mais antigas primeiro', porData(l => l.p.inicio, 1)],
+    ['az', 'Motorista de A a Z', (a, b) => porTexto(nomeMot)(a, b) || porData(l => l.p.inicio, -1)(a, b)],
+    ['za', 'Motorista de Z a A', (a, b) => porTexto(nomeMot, -1)(a, b) || porData(l => l.p.inicio, -1)(a, b)],
     ['conducao', 'Maior tempo de condução', porNumero(l => l.c.totalMin, -1)],
-    ['abertas', 'Em andamento primeiro', (a, b) => ((a.j.status === 'encerrada') - (b.j.status === 'encerrada')) || porData(l => l.j.inicio, -1)(a, b)],
+    ['abertas', 'Em andamento primeiro', (a, b) => ((a.p.status === 'encerrada') - (b.p.status === 'encerrada')) || porData(l => l.p.inicio, -1)(a, b)],
     ['revisar', 'Tickets para revisar primeiro', porNumero(l => l.aRevisar, -1)],
   ];
-  const textoLinha = (l) => [nomeMot(l), fmtData(l.j.inicio), ROTULO_JORNADA[l.j.status]].join(' ');
+  const textoLinha = (l) => [nomeMot(l), fmtData(l.p.inicio), ROTULO_JORNADA[l.p.status]].join(' ');
+  const avisoParte = (p) => p.partes > 1 ? ` ${badge('blue', `Parte ${p.parte} de ${p.partes}`)}` : '';
   let visiveis = linhas;
   el.innerHTML = `<div style="margin-bottom:12px;"><button type="button" class="btn btn-primary btn-sm" id="btnRelatorioJornada">${ic('doc', 15)} Relatório de jornada (Excel e PDF)</button></div>
     ${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="leituraTickets" class="l2" style="margin-bottom:8px;"></div><div id="listaJornadas"></div>`;
@@ -456,7 +462,7 @@ async function secaoJornadas(el){
     const caixa = document.getElementById('listaJornadas');
     caixa.innerHTML = painel(`Registro de jornadas (${visiveis.length})`,
       visiveis.length ? tabela(['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
-        visiveis.map(({ j, c, semTicket, aRevisar, alerta }) => `<tr class="clickable" data-jornada="${j.id}"><td>${esc(j.motorista ? j.motorista.nome : '—')}</td><td>${fmtData(j.inicio)}</td><td class="mono">${fmtHora(j.inicio)}</td><td class="mono">${j.fim ? fmtHora(j.fim) : '—'}</td><td class="mono">${fmtMinutos(c.totalMin)}</td><td>${c.paradas}${semTicket ? ` ${badge('amber', `${semTicket} sem ticket`)}` : ''}${aRevisar ? ` ${badge('red', `${aRevisar} ticket${aRevisar > 1 ? 's' : ''} para revisar`)}` : ''}</td><td>${badge(COR_JORNADA[j.status], ROTULO_JORNADA[j.status])}${alerta ? ` ${badge('red', alerta)}` : ''}</td></tr>`))
+        visiveis.map(({ p, j, c, semTicket, aRevisar, alerta }) => `<tr class="clickable" data-jornada="${esc(p.id)}"><td>${esc(j.motorista ? j.motorista.nome : '—')}</td><td>${fmtData(p.inicio)}</td><td class="mono">${fmtHora(p.inicio)}</td><td class="mono">${p.fim ? fmtHora(p.fim) : '—'}</td><td class="mono">${fmtMinutos(c.totalMin)}</td><td>${c.paradas}${semTicket ? ` ${badge('amber', `${semTicket} sem ticket`)}` : ''}${aRevisar ? ` ${badge('red', `${aRevisar} ticket${aRevisar > 1 ? 's' : ''} para revisar`)}` : ''}</td><td>${badge(COR_JORNADA[p.status], ROTULO_JORNADA[p.status])}${avisoParte(p)}${alerta ? ` ${badge('red', alerta)}` : ''}</td></tr>`))
         : vazio(jornadas.length ? 'Nenhuma jornada encontrada nesta pesquisa.' : 'Nenhuma jornada registrada ainda.'),
       visiveis.length ? botaoExportar('btnCsvJornadas') : '');
     ligarLinhas(caixa);
@@ -464,11 +470,14 @@ async function secaoJornadas(el){
 
   const ligarLinhas = (caixa) => {
   caixa.querySelectorAll('[data-jornada]').forEach(tr => tr.addEventListener('click', () => {
-    const { j, eventos, c, alerta } = linhas.find(l => l.j.id === tr.dataset.jornada);
-    abrirModal(`${j.motorista ? j.motorista.nome : 'Jornada'} — ${fmtData(j.inicio)}`, `
-      <div class="l2" style="margin-bottom:10px;">Condução: <b>${fmtMinutos(c.totalMin)}</b> · Trabalho parado: <b>${fmtMinutos(c.trabalhoParadoMin)}</b> · Descanso: <b>${fmtMinutos(c.descansoMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[j.status])}</div>
+    const { p, j, eventos, c, alerta } = linhas.find(l => l.p.id === tr.dataset.jornada);
+    abrirModal(`${j.motorista ? j.motorista.nome : 'Jornada'} — ${fmtData(p.inicio)}`, `
+      ${p.partes > 1 ? `<div class="l2" style="margin-bottom:10px;">${badge('blue', `Parte ${p.parte} de ${p.partes}`)} O motorista ficou 11 h ou mais parado sem encerrar o dia no app (jornada aberta em ${fmtData(j.inicio)} às ${fmtHora(j.inicio)}), então cada trecho virou uma linha. Corrigir ou excluir vale para a jornada inteira.</div>` : ''}
+      <div class="l2" style="margin-bottom:10px;">Condução: <b>${fmtMinutos(c.totalMin)}</b> · Trabalho parado: <b>${fmtMinutos(c.trabalhoParadoMin)}</b> · Descanso: <b>${fmtMinutos(c.descansoMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[p.status])}</div>
       ${alerta ? `<div style="margin-bottom:10px;">${badge('red', `${alerta} (mínimo de 11 horas)`)}</div>` : ''}
-      ${eventos.map(ev => `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}${marcaSemSinal(ev)}${detalheEvento(ev)}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
+      ${eventos.map(ev => ev.automatico
+        ? `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>Fim do dia</b><div class="l2">Parada de 11 h ou mais: o resto continua na linha seguinte</div></div></div>`
+        : `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}${marcaSemSinal(ev)}${detalheEvento(ev)}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
       ${imgAssinatura(j.assinatura_base64) ? `<div class="section-label">Assinatura do motorista</div>${imgAssinatura(j.assinatura_base64, 'width:100%; background:#fff; border:1px solid var(--border); border-radius:8px;')}` : ''}
       <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="btnCorrigirJornada">Corrigir horários / encerrar</button>
@@ -519,7 +528,7 @@ async function secaoJornadas(el){
   }));
   const b = document.getElementById('btnCsvJornadas');
   if(b) b.addEventListener('click', () => baixarCSV('jornadas', ['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Trabalho parado', 'Descanso', 'Paradas', 'Paradas sem ticket', 'Tickets para revisar', 'Descanso abaixo de 11 h', 'Status'],
-    visiveis.map(({ j, c, semTicket, aRevisar, alerta }) => [j.motorista ? j.motorista.nome : '', fmtData(j.inicio), fmtHora(j.inicio), j.fim ? fmtHora(j.fim) : '', fmtMinutos(c.totalMin), fmtMinutos(c.trabalhoParadoMin), fmtMinutos(c.descansoMin), c.paradas, semTicket, aRevisar, alerta, ROTULO_JORNADA[j.status]])));
+    visiveis.map(({ p, j, c, semTicket, aRevisar, alerta }) => [j.motorista ? j.motorista.nome : '', fmtData(p.inicio), fmtHora(p.inicio), p.fim ? fmtHora(p.fim) : '', fmtMinutos(c.totalMin), fmtMinutos(c.trabalhoParadoMin), fmtMinutos(c.descansoMin), c.paradas, semTicket, aRevisar, alerta, ROTULO_JORNADA[p.status]])));
   };
   desenhar();
   ligarBarraLista(el, 'jornadas', desenhar);

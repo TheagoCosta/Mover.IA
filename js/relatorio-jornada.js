@@ -31,25 +31,30 @@ const DESCANSO_NOVA_JORNADA_MIN = 11 * 60;   // parado 11 h ou mais: começa out
 
 // Quebra a jornada do app em mais de uma quando há parada de 11 h ou mais: a parada vira o fim
 // de jornada da linha (com o motivo dela) e a volta ao trabalho é o início da linha seguinte.
+// Usado no relatório e na tela de Jornadas do escritório. Cada parte guarda a jornada do app em
+// "original" (corrigir e excluir valem para ela inteira); a 1ª parte mantém o id, as outras ganham "id:n".
 function dividirPorDescanso(jornadas){
   const saida = [];
   jornadas.forEach(j => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => (new Date(a.criado_em) - new Date(b.criado_em)) || (ORDEM_EVENTO[a.tipo] - ORDEM_EVENTO[b.tipo]));
-    let parte = { ...j, fim: null, jornada_evento: [] }, pausa = null;
+    const partes = [];
+    const nova = (inicio) => ({ ...j, id: partes.length ? `${j.id}:${partes.length}` : j.id, original: j, inicio, fim: null, jornada_evento: [] });
+    let parte = nova(j.inicio), pausa = null;
     eventos.forEach(ev => {
       if(ev.tipo === 'retomada' && pausa && (new Date(ev.criado_em) - new Date(pausa.criado_em)) / 60000 >= DESCANSO_NOVA_JORNADA_MIN){
-        parte.jornada_evento.push({ tipo: 'fim', motivo: null, criado_em: pausa.criado_em });
-        parte.fim = pausa.criado_em;
-        saida.push(parte);
-        parte = { ...j, inicio: ev.criado_em, fim: null, jornada_evento: [] };
+        parte.jornada_evento.push({ tipo: 'fim', motivo: null, criado_em: pausa.criado_em, automatico: true });
+        parte.fim = pausa.criado_em; parte.status = 'encerrada';
+        partes.push(parte);
+        parte = nova(ev.criado_em);
         pausa = null;
-        return;
       }
-      if(ev.tipo === 'pausa') pausa = ev; else if(ev.tipo === 'retomada') pausa = null;
-      parte.jornada_evento.push(ev);
+      else if(ev.tipo === 'pausa') pausa = ev; else if(ev.tipo === 'retomada') pausa = null;
+      parte.jornada_evento.push(ev);   // a volta da parada longa abre a parte seguinte
     });
     parte.fim = j.fim;
-    saida.push(parte);
+    partes.push(parte);
+    partes.forEach((p, n) => { p.parte = n + 1; p.partes = partes.length; });
+    saida.push(...partes);
   });
   return saida;
 }
