@@ -25,11 +25,39 @@ function codigoParada(motivo, fimDoDia){
   return fimDoDia && c === '0' ? '4' : c;
 }
 
-// ---------- contas: um dia (jornada) por linha ----------
+// mesmo horário: o fim de uma parada vem antes do começo da seguinte
+const ORDEM_EVENTO = { inicio: 0, retomada: 1, pausa: 2, fim: 3 };
+const DESCANSO_NOVA_JORNADA_MIN = 11 * 60;   // parado 11 h ou mais: começa outra jornada (outra linha), mesmo no mesmo dia
+
+// Quebra a jornada do app em mais de uma quando há parada de 11 h ou mais: a parada vira o fim
+// de jornada da linha (com o motivo dela) e a volta ao trabalho é o início da linha seguinte.
+function dividirPorDescanso(jornadas){
+  const saida = [];
+  jornadas.forEach(j => {
+    const eventos = [...(j.jornada_evento || [])].sort((a, b) => (new Date(a.criado_em) - new Date(b.criado_em)) || (ORDEM_EVENTO[a.tipo] - ORDEM_EVENTO[b.tipo]));
+    let parte = { ...j, fim: null, jornada_evento: [] }, pausa = null;
+    eventos.forEach(ev => {
+      if(ev.tipo === 'retomada' && pausa && (new Date(ev.criado_em) - new Date(pausa.criado_em)) / 60000 >= DESCANSO_NOVA_JORNADA_MIN){
+        parte.jornada_evento.push({ tipo: 'fim', motivo: null, criado_em: pausa.criado_em });
+        parte.fim = pausa.criado_em;
+        saida.push(parte);
+        parte = { ...j, inicio: ev.criado_em, fim: null, jornada_evento: [] };
+        pausa = null;
+        return;
+      }
+      if(ev.tipo === 'pausa') pausa = ev; else if(ev.tipo === 'retomada') pausa = null;
+      parte.jornada_evento.push(ev);
+    });
+    parte.fim = j.fim;
+    saida.push(parte);
+  });
+  return saida;
+}
+
+// ---------- contas: uma jornada por linha ----------
 function diasDoRelatorio(jornadas, proxima){
-  // mesmo horário: o fim de uma parada vem antes do começo da seguinte
-  const ordem = { inicio: 0, retomada: 1, pausa: 2, fim: 3 };
-  const lista = [...jornadas].sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
+  const ordem = ORDEM_EVENTO;
+  const lista = dividirPorDescanso(jornadas).sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
   return lista.map((j, i) => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => (new Date(a.criado_em) - new Date(b.criado_em)) || (ordem[a.tipo] - ordem[b.tipo]));
     const inicio = new Date(j.inicio);
