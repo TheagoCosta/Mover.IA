@@ -245,7 +245,13 @@ async function baixarPlanilhaJornada(dados){
     ['intra', 'Intra Jornada'], ['indenIntra', 'Indenizado Intra Jornada'], ['espera', 'Chegada em destino'], ['patio', 'Pátio'], ['descansoDestino', 'Chegada Destino Descanso'], ['parado', 'Parado'], ['but', 'Balança / Usina / Terminal']];
   CONTAS.forEach(([k], i) => { ec[k] = ec.estadia + 1 + i; });
   const ultimaE = ec.but;
-  topo(we, ec.data, ec.estadia);
+  // como no modelo da transportadora, o espelho esconde início, paradas e fim (já estão no lançamento)
+  // e mostra só mês, data, origem e as horas; o cabeçalho fica nas colunas visíveis
+  if(dados.empresa){ we.getCell(1, ec.data).value = dados.empresa; we.getCell(1, ec.data).font = { name: 'Arial', size: 10, color: { argb: 'FF666666' } }; }
+  we.getCell(2, ec.data).value = 'Espelho de jornada'; we.getCell(2, ec.data).font = { ...negrito, size: 14 };
+  we.getCell(3, ec.data).value = 'Período: ' + periodo; we.getCell(3, ec.data).font = negrito;
+  we.getCell(1, ec.origem).value = 'Motorista: ' + dados.motorista.nome; we.getCell(1, ec.origem).font = negrito;
+  we.getCell(2, ec.origem).value = 'Placa: ' + (dados.placa || '—'); we.getCell(2, ec.origem).font = negrito;
   cab(we, 4, ec.data, 'Início Jornada', ec.inicio);
   for(let k = 0; k < P; k++) cab(we, 4, ec.parada(k), `${k + 1}ª Parada`, ec.parada(k) + 2);
   cab(we, 4, ec.fim, 'Fim Jornada', ec.estadia);
@@ -337,6 +343,7 @@ async function baixarPlanilhaJornada(dados){
   wl.columns.forEach((col, i) => { col.width = i + 1 === lc.data ? 12 : i + 1 === lc.origem ? 16 : 8; });
   we.columns.forEach((col, i) => { const n = i + 1; col.width = n === ec.serial ? 3 : n === ec.data ? 12 : n === ec.origem ? 16 : n >= ec.direcao ? 12 : 8; });
   we.getColumn(ec.serial).hidden = true;
+  for(let n = ec.inicio; n <= ec.estadia; n++) we.getColumn(n).hidden = true;
 
   const buf = await wb.xlsx.writeBuffer();
   baixarArquivo(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nomeArquivoJornada(dados, 'xlsx'));
@@ -370,23 +377,22 @@ async function baixarPdfJornada(dados){
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.text(t, x + 3, 35);
   });
 
-  const cab = ['Data', 'Início', 'Paradas', 'Fim', 'Mot.', 'Direção', 'Noturna', 'Carga/ desc.', 'Total', 'Inter jornada', 'Indeniz. inter', 'Intra jornada', 'Indeniz. intra', 'Espera CC/CD', 'Pátio', 'Descanso destino', 'Parado', 'Bal./Usi./ Term.'];
+  // como o espelho do Excel: sem as paradas (elas ficam na aba de lançamento da planilha)
+  const cab = ['Data', 'Início', 'Fim', 'Direção', 'Noturna', 'Carga/ desc.', 'Total', 'Inter jornada', 'Indeniz. inter', 'Intra jornada', 'Indeniz. intra', 'Espera CC/CD', 'Pátio', 'Descanso destino', 'Parado', 'Bal./Usi./ Term.'];
   const semana = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
   const corpo = dados.dias.map(d => {
     const f = (t) => (t ? fmtHora(t.toISOString()) : '—');
-    return [`${fmtDataCurta(d.inicio.toISOString())} ${semana[d.inicio.getDay()]}`, f(d.inicio),
-      d.paradas.map(p => `${p.codigo} ${f(p.inicio)}–${p.fim ? f(p.fim) : '...'}`).join('\n') || '—',
-      d.fim ? f(d.fim) : 'em aberto', d.fimMotivo || '—',
+    return [`${fmtDataCurta(d.inicio.toISOString())} ${semana[d.inicio.getDay()]}`, f(d.inicio), d.fim ? f(d.fim) : 'em aberto',
       ...['direcao', 'noturna', 'carga', 'total', 'inter', 'indenInter', 'intra', 'indenIntra', 'espera', 'patio', 'descansoDestino', 'parado', 'but'].map(k => hhmmOuTraco(d.c[k]))];
   });
-  const rodape = ['Total', '', `${dados.dias.reduce((s, d) => s + d.paradas.length, 0)} paradas`, '', '',
+  const rodape = ['Total do mês', '', '',
     ...['direcao', 'noturna', 'carga', 'total', 'inter', 'indenInter', 'intra', 'indenIntra', 'espera', 'patio', 'descansoDestino', 'parado', 'but'].map(k => hhmm(tot(k)))];
   doc.autoTable({
     head: [cab], body: corpo, foot: [rodape], startY: 41, theme: 'grid', margin: { left: 10, right: 10 },
-    styles: { font: 'helvetica', fontSize: 7, cellPadding: 1.2, valign: 'middle', halign: 'center', lineColor: [210, 210, 210] },
+    styles: { font: 'helvetica', fontSize: 7, cellPadding: 0.8, valign: 'middle', halign: 'center', lineColor: [210, 210, 210] },
     headStyles: { fillColor: [244, 241, 234], textColor: 30, fontStyle: 'bold' },
     footStyles: { fillColor: [255, 242, 204], textColor: 30, fontStyle: 'bold' },
-    columnStyles: { 0: { halign: 'left', cellWidth: 16 }, 2: { halign: 'left', cellWidth: 34 } },
+    columnStyles: { 0: { halign: 'left', cellWidth: 18 } },
     showFoot: 'lastPage',
     didDrawPage: () => {
       doc.setFontSize(7); doc.setTextColor(120);
@@ -395,13 +401,13 @@ async function baixarPdfJornada(dados){
     },
   });
 
-  let y = doc.lastAutoTable.finalY + 6;
+  let y = doc.lastAutoTable.finalY + 4;
   const H = doc.internal.pageSize.getHeight();
-  if(y > H - 40){ doc.addPage(); y = 15; }
+  if(y > H - 27){ doc.addPage(); y = 15; }   // legenda e assinaturas na mesma folha do mês, se couberem
   doc.setFontSize(7); doc.setTextColor(90);
-  doc.text(doc.splitTextToSize('Legenda: ' + LEGENDA_PARADAS.replace(/\s{2,}/g, ' ') + '. Horários informados pelo motorista no app; fora das paradas o tempo conta como direção. Inter jornada: o maior entre espera, pátio, descanso no destino e parado; intra jornada: a soma dos outros. Indenizado: o que faltou para 11 h (inter) e 1 h (intra).', W - 20), 10, y);
+  doc.text(doc.splitTextToSize('Horários informados pelo motorista no app (as paradas de cada dia estão na planilha, aba Lançamento horários); fora das paradas o tempo conta como direção. Parada de 11 h ou mais encerra a jornada e a volta começa outra linha. Inter jornada: o maior entre espera, pátio, descanso no destino e parado; intra jornada: a soma dos outros. Indenizado: o que faltou para 11 h (inter) e 1 h (intra).', W - 20), 10, y);
   doc.setTextColor(0);
-  y += 22;
+  y += 15;
   doc.setDrawColor(80);
   doc.line(20, y, 120, y); doc.line(W - 120, y, W - 20, y);
   doc.setFontSize(8);
