@@ -472,7 +472,7 @@ async function secaoJornadas(el){
   caixa.querySelectorAll('[data-jornada]').forEach(tr => tr.addEventListener('click', () => {
     const { p, j, eventos, c, alerta } = linhas.find(l => l.p.id === tr.dataset.jornada);
     abrirModal(`${j.motorista ? j.motorista.nome : 'Jornada'} — ${fmtData(p.inicio)}`, `
-      ${p.partes > 1 ? `<div class="l2" style="margin-bottom:10px;">${badge('blue', `Parte ${p.parte} de ${p.partes}`)} O motorista ficou 11 h ou mais parado sem encerrar o dia no app (jornada aberta em ${fmtData(j.inicio)} às ${fmtHora(j.inicio)}), então cada trecho virou uma linha. Corrigir ou excluir vale para a jornada inteira.</div>` : ''}
+      ${p.partes > 1 ? `<div class="l2" style="margin-bottom:10px;">${badge('blue', `Parte ${p.parte} de ${p.partes}`)} O motorista ficou 11 h ou mais em parada de descanso (posto, garagem, pátio) sem encerrar o dia no app (jornada aberta em ${fmtData(j.inicio)} às ${fmtHora(j.inicio)}), então cada trecho virou uma linha. Corrigir ou excluir vale para a jornada inteira.</div>` : ''}
       <div class="l2" style="margin-bottom:10px;">Condução: <b>${fmtMinutos(c.totalMin)}</b> · Trabalho parado: <b>${fmtMinutos(c.trabalhoParadoMin)}</b> · Descanso: <b>${fmtMinutos(c.descansoMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[p.status])}</div>
       ${alerta ? `<div style="margin-bottom:10px;">${badge('red', `${alerta} (mínimo de 11 horas)`)}</div>` : ''}
       ${eventos.map(ev => ev.automatico

@@ -28,8 +28,11 @@ function codigoParada(motivo, fimDoDia){
 // mesmo horário: o fim de uma parada vem antes do começo da seguinte
 const ORDEM_EVENTO = { inicio: 0, retomada: 1, pausa: 2, fim: 3 };
 const DESCANSO_NOVA_JORNADA_MIN = 11 * 60;   // parado 11 h ou mais: começa outra jornada (outra linha), mesmo no mesmo dia
+// Só parada de descanso quebra a linha (0 - posto/garagem/parada e P - pátio). Carregamento, descarga e espera
+// na chegada (CC/CD) ficam na mesma linha mesmo passando de 11 h, como o escritório lança (pedido do Thiago, 18/11).
+const CODIGOS_DESCANSO_NOVA_JORNADA = ['0', 'P'];
 
-// Quebra a jornada do app em mais de uma quando há parada de 11 h ou mais: a parada vira o fim
+// Quebra a jornada do app em mais de uma quando há parada de descanso de 11 h ou mais: a parada vira o fim
 // de jornada da linha (com o motivo dela) e a volta ao trabalho é o início da linha seguinte.
 // Usado no relatório e na tela de Jornadas do escritório. Cada parte guarda a jornada do app em
 // "original" (corrigir e excluir valem para ela inteira); a 1ª parte mantém o id, as outras ganham "id:n".
@@ -41,7 +44,8 @@ function dividirPorDescanso(jornadas){
     const nova = (inicio) => ({ ...j, id: partes.length ? `${j.id}:${partes.length}` : j.id, original: j, inicio, fim: null, jornada_evento: [] });
     let parte = nova(j.inicio), pausa = null;
     eventos.forEach(ev => {
-      if(ev.tipo === 'retomada' && pausa && (new Date(ev.criado_em) - new Date(pausa.criado_em)) / 60000 >= DESCANSO_NOVA_JORNADA_MIN){
+      if(ev.tipo === 'retomada' && pausa && CODIGOS_DESCANSO_NOVA_JORNADA.includes(codigoParada(pausa.motivo, false))
+        && (new Date(ev.criado_em) - new Date(pausa.criado_em)) / 60000 >= DESCANSO_NOVA_JORNADA_MIN){
         parte.jornada_evento.push({ tipo: 'fim', motivo: null, criado_em: pausa.criado_em, automatico: true });
         parte.fim = pausa.criado_em; parte.status = 'encerrada';
         partes.push(parte);
@@ -137,21 +141,27 @@ async function abrirRelatorioJornada(){
     <label class="l2" for="rjMotorista">Motorista</label>
     <select id="rjMotorista" style="width:100%; margin:4px 0 12px;">${motoristas.map(u => `<option value="${u.id}">${esc(u.nome)}${u.ativo ? '' : ' (desativado)'}</option>`).join('')}</select>
     <label class="l2" for="rjMes">Mês</label>
-    <input type="month" id="rjMes" value="${mes}" style="width:100%; margin:4px 0 16px;">
+    <input type="month" id="rjMes" value="${mes}" style="width:100%; margin:4px 0 8px;">
+    <label class="l2" style="display:flex; gap:8px; align-items:center; margin-bottom:16px;"><input type="checkbox" id="rjAno"> <span id="rjAnoTexto">Ano inteiro</span></label>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
       <button type="button" class="btn btn-primary btn-sm" id="rjExcel">${ic('download', 15)} Baixar planilha (Excel)</button>
       <button type="button" class="btn btn-outline btn-sm" id="rjPdf">${ic('doc', 15)} Baixar PDF</button>
     </div>
     <div class="l2" id="rjStatus" style="margin-top:10px;"></div>`);
   const status = document.getElementById('rjStatus');
+  // ano inteiro: o ano do mês escolhido, todos os meses num arquivo só (como as planilhas da transportadora)
+  const textoAno = () => { const v = document.getElementById('rjMes').value; document.getElementById('rjAnoTexto').textContent = v ? `Ano inteiro (todos os meses de ${v.slice(0, 4)})` : 'Ano inteiro'; };
+  document.getElementById('rjMes').addEventListener('input', textoAno); textoAno();
   const gerar = async (tipo, btn) => {
     const motorista = motoristas.find(u => u.id === document.getElementById('rjMotorista').value);
-    const mesEscolhido = document.getElementById('rjMes').value;
-    if(!motorista || !mesEscolhido){ status.textContent = 'Escolha o motorista e o mês.'; return; }
+    const mesCampo = document.getElementById('rjMes').value;
+    const anoInteiro = document.getElementById('rjAno').checked;
+    if(!motorista || !mesCampo){ status.textContent = 'Escolha o motorista e o mês.'; return; }
+    const periodo = anoInteiro ? mesCampo.slice(0, 4) : mesCampo;
     btn.disabled = true; status.textContent = 'Montando o relatório...';
     try{
-      const dados = await dadosRelatorioJornada(motorista, mesEscolhido);
-      if(!dados.dias.length){ status.textContent = 'Nenhuma jornada deste motorista no mês.'; return; }
+      const dados = await dadosRelatorioJornada(motorista, periodo);
+      if(!dados.dias.length){ status.textContent = `Nenhuma jornada deste motorista ${anoInteiro ? 'no ano' : 'no mês'}.`; return; }
       if(tipo === 'excel') await baixarPlanilhaJornada(dados); else await baixarPdfJornada(dados);
       status.textContent = '✅ Pronto. O arquivo foi baixado.';
     } catch(e){ status.textContent = 'Não consegui gerar: ' + (e.message || e); }
@@ -161,8 +171,18 @@ async function abrirRelatorioJornada(){
   document.getElementById('rjPdf').addEventListener('click', (e) => gerar('pdf', e.currentTarget));
 }
 
+// mes: 'AAAA-MM' (um mês) ou 'AAAA' (ano inteiro)
+const ehAnoInteiro = (mes) => /^\d{4}$/.test(mes);
+function limitesPeriodo(mes){
+  if(!ehAnoInteiro(mes)) return limitesMes(mes);
+  const a = Number(mes);
+  return { inicio: new Date(a, 0, 1), fim: new Date(a + 1, 0, 1) };
+}
+const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const nomePeriodo = (mes) => (ehAnoInteiro(mes) ? `Ano de ${mes}` : nomeMes(mes));
+
 async function dadosRelatorioJornada(motorista, mes){
-  const { inicio, fim } = limitesMes(mes);
+  const { inicio, fim } = limitesPeriodo(mes);
   const campos = 'id, inicio, fim, status, jornada_evento(tipo, motivo, criado_em)';
   const [jr, pr, cj] = await Promise.all([
     sb.from('jornada').select(campos).eq('motorista_id', motorista.id).gte('inicio', inicio.toISOString()).lt('inicio', fim.toISOString()).order('inicio'),
@@ -201,7 +221,7 @@ async function baixarPlanilhaJornada(dados){
   const P = Math.max(6, ...dados.dias.map(d => d.paradas.length));   // paradas por linha: 6 colunas, mais só se algum dia precisar
   const N = Math.max(5, ...dados.dias.map(d => d.noturnos.length));  // trechos noturnos por linha
   const L1 = 6;   // primeira linha de dados
-  const periodo = nomeMes(dados.mes);
+  const periodo = nomePeriodo(dados.mes);
 
   const fonte = { name: 'Arial', size: 11 }, negrito = { name: 'Arial', size: 12, bold: true };
   const borda = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
@@ -345,6 +365,29 @@ async function baixarPlanilhaJornada(dados){
   we.getColumn(ec.serial).hidden = true;
   for(let n = ec.inicio; n <= ec.estadia; n++) we.getColumn(n).hidden = true;
 
+  // ===== ano inteiro: aba com o total de cada mês (soma o espelho pela coluna Mês ref.) =====
+  if(ehAnoInteiro(dados.mes)){
+    const wt = wb.addWorksheet('TOTAIS POR MÊS');
+    wt.getCell(1, 2).value = `${dados.motorista.nome} — ${periodo}`; wt.getCell(1, 2).font = { ...negrito, size: 13 };
+    wt.getCell(2, 2).value = 'Total de cada mês (vem da aba ESPELHO; corrigir o lançamento atualiza aqui).'; wt.getCell(2, 2).font = { name: 'Arial', size: 9, color: { argb: 'FF666666' } };
+    cab(wt, 4, 2, 'Mês'); cab(wt, 4, 3, 'Jornadas');
+    CONTAS.forEach(([, t], i) => cab(wt, 4, 4 + i, t));
+    const ESP = `'${ABA_ESPELHO}'!`, faixa = (c) => `${ESP}$${letraColuna(c)}$${L1}:$${letraColuna(c)}$${ultimaLinha}`;
+    MESES.forEach((nome, m) => {
+      const r = 5 + m, doMes = dados.dias.filter(d => d.inicio.getMonth() === m);
+      const set = (c, v, fmt) => { const cel = wt.getCell(r, c); cel.value = v; cel.font = fonte; cel.border = borda; if(fmt) cel.numFmt = fmt; };
+      set(2, nome); set(3, { formula: `COUNTIF(${faixa(ec.mes)},${m + 1})`, result: doMes.length });
+      CONTAS.forEach(([k], i) => set(4 + i, { formula: `SUMIF(${faixa(ec.mes)},${m + 1},${faixa(ec[k])})`, result: dia(doMes.reduce((s, d) => s + d.c[k], 0)) }, '[h]:mm'));
+    });
+    const rt = 17, setT = (c, v, fmt) => { const cel = wt.getCell(rt, c); cel.value = v; cel.font = { ...fonte, bold: true }; cel.border = borda; cel.fill = amarelo; if(fmt) cel.numFmt = fmt; };
+    setT(2, 'Total do ano'); setT(3, { formula: 'SUM(C5:C16)', result: dados.dias.length });
+    CONTAS.forEach(([k], i) => { const L = letraColuna(4 + i); setT(4 + i, { formula: `SUM(${L}5:${L}16)`, result: dia(dados.dias.reduce((s, d) => s + d.c[k], 0)) }, '[h]:mm'); });
+    wt.getRow(4).height = 46;
+    wt.columns.forEach((col, i) => { col.width = i === 0 ? 2 : i === 1 ? 14 : i === 2 ? 10 : 13; });
+    wt.views = [{ state: 'frozen', ySplit: 4 }];
+    wt.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+  }
+
   const buf = await wb.xlsx.writeBuffer();
   baixarArquivo(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nomeArquivoJornada(dados, 'xlsx'));
 }
@@ -354,65 +397,84 @@ async function baixarPlanilhaJornada(dados){
 const hhmm = (min) => { min = Math.max(0, Math.floor((min || 0) + 1e-6)); return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`; };
 const hhmmOuTraco = (min) => (min >= 0.5 ? hhmm(min) : '—');
 
+const CONTAS_PDF = ['direcao', 'noturna', 'carga', 'total', 'inter', 'indenInter', 'intra', 'indenIntra', 'espera', 'patio', 'descansoDestino', 'parado', 'but'];
+const CAB_CONTAS_PDF = ['Direção', 'Noturna', 'Carga/ desc.', 'Total', 'Inter jornada', 'Indeniz. inter', 'Intra jornada', 'Indeniz. intra', 'Espera CC/CD', 'Pátio', 'Descanso destino', 'Parado', 'Bal./Usi./ Term.'];
+
+// Um mês: uma folha com os totais, uma linha por jornada, legenda e assinaturas. No ano inteiro, um mês por folha
+// e no fim uma folha com o total de cada mês.
 async function baixarPdfJornada(dados){
   await carregarBiblioteca('jspdf');
   await carregarBiblioteca('jspdfTabela');
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const W = doc.internal.pageSize.getWidth();
-  const tot = (k) => dados.dias.reduce((s, d) => s + d.c[k], 0);
-
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
-  doc.text('Espelho de jornada — Diário de bordo', 10, 13);
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  doc.text([`Motorista: ${dados.motorista.nome}`, `Placa: ${dados.placa || '—'}    Período: ${nomeMes(dados.mes)}`], 10, 19);
-  doc.text([dados.empresa || '', `Gerado em ${fmtDataHora(new Date().toISOString())} · MOVER.IA`], W - 10, 13, { align: 'right' });
-
-  const resumo = [['Direção', tot('direcao')], ['Hora noturna', tot('noturna')], ['Carga/descarga', tot('carga')], ['Total', tot('total')], ['Indenizado inter', tot('indenInter')], ['Indenizado intra', tot('indenIntra')]];
-  const lb = (W - 20) / resumo.length;
-  resumo.forEach(([t, v], i) => {
-    const x = 10 + i * lb;
-    doc.setDrawColor(220); doc.roundedRect(x, 25, lb - 3, 12, 1.5, 1.5);
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text(hhmm(v), x + 3, 31);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.text(t, x + 3, 35);
-  });
-
-  // como o espelho do Excel: sem as paradas (elas ficam na aba de lançamento da planilha)
-  const cab = ['Data', 'Início', 'Fim', 'Direção', 'Noturna', 'Carga/ desc.', 'Total', 'Inter jornada', 'Indeniz. inter', 'Intra jornada', 'Indeniz. intra', 'Espera CC/CD', 'Pátio', 'Descanso destino', 'Parado', 'Bal./Usi./ Term.'];
-  const semana = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
-  const corpo = dados.dias.map(d => {
-    const f = (t) => (t ? fmtHora(t.toISOString()) : '—');
-    return [`${fmtDataCurta(d.inicio.toISOString())} ${semana[d.inicio.getDay()]}`, f(d.inicio), d.fim ? f(d.fim) : 'em aberto',
-      ...['direcao', 'noturna', 'carga', 'total', 'inter', 'indenInter', 'intra', 'indenIntra', 'espera', 'patio', 'descansoDestino', 'parado', 'but'].map(k => hhmmOuTraco(d.c[k]))];
-  });
-  const rodape = ['Total do mês', '', '',
-    ...['direcao', 'noturna', 'carga', 'total', 'inter', 'indenInter', 'intra', 'indenIntra', 'espera', 'patio', 'descansoDestino', 'parado', 'but'].map(k => hhmm(tot(k)))];
-  doc.autoTable({
-    head: [cab], body: corpo, foot: [rodape], startY: 41, theme: 'grid', margin: { left: 10, right: 10 },
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  const soma = (dias, k) => dias.reduce((s, d) => s + d.c[k], 0);
+  const numerar = () => {
+    doc.setFontSize(7); doc.setTextColor(120);
+    doc.text(`Página ${doc.internal.getNumberOfPages()}`, W - 10, H - 5, { align: 'right' });
+    doc.setTextColor(0);
+  };
+  const topo = (titulo, periodo) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
+    doc.text(titulo, 10, 13);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    doc.text([`Motorista: ${dados.motorista.nome}`, `Placa: ${dados.placa || '—'}    Período: ${periodo}`], 10, 19);
+    doc.text([dados.empresa || '', `Gerado em ${fmtDataHora(new Date().toISOString())} · MOVER.IA`], W - 10, 13, { align: 'right' });
+  };
+  const estilo = {
+    theme: 'grid', margin: { left: 10, right: 10 },
     styles: { font: 'helvetica', fontSize: 7, cellPadding: 0.8, valign: 'middle', halign: 'center', lineColor: [210, 210, 210] },
     headStyles: { fillColor: [244, 241, 234], textColor: 30, fontStyle: 'bold' },
     footStyles: { fillColor: [255, 242, 204], textColor: 30, fontStyle: 'bold' },
-    columnStyles: { 0: { halign: 'left', cellWidth: 18 } },
-    showFoot: 'lastPage',
-    didDrawPage: () => {
-      doc.setFontSize(7); doc.setTextColor(120);
-      doc.text(`Página ${doc.internal.getNumberOfPages()}`, W - 10, doc.internal.pageSize.getHeight() - 5, { align: 'right' });
-      doc.setTextColor(0);
-    },
-  });
+    showFoot: 'lastPage', didDrawPage: numerar,
+  };
 
-  let y = doc.lastAutoTable.finalY + 4;
-  const H = doc.internal.pageSize.getHeight();
-  if(y > H - 27){ doc.addPage(); y = 15; }   // legenda e assinaturas na mesma folha do mês, se couberem
-  doc.setFontSize(7); doc.setTextColor(90);
-  doc.text(doc.splitTextToSize('Horários informados pelo motorista no app (as paradas de cada dia estão na planilha, aba Lançamento horários); fora das paradas o tempo conta como direção. Parada de 11 h ou mais encerra a jornada e a volta começa outra linha. Inter jornada: o maior entre espera, pátio, descanso no destino e parado; intra jornada: a soma dos outros. Indenizado: o que faltou para 11 h (inter) e 1 h (intra).', W - 20), 10, y);
-  doc.setTextColor(0);
-  y += 15;
-  doc.setDrawColor(80);
-  doc.line(20, y, 120, y); doc.line(W - 120, y, W - 20, y);
-  doc.setFontSize(8);
-  doc.text(`Motorista: ${dados.motorista.nome}`, 70, y + 4, { align: 'center' });
-  doc.text('Responsável da transportadora', W - 70, y + 4, { align: 'center' });
+  const semana = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  const mes = (dias, periodo) => {
+    topo('Espelho de jornada — Diário de bordo', periodo);
+    const resumo = [['Direção', 'direcao'], ['Hora noturna', 'noturna'], ['Carga/descarga', 'carga'], ['Total', 'total'], ['Indenizado inter', 'indenInter'], ['Indenizado intra', 'indenIntra']];
+    const lb = (W - 20) / resumo.length;
+    resumo.forEach(([t, k], i) => {
+      const x = 10 + i * lb;
+      doc.setDrawColor(220); doc.roundedRect(x, 25, lb - 3, 12, 1.5, 1.5);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text(hhmm(soma(dias, k)), x + 3, 31);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.text(t, x + 3, 35);
+    });
+    // como o espelho do Excel: sem as paradas (elas ficam na aba de lançamento da planilha)
+    const f = (t) => (t ? fmtHora(t.toISOString()) : '—');
+    doc.autoTable({ ...estilo,
+      head: [['Data', 'Início', 'Fim', ...CAB_CONTAS_PDF]],
+      body: dias.map(d => [`${fmtDataCurta(d.inicio.toISOString())} ${semana[d.inicio.getDay()]}`, f(d.inicio), d.fim ? f(d.fim) : 'em aberto', ...CONTAS_PDF.map(k => hhmmOuTraco(d.c[k]))]),
+      foot: [['Total do mês', '', '', ...CONTAS_PDF.map(k => hhmm(soma(dias, k)))]],
+      startY: 41, columnStyles: { 0: { halign: 'left', cellWidth: 18 } },
+    });
+    let y = doc.lastAutoTable.finalY + 4;
+    if(y > H - 27){ doc.addPage(); numerar(); y = 15; }   // legenda e assinaturas na mesma folha do mês, se couberem
+    doc.setFontSize(7); doc.setTextColor(90);
+    doc.text(doc.splitTextToSize('Horários informados pelo motorista no app (as paradas de cada dia estão na planilha, aba Lançamento horários); fora das paradas o tempo conta como direção. Parada de descanso (posto, garagem, pátio) de 11 h ou mais encerra a jornada e a volta começa outra linha. Inter jornada: o maior entre espera, pátio, descanso no destino e parado; intra jornada: a soma dos outros. Indenizado: o que faltou para 11 h (inter) e 1 h (intra).', W - 20), 10, y);
+    doc.setTextColor(0);
+    y += 15;
+    doc.setDrawColor(80);
+    doc.line(20, y, 120, y); doc.line(W - 120, y, W - 20, y);
+    doc.setFontSize(8);
+    doc.text(`Motorista: ${dados.motorista.nome}`, 70, y + 4, { align: 'center' });
+    doc.text('Responsável da transportadora', W - 70, y + 4, { align: 'center' });
+  };
+
+  if(!ehAnoInteiro(dados.mes)) mes(dados.dias, nomePeriodo(dados.mes));
+  else {
+    const ano = dados.mes;
+    const porMes = MESES.map((nome, m) => ({ nome, dias: dados.dias.filter(d => d.inicio.getMonth() === m) }));
+    porMes.filter(x => x.dias.length).forEach((x, i) => { if(i) doc.addPage(); mes(x.dias, `${x.nome} de ${ano}`); });
+    doc.addPage();
+    topo('Espelho de jornada — Resumo do ano', `Ano de ${ano}`);
+    doc.autoTable({ ...estilo,
+      head: [['Mês', 'Jornadas', ...CAB_CONTAS_PDF]],
+      body: porMes.map(x => [x.nome, x.dias.length || '—', ...CONTAS_PDF.map(k => (x.dias.length ? hhmmOuTraco(soma(x.dias, k)) : '—'))]),
+      foot: [['Total do ano', dados.dias.length, ...CONTAS_PDF.map(k => hhmm(soma(dados.dias, k)))]],
+      startY: 28, columnStyles: { 0: { halign: 'left', cellWidth: 22 } },
+    });
+  }
 
   doc.save(nomeArquivoJornada(dados, 'pdf'));
 }
