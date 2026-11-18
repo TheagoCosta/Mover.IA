@@ -11,3 +11,7 @@ ferramentas/teste/fotos/
 
 # senhas das contas do projeto de TESTE do Supabase (só no computador)
 *.local.txt
+
+# relatórios do rastreador e planilhas (placas, endereços e nomes da frota: nunca no repositório)
+*.xls
+*.xlsx

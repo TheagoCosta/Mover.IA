@@ -41,7 +41,9 @@ function dividirPorDescanso(jornadas){
   jornadas.forEach(j => {
     const eventos = [...(j.jornada_evento || [])].sort((a, b) => (new Date(a.criado_em) - new Date(b.criado_em)) || (ORDEM_EVENTO[a.tipo] - ORDEM_EVENTO[b.tipo]));
     const partes = [];
-    const nova = (inicio) => ({ ...j, id: partes.length ? `${j.id}:${partes.length}` : j.id, original: j, inicio, fim: null, jornada_evento: [] });
+    // origem (do rastreador): a da jornada na 1ª parte; nas outras, a gravada no registro de volta da parada longa
+    const nova = (inicio, volta) => ({ ...j, id: partes.length ? `${j.id}:${partes.length}` : j.id, original: j, inicio, fim: null, jornada_evento: [],
+      origem: volta ? volta.origem || null : j.origem || null });
     let parte = nova(j.inicio), pausa = null;
     eventos.forEach(ev => {
       if(ev.tipo === 'retomada' && pausa && CODIGOS_DESCANSO_NOVA_JORNADA.includes(codigoParada(pausa.motivo, false))
@@ -49,7 +51,7 @@ function dividirPorDescanso(jornadas){
         parte.jornada_evento.push({ tipo: 'fim', motivo: null, criado_em: pausa.criado_em, automatico: true });
         parte.fim = pausa.criado_em; parte.status = 'encerrada';
         partes.push(parte);
-        parte = nova(ev.criado_em);
+        parte = nova(ev.criado_em, ev);
         pausa = null;
       }
       else if(ev.tipo === 'pausa') pausa = ev; else if(ev.tipo === 'retomada') pausa = null;
@@ -183,7 +185,7 @@ const nomePeriodo = (mes) => (ehAnoInteiro(mes) ? `Ano de ${mes}` : nomeMes(mes)
 
 async function dadosRelatorioJornada(motorista, mes){
   const { inicio, fim } = limitesPeriodo(mes);
-  const campos = 'id, inicio, fim, status, jornada_evento(tipo, motivo, criado_em)';
+  const campos = 'id, inicio, fim, status, origem, jornada_evento(tipo, motivo, criado_em, origem)';
   const [jr, pr, cj] = await Promise.all([
     sb.from('jornada').select(campos).eq('motorista_id', motorista.id).gte('inicio', inicio.toISOString()).lt('inicio', fim.toISOString()).order('inicio'),
     sb.from('jornada').select('id, inicio').eq('motorista_id', motorista.id).gte('inicio', fim.toISOString()).order('inicio').limit(1),
@@ -291,7 +293,7 @@ async function baixarPlanilhaJornada(dados){
     // --- lançamento: os horários como o escritório digitava ---
     const setL = (c, v, fmt) => { const cel = wl.getCell(r, c); cel.value = v; cel.font = fonte; cel.border = borda; if(fmt) cel.numFmt = fmt; };
     setL(lc.data, new Date(Date.UTC(base.getFullYear(), base.getMonth(), base.getDate())), 'dd/mm/yyyy');
-    setL(lc.origem, null); setL(lc.inicio, fr(d.inicio), 'hh:mm');
+    setL(lc.origem, d.j.origem || null); setL(lc.inicio, fr(d.inicio), 'hh:mm');
     for(let k = 0; k < P; k++){
       const p = d.paradas[k];
       setL(lc.parada(k), p ? p.codigo : null); setL(lc.parada(k) + 1, p ? fr(p.inicio) : null, 'hh:mm'); setL(lc.parada(k) + 2, p && p.fim ? fr(p.fim) : null, 'hh:mm');
@@ -309,7 +311,7 @@ async function baixarPlanilhaJornada(dados){
     setE(ec.mes, base.getMonth() + 1);
     setE(ec.serial, { formula: A(ec.data, r), result: s });
     setE(ec.data, { formula: LAN + A(lc.data, r), result: new Date(Date.UTC(base.getFullYear(), base.getMonth(), base.getDate())) }, 'dd/mm/yyyy');
-    setE(ec.origem, { formula: `""&${LAN}${A(lc.origem, r)}`, result: '' });
+    setE(ec.origem, { formula: `""&${LAN}${A(lc.origem, r)}`, result: d.j.origem || '' });
     setE(ec.inicio, hora(lc.inicio, d.inicio), 'hh:mm');
     const reais = d.paradas.slice(0, P).map((p, k) => ({ p, mot: A(ec.parada(k), r), ini: A(ec.parada(k) + 1, r), fim: A(ec.parada(k) + 2, r) }));
     for(let k = 0; k < P; k++){
@@ -443,10 +445,10 @@ async function baixarPdfJornada(dados){
     // como o espelho do Excel: sem as paradas (elas ficam na aba de lançamento da planilha)
     const f = (t) => (t ? fmtHora(t.toISOString()) : '—');
     doc.autoTable({ ...estilo,
-      head: [['Data', 'Início', 'Fim', ...CAB_CONTAS_PDF]],
-      body: dias.map(d => [`${fmtDataCurta(d.inicio.toISOString())} ${semana[d.inicio.getDay()]}`, f(d.inicio), d.fim ? f(d.fim) : 'em aberto', ...CONTAS_PDF.map(k => hhmmOuTraco(d.c[k]))]),
-      foot: [['Total do mês', '', '', ...CONTAS_PDF.map(k => hhmm(soma(dias, k)))]],
-      startY: 41, columnStyles: { 0: { halign: 'left', cellWidth: 18 } },
+      head: [['Data', 'Origem', 'Início', 'Fim', ...CAB_CONTAS_PDF]],
+      body: dias.map(d => [`${fmtDataCurta(d.inicio.toISOString())} ${semana[d.inicio.getDay()]}`, d.j.origem || '', f(d.inicio), d.fim ? f(d.fim) : 'em aberto', ...CONTAS_PDF.map(k => hhmmOuTraco(d.c[k]))]),
+      foot: [[{ content: 'Total do mês', colSpan: 4, styles: { halign: 'left' } }, ...CONTAS_PDF.map(k => hhmm(soma(dias, k)))]],
+      startY: 41, columnStyles: { 0: { halign: 'left', cellWidth: 16 }, 1: { halign: 'left', cellWidth: 22, fontSize: 6.5 } },
     });
     let y = doc.lastAutoTable.finalY + 4;
     if(y > H - 27){ doc.addPage(); numerar(); y = 15; }   // legenda e assinaturas na mesma folha do mês, se couberem

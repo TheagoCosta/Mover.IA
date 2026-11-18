@@ -379,7 +379,7 @@ function textoLeituraTicket(ev){
 
 async function secaoJornadas(el){
   const jornadas = await consultar(sb.from('jornada')
-    .select('id, inicio, fim, status, assinatura_base64, motorista_id, motorista:motorista_id(nome), jornada_evento(id, tipo, motivo, observacao, criado_em, recebido_em, hora_celular, hora_informada, registrado_em, categoria, ticket_exigido, ticket_url, ticket_dispensa, ticket_leitura, ticket_leitura_dados, ticket_revisado_em)')
+    .select('id, inicio, fim, status, origem, assinatura_base64, motorista_id, motorista:motorista_id(nome), jornada_evento(id, tipo, motivo, observacao, origem, criado_em, recebido_em, hora_celular, hora_informada, registrado_em, categoria, ticket_exigido, ticket_url, ticket_dispensa, ticket_leitura, ticket_leitura_dados, ticket_revisado_em)')
     .order('inicio', { ascending:false }).limit(200));
   // Parada de 11 h ou mais começa outra linha, como no relatório (dividirPorDescanso, js/relatorio-jornada.js).
   // l.p = a linha (parte); l.j = a jornada do app, que é o que se corrige ou exclui.
@@ -451,18 +451,23 @@ async function secaoJornadas(el){
     ['abertas', 'Em andamento primeiro', (a, b) => ((a.p.status === 'encerrada') - (b.p.status === 'encerrada')) || porData(l => l.p.inicio, -1)(a, b)],
     ['revisar', 'Tickets para revisar primeiro', porNumero(l => l.aRevisar, -1)],
   ];
-  const textoLinha = (l) => [nomeMot(l), fmtData(l.p.inicio), ROTULO_JORNADA[l.p.status]].join(' ');
+  const textoLinha = (l) => [nomeMot(l), fmtData(l.p.inicio), l.p.origem || '', ROTULO_JORNADA[l.p.status]].join(' ');
   const avisoParte = (p) => p.partes > 1 ? ` ${badge('blue', `Parte ${p.parte} de ${p.partes}`)}` : '';
   let visiveis = linhas;
-  el.innerHTML = `<div style="margin-bottom:12px;"><button type="button" class="btn btn-primary btn-sm" id="btnRelatorioJornada">${ic('doc', 15)} Relatório de jornada (Excel e PDF)</button></div>
-    ${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10) ou status')}<div id="leituraTickets" class="l2" style="margin-bottom:8px;"></div><div id="listaJornadas"></div>`;
+  el.innerHTML = `<div style="margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap;"><button type="button" class="btn btn-primary btn-sm" id="btnRelatorioJornada">${ic('doc', 15)} Relatório de jornada (Excel e PDF)</button>
+      <button type="button" class="btn btn-outline btn-sm" id="btnOrigemRastreador">${ic('upload', 15)} Origem pelo rastreador</button>
+      <button type="button" class="btn btn-outline btn-sm" id="btnLocaisConhecidos">${ic('map', 15)} Locais conhecidos</button></div>
+    ${barraLista('jornadas', ordens, 'Pesquisar por motorista, data (ex: 08/10), origem ou status')}<div id="leituraTickets" class="l2" style="margin-bottom:8px;"></div><div id="listaJornadas"></div>`;
   document.getElementById('btnRelatorioJornada').addEventListener('click', abrirRelatorioJornada);
+  const recarregar = () => { if(window.limparCacheTelas) limparCacheTelas(); secaoJornadas(el); };
+  document.getElementById('btnOrigemRastreador').addEventListener('click', () => abrirImportarRastreador(recarregar));
+  document.getElementById('btnLocaisConhecidos').addEventListener('click', () => abrirLocaisConhecidos());
   function desenhar(){
     visiveis = aplicarLista('jornadas', linhas, ordens, textoLinha);
     const caixa = document.getElementById('listaJornadas');
     caixa.innerHTML = painel(`Registro de jornadas (${visiveis.length})`,
-      visiveis.length ? tabela(['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
-        visiveis.map(({ p, j, c, semTicket, aRevisar, alerta }) => `<tr class="clickable" data-jornada="${esc(p.id)}"><td>${esc(j.motorista ? j.motorista.nome : '—')}</td><td>${fmtData(p.inicio)}</td><td class="mono">${fmtHora(p.inicio)}</td><td class="mono">${p.fim ? fmtHora(p.fim) : '—'}</td><td class="mono">${fmtMinutos(c.totalMin)}</td><td>${c.paradas}${semTicket ? ` ${badge('amber', `${semTicket} sem ticket`)}` : ''}${aRevisar ? ` ${badge('red', `${aRevisar} ticket${aRevisar > 1 ? 's' : ''} para revisar`)}` : ''}</td><td>${badge(COR_JORNADA[p.status], ROTULO_JORNADA[p.status])}${avisoParte(p)}${alerta ? ` ${badge('red', alerta)}` : ''}</td></tr>`))
+      visiveis.length ? tabela(['Motorista', 'Data', 'Origem', 'Início', 'Fim', 'Tempo de condução', 'Paradas', 'Status'],
+        visiveis.map(({ p, j, c, semTicket, aRevisar, alerta }) => `<tr class="clickable" data-jornada="${esc(p.id)}"><td>${esc(j.motorista ? j.motorista.nome : '—')}</td><td>${fmtData(p.inicio)}</td><td>${esc(p.origem || '—')}</td><td class="mono">${fmtHora(p.inicio)}</td><td class="mono">${p.fim ? fmtHora(p.fim) : '—'}</td><td class="mono">${fmtMinutos(c.totalMin)}</td><td>${c.paradas}${semTicket ? ` ${badge('amber', `${semTicket} sem ticket`)}` : ''}${aRevisar ? ` ${badge('red', `${aRevisar} ticket${aRevisar > 1 ? 's' : ''} para revisar`)}` : ''}</td><td>${badge(COR_JORNADA[p.status], ROTULO_JORNADA[p.status])}${avisoParte(p)}${alerta ? ` ${badge('red', alerta)}` : ''}</td></tr>`))
         : vazio(jornadas.length ? 'Nenhuma jornada encontrada nesta pesquisa.' : 'Nenhuma jornada registrada ainda.'),
       visiveis.length ? botaoExportar('btnCsvJornadas') : '');
     ligarLinhas(caixa);
@@ -475,6 +480,10 @@ async function secaoJornadas(el){
       ${p.partes > 1 ? `<div class="l2" style="margin-bottom:10px;">${badge('blue', `Parte ${p.parte} de ${p.partes}`)} O motorista ficou 11 h ou mais em parada de descanso (posto, garagem, pátio) sem encerrar o dia no app (jornada aberta em ${fmtData(j.inicio)} às ${fmtHora(j.inicio)}), então cada trecho virou uma linha. Corrigir ou excluir vale para a jornada inteira.</div>` : ''}
       <div class="l2" style="margin-bottom:10px;">Condução: <b>${fmtMinutos(c.totalMin)}</b> · Trabalho parado: <b>${fmtMinutos(c.trabalhoParadoMin)}</b> · Descanso: <b>${fmtMinutos(c.descansoMin)}</b> · ${c.paradas} parada${c.paradas === 1 ? '' : 's'} · ${esc(ROTULO_JORNADA[p.status])}</div>
       ${alerta ? `<div style="margin-bottom:10px;">${badge('red', `${alerta} (mínimo de 11 horas)`)}</div>` : ''}
+      <div style="display:flex; gap:8px; align-items:end; flex-wrap:wrap; margin-bottom:12px;">
+        <label class="l2">Origem (sai na planilha)<br><input id="origemJornada" value="${esc(p.origem || '')}" maxlength="60" placeholder="ex: GARAGEM"></label>
+        <button type="button" class="btn btn-outline btn-sm" id="btnSalvarOrigem">Salvar origem</button>
+      </div>
       ${eventos.map(ev => ev.automatico
         ? `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>Fim do dia</b><div class="l2">Parada de 11 h ou mais: o resto continua na linha seguinte</div></div></div>`
         : `<div class="timeline-item"><div class="hora">${fmtHora(ev.criado_em)}</div><div><b>${esc(ev.motivo || TIPO_EVENTO_LABEL[ev.tipo] || ev.tipo)}</b>${ev.observacao ? `<div class="l2">${esc(ev.observacao)}</div>` : ''}${marcaSemSinal(ev)}${detalheEvento(ev)}</div></div>`).join('') || '<div class="l2">Nenhum evento registrado.</div>'}
@@ -522,13 +531,23 @@ async function secaoJornadas(el){
       catch(e){ b.disabled = false; alert('Não consegui salvar: ' + (e.message || e)); return; }
       depoisDoTicket(r.status === 'ok' ? '✅ Horários salvos: conferem com a parada' : '✅ Horários salvos. Diferença com a parada: use "Corrigir horários" se precisar');
     }));
+    document.getElementById('btnSalvarOrigem').addEventListener('click', async (e) => {
+      const valor = document.getElementById('origemJornada').value.trim().toUpperCase();
+      e.currentTarget.disabled = true;
+      try{ await salvarOrigemParte(p, valor); }
+      catch(err){ e.currentTarget.disabled = false; alert('Não consegui salvar: ' + (err.message || err)); return; }
+      p.origem = valor || null;
+      if(p.parte > 1) p.jornada_evento[0].origem = p.origem; else j.origem = p.origem;
+      if(window.limparCacheTelas) limparCacheTelas();
+      fecharModal(); mostrarToast('✅ Origem salva'); desenhar();
+    });
     document.getElementById('btnCorrigirJornada').addEventListener('click', () => abrirCorrigirJornada(j, el));
     document.getElementById('btnExcluirJornada').addEventListener('click', () =>
       excluirRegistro('jornada', j.id, `Excluir a jornada de ${j.motorista ? j.motorista.nome : ''} do dia ${fmtData(j.inicio)}? Todas as paradas dela também serão apagadas.`, () => secaoJornadas(el)));
   }));
   const b = document.getElementById('btnCsvJornadas');
-  if(b) b.addEventListener('click', () => baixarCSV('jornadas', ['Motorista', 'Data', 'Início', 'Fim', 'Tempo de condução', 'Trabalho parado', 'Descanso', 'Paradas', 'Paradas sem ticket', 'Tickets para revisar', 'Descanso abaixo de 11 h', 'Status'],
-    visiveis.map(({ p, j, c, semTicket, aRevisar, alerta }) => [j.motorista ? j.motorista.nome : '', fmtData(p.inicio), fmtHora(p.inicio), p.fim ? fmtHora(p.fim) : '', fmtMinutos(c.totalMin), fmtMinutos(c.trabalhoParadoMin), fmtMinutos(c.descansoMin), c.paradas, semTicket, aRevisar, alerta, ROTULO_JORNADA[p.status]])));
+  if(b) b.addEventListener('click', () => baixarCSV('jornadas', ['Motorista', 'Data', 'Origem', 'Início', 'Fim', 'Tempo de condução', 'Trabalho parado', 'Descanso', 'Paradas', 'Paradas sem ticket', 'Tickets para revisar', 'Descanso abaixo de 11 h', 'Status'],
+    visiveis.map(({ p, j, c, semTicket, aRevisar, alerta }) => [j.motorista ? j.motorista.nome : '', fmtData(p.inicio), p.origem || '', fmtHora(p.inicio), p.fim ? fmtHora(p.fim) : '', fmtMinutos(c.totalMin), fmtMinutos(c.trabalhoParadoMin), fmtMinutos(c.descansoMin), c.paradas, semTicket, aRevisar, alerta, ROTULO_JORNADA[p.status]])));
   };
   desenhar();
   ligarBarraLista(el, 'jornadas', desenhar);

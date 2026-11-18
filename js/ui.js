@@ -13,6 +13,7 @@ const BIBLIOTECAS = {
   excel: 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js',
   jspdf: 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
   jspdfTabela: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',   // depois do jspdf
+  planilhaAntiga: 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',   // SheetJS: lê o .xls antigo do rastreador (a 0.20.3 corrige as falhas da versão do npm)
 };
 const bibliotecasCarregando = {};
 function carregarBiblioteca(nome){
